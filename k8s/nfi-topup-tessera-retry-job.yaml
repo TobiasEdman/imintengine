@@ -1,0 +1,255 @@
+---
+# Step 3f-bis: single-worker re-probe of the top-up tiles' TESSERA, per
+# staging root, run right after nfi-topup-tessera and before the VPP stamp.
+#
+# Why: nfi-topup-tessera runs the repo helper with four workers under the
+# LRU cache guard, exactly like holdout-eval-tessera. On the evaluation copy
+# that pass logged 24 downloads swallowed by geotessera 0.10.2 (core.py
+# 533-543); the re-probe then found 54 tiles flagged usable on a partially
+# delivered, non-finite or wrong-year embedding and recovered all 54 to the
+# usable contract (holdout-eval-tessera-retry, 2026-10-13). The top-up Job
+# also accepts any non-zero array as usable and marks every failure as
+# "no_tessera_coverage_or_fetch_failed", so a swallowed download surfaces as
+# a partial embedding or as a false hole. This Job is the same remedy.
+#
+# Targets per root, found by scanning every tile (there is no failed list):
+#   * has_tessera=1 on an embedding that is not finite, not 128 channels on
+#     the spectral grid, not the tile's own TESSERA year, or has any pixel
+#     whose whole vector is zero (an undelivered or absent block);
+#   * has_tessera=0 whose gap reason is not yet "confirmed_by_single_worker_
+#     reprobe" (the top-up Job's holes are unconfirmed by construction).
+# Outcomes, per target, as in the evaluation re-probe (Codex reviews
+# 5496125869, 5496217165):
+#   recovered          usable contract met; any remaining all-zero pixels are
+#                      registry edge gaps after a complete delivery, recorded
+#                      per tile in partial_coverage
+#   already_recovered  resume-safe skip of a tile a previous run recovered
+#   coverage_hole      the registry lists no block for the bbox and year, or
+#                      the delivered blocks are all zero -> confirmed hole
+#   unresolved         any other failure, including fewer blocks delivered
+#                      than the registry listed (the GeoTessera handle is
+#                      wrapped to raise then); tile left as it was, exit non-zero
+# Refuses a root whose tiles the top-up TESSERA Job has not processed yet.
+#
+# Source: main d4d24f9 with the helper's SHA-256 checked before import, as
+# every step-3 Job (decision 2026-10-13). geotessera pinned and asserted.
+# One worker, no eviction guard. PU-free.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-tessera-retry
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: tessera-retry
+          image: python:3.12-slim@sha256:9e01bf1ae5db7649a236da7be1e94ffbbbdd7a93f867dd0d8d5720d9e1f89fab
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up tessera re-probe — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy scipy rasterio pyproj pyyaml "geotessera==$GEOTESSERA_VERSION" pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch main https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              git fetch -q --depth 1 origin "$SCRIPTS_COMMIT"
+              git checkout -q "$SCRIPTS_COMMIT"
+              test "$(git rev-parse HEAD)" = "$SCRIPTS_COMMIT" || { echo "REFUSING: HEAD is not $SCRIPTS_COMMIT"; exit 1; }
+              echo "HEAD: $(git rev-parse HEAD)"
+              echo "$HELPER_SHA256  scripts/enrich_tiles_tessera.py" | sha256sum -c -
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python scripts/enrich_tiles_tessera.py --help > /dev/null && echo "imports OK"
+              python - <<'PYEOF'
+              import importlib.metadata, json, os, sys, time
+              from collections import Counter
+
+              import numpy as np
+
+              sys.path.insert(0, "/workspace/ie")
+              from scripts.enrich_tiles_tessera import (
+                  TESSERA_YEARS, _clamp_year_for_tessera, _infer_tile_year, enrich_one_tile)
+              from geotessera import GeoTessera
+
+              EMB, REG = "/data/tessera_cache/embeddings", "/data/tessera_cache/registry"
+              STAMP = time.strftime("%Y-%m-%d")
+              EMBED_CH = 128
+              CONFIRMED = "confirmed_by_single_worker_reprobe"
+              installed = importlib.metadata.version("geotessera")
+              if installed != os.environ["GEOTESSERA_VERSION"]:
+                  sys.exit(f"REFUSING: geotessera {installed} installed, {os.environ['GEOTESSERA_VERSION']} required")
+              SRC = f"geotessera-{installed}"
+
+              def tiles(root):
+                  return sorted(q[:-4] for q in os.listdir(root) if q.endswith(".npz") and not q.endswith(".tmp.npz"))
+
+              def load(path):
+                  d = np.load(path, allow_pickle=True)
+                  return d, (d["tessera"] if "tessera" in d.files else None)
+
+              def expected_year(d):
+                  """The TESSERA year the helper itself would fetch for this tile (clamped year-0)."""
+                  y = _infer_tile_year(d)
+                  return None if y is None else _clamp_year_for_tessera(int(y), TESSERA_YEARS)
+
+              def usable(d, a):
+                  """Finite, non-zero, 128 channels on the spectral grid, for the tile's own year."""
+                  if a is None or "spectral" not in d.files or "tessera_year" not in d.files:
+                      return False
+                  want = expected_year(d)
+                  if want is None or int(d["tessera_year"]) != want:
+                      return False
+                  a = np.asarray(a)
+                  grid = tuple(d["spectral"].shape[1:])
+                  return (a.ndim == 3 and a.shape[0] == EMBED_CH and tuple(a.shape[1:]) == grid
+                          and np.isfinite(a).all() and bool(np.any(a)))
+
+              def zero_pixel_fraction(a):
+                  """Share of pixels whose whole embedding vector is zero: undelivered or absent block."""
+                  a = np.asarray(a)
+                  return float(np.mean(~np.any(a != 0, axis=0)))
+
+              class StrictHandle:
+                  """GeoTessera handle whose fetch_embeddings fails loudly on a short delivery."""
+                  def __init__(self, gt):
+                      self._gt, self.registry = gt, gt.registry
+                      self.requested = self.delivered = 0
+
+                  def fetch_embeddings(self, blocks, *args, **kwargs):
+                      blocks = list(blocks)
+                      self.requested, self.delivered = len(blocks), 0
+                      for item in self._gt.fetch_embeddings(blocks, *args, **kwargs):
+                          self.delivered += 1
+                          yield item
+                      if self.delivered < self.requested:
+                          raise RuntimeError(f"download_incomplete: {self.delivered}/{self.requested} blocks delivered")
+
+              def rewrite(path, drop=(), **fields):
+                  data = dict(np.load(path, allow_pickle=True))
+                  for k in drop:
+                      data.pop(k, None)
+                  data.update({k: np.array(v) for k, v in fields.items()})
+                  tmp = path + ".tmp.npz"
+                  np.savez_compressed(tmp, **data)
+                  os.replace(tmp, path)
+
+              roots = {int(y): f"/data/unified_v2_512_nfi{y}_staging" for y in os.environ["YEARS"].split()}
+              # Precondition for every root before any probe: the top-up TESSERA Job processed every tile.
+              for y, root in roots.items():
+                  if not os.path.isdir(root):
+                      continue
+                  untouched = [n for n in tiles(root) if "has_tessera" not in np.load(f"{root}/{n}.npz", allow_pickle=True).files]
+                  if untouched:
+                      sys.exit(f"REFUSING: {len(untouched)} tiles in {root} have no has_tessera; run nfi-topup-tessera first")
+
+              gt, failed_roots = None, []
+              for y, root in roots.items():
+                  if not os.path.isdir(root):
+                      print(f"{y}: no staging root, skipping"); continue
+                  report_out = f"/data/manifests/nfi{y}_topup_tessera_retry.json"
+                  prescan_invalid, unconfirmed_hole = [], []
+                  for n in tiles(root):
+                      d, a = load(f"{root}/{n}.npz")
+                      if int(d.get("has_tessera", 0)) == 1:
+                          if not usable(d, a) or zero_pixel_fraction(a) > 0:
+                              prescan_invalid.append(n)
+                      elif CONFIRMED not in str(d.get("tessera_gap_reason", "")):
+                          unconfirmed_hole.append(n)
+                  names = sorted(set(prescan_invalid) | set(unconfirmed_hole))
+                  print(f"\n######## {y}: {len(tiles(root))} tiles; usable flags on invalid embeddings "
+                        f"{len(prescan_invalid)}, unconfirmed holes {len(unconfirmed_hole)} ########")
+                  out = {"recovered": [], "already_recovered": [], "coverage_hole": [], "unresolved": [],
+                         "prescan_invalid": prescan_invalid, "unconfirmed_hole": unconfirmed_hole}
+                  reasons, partial = {}, {}
+                  for i, name in enumerate(names, 1):
+                      path = f"{root}/{name}.npz"
+                      d, a = load(path)
+                      if (int(d.get("has_tessera", 0)) == 1 and str(d.get("tessera_source", "")) == SRC
+                              and usable(d, a) and zero_pixel_fraction(a) == 0):
+                          state = "already_recovered"
+                      else:
+                          if gt is None:
+                              os.makedirs(EMB, exist_ok=True); os.makedirs(REG, exist_ok=True)
+                              gt = StrictHandle(GeoTessera(embeddings_dir=EMB, cache_dir=REG))  # one worker, no eviction guard
+                          gt.requested = gt.delivered = 0
+                          r = enrich_one_tile(path, gt, skip_existing=False)
+                          reason = str(r.get("reason", ""))
+                          if r.get("status") == "ok":
+                              d, a = load(path)
+                              arr = np.asarray(a)
+                              if usable(d, a):
+                                  rewrite(path, drop=("tessera_gap_reason",), has_tessera=1, tessera_source=SRC)
+                                  state = "recovered"
+                                  if (frac := zero_pixel_fraction(a)) > 0:
+                                      partial[name] = frac   # every listed block delivered: a registry edge gap
+                              elif arr.ndim >= 2 and np.isfinite(arr).all() and not np.any(arr):
+                                  rewrite(path, has_tessera=0, tessera_source=SRC,
+                                          tessera_gap_reason=f"tessera_all_zero_in_{SRC}__{CONFIRMED}__{STAMP}")
+                                  state = "coverage_hole"
+                              else:
+                                  # non-finite or wrong shape: a data failure, never promoted
+                                  rewrite(path, has_tessera=0)
+                                  reasons[name] = f"invalid_embedding shape={arr.shape} finite={bool(np.isfinite(arr).all())}"
+                                  state = "unresolved"
+                          elif reason.startswith("no_tessera_tiles_for_year") and gt.requested == 0:
+                              # the registry itself listed no block for this bbox and year
+                              rewrite(path, has_tessera=0, tessera_source=SRC,
+                                      tessera_gap_reason=f"no_tessera_coverage__{reason}__{CONFIRMED}__{STAMP}")
+                              state = "coverage_hole"
+                          else:
+                              # download/metadata/other, including "no block" after a short delivery: left untouched
+                              reasons[name] = (reason or "failed") + (
+                                  f" (registry listed {gt.requested}, delivered {gt.delivered})" if gt.requested else "")
+                              state = "unresolved"
+                      out[state].append(name)
+                      print(f"  [{i}/{len(names)}] {name}: {state}", flush=True)
+
+                  # Final check over EVERY tile in the root.
+                  chk = Counter()
+                  for n in tiles(root):
+                      d, a = load(f"{root}/{n}.npz")
+                      if int(d.get("has_tessera", 0)) == 1 and not (usable(d, a) and str(d.get("tessera_source", "")) == SRC):
+                          chk["USABLE_FLAG_WITHOUT_VALID_STAMPED_EMBEDDING"] += 1
+                      if int(d.get("has_tessera", 0)) == 0 and CONFIRMED not in str(d.get("tessera_gap_reason", "")) \
+                              and n not in out["unresolved"]:
+                          chk["UNCONFIRMED_HOLE_LEFT"] += 1
+                  counts = {k: len(v) for k, v in out.items()}
+                  counts["targets"] = len(names)
+                  print(f"{y} result: {counts}; verify: {dict(chk)}")
+                  json.dump({"dir": root, "year": y, "source": SRC, "scripts_commit": os.environ["SCRIPTS_COMMIT"],
+                             "counts": counts, **out, "unresolved_reasons": reasons, "partial_coverage": partial,
+                             "verify": dict(chk), "verified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                            open(report_out, "w"), indent=1)
+                  print(f"report -> {report_out}")
+                  if chk or out["unresolved"]:
+                      failed_roots.append(y)
+
+              if failed_roots:
+                  sys.exit(f"UNRESOLVED or invalid in {failed_roots}: reconcile explicitly before the VPP stamp")
+              print("\nevery top-up tile has a valid stamped embedding or a confirmed coverage hole")
+              PYEOF
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
+            - {name: GEOTESSERA_VERSION, value: "0.10.2"}   # the promotion's source
+            - {name: SCRIPTS_COMMIT, value: "d4d24f9ab1581ecdc8db739d4271905806401b6a"}   # main as reviewed for this plan
+            - {name: HELPER_SHA256, value: "71580e368bea50a405ec400f2607fe70be3cd92a7d641959c576ec048f0d2f20"}
+          resources:
+            requests: {cpu: "4", memory: "16Gi"}
+            limits: {cpu: "4", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
