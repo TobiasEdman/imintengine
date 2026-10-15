@@ -1,0 +1,9 @@
+{
+  "id": "0110",
+  "subject": "Fix PR81-83 review findings locally",
+  "description": "User 2026-10-15 approved Codex fixing PR83 transactional Tessera retry, PR82 rename build selection, and PR81 selection/documentation. Isolated worktrees; no live jobs/data; local tests and independent review.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "codex/pr83-preserve-retry",
+  "created_at": "2026-10-15T09:11:27.091407+00:00"
+}
