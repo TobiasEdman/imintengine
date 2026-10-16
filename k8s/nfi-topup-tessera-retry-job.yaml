@@ -71,7 +71,7 @@ spec:
               export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
               python scripts/enrich_tiles_tessera.py --help > /dev/null && echo "imports OK"
               python - <<'PYEOF'
-              import importlib.metadata, json, os, sys, time
+              import importlib.metadata, json, os, shutil, sys, tempfile, time
               from collections import Counter
 
               import numpy as np
@@ -182,35 +182,39 @@ spec:
                               os.makedirs(EMB, exist_ok=True); os.makedirs(REG, exist_ok=True)
                               gt = StrictHandle(GeoTessera(embeddings_dir=EMB, cache_dir=REG))  # one worker, no eviction guard
                           gt.requested = gt.delivered = 0
-                          r = enrich_one_tile(path, gt, skip_existing=False)
-                          reason = str(r.get("reason", ""))
-                          if r.get("status") == "ok":
-                              d, a = load(path)
-                              arr = np.asarray(a)
-                              if usable(d, a):
-                                  rewrite(path, drop=("tessera_gap_reason",), has_tessera=1, tessera_source=SRC)
-                                  state = "recovered"
-                                  if (frac := zero_pixel_fraction(a)) > 0:
-                                      partial[name] = frac   # every listed block delivered: a registry edge gap
-                              elif arr.ndim >= 2 and np.isfinite(arr).all() and not np.any(arr):
-                                  rewrite(path, has_tessera=0, tessera_source=SRC,
-                                          tessera_gap_reason=f"tessera_all_zero_in_{SRC}__{CONFIRMED}__{STAMP}")
+                          with tempfile.TemporaryDirectory(prefix=".tessera-retry-", dir=root) as scratch:
+                              candidate = os.path.join(scratch, os.path.basename(path))
+                              shutil.copy2(path, candidate)
+                              r = enrich_one_tile(candidate, gt, skip_existing=False)
+                              reason = str(r.get("reason", ""))
+                              if r.get("status") == "ok":
+                                  d, a = load(candidate)
+                                  arr = np.asarray(a)
+                                  if usable(d, a):
+                                      rewrite(candidate, drop=("tessera_gap_reason",), has_tessera=1, tessera_source=SRC)
+                                      state = "recovered"
+                                      if (frac := zero_pixel_fraction(a)) > 0:
+                                          partial[name] = frac   # every listed block delivered: a registry edge gap
+                                  elif arr.ndim >= 2 and np.isfinite(arr).all() and not np.any(arr):
+                                      rewrite(candidate, has_tessera=0, tessera_source=SRC,
+                                              tessera_gap_reason=f"tessera_all_zero_in_{SRC}__{CONFIRMED}__{STAMP}")
+                                      state = "coverage_hole"
+                                  else:
+                                      # non-finite or wrong shape: a data failure, never promoted
+                                      reasons[name] = f"invalid_embedding shape={arr.shape} finite={bool(np.isfinite(arr).all())}"
+                                      state = "unresolved"
+                              elif reason.startswith("no_tessera_tiles_for_year") and gt.requested == 0:
+                                  # the registry itself listed no block for this bbox and year
+                                  rewrite(candidate, has_tessera=0, tessera_source=SRC,
+                                          tessera_gap_reason=f"no_tessera_coverage__{reason}__{CONFIRMED}__{STAMP}")
                                   state = "coverage_hole"
                               else:
-                                  # non-finite or wrong shape: a data failure, never promoted
-                                  rewrite(path, has_tessera=0)
-                                  reasons[name] = f"invalid_embedding shape={arr.shape} finite={bool(np.isfinite(arr).all())}"
+                                  # download/metadata/other, including "no block" after a short delivery: left untouched
+                                  reasons[name] = (reason or "failed") + (
+                                      f" (registry listed {gt.requested}, delivered {gt.delivered})" if gt.requested else "")
                                   state = "unresolved"
-                          elif reason.startswith("no_tessera_tiles_for_year") and gt.requested == 0:
-                              # the registry itself listed no block for this bbox and year
-                              rewrite(path, has_tessera=0, tessera_source=SRC,
-                                      tessera_gap_reason=f"no_tessera_coverage__{reason}__{CONFIRMED}__{STAMP}")
-                              state = "coverage_hole"
-                          else:
-                              # download/metadata/other, including "no block" after a short delivery: left untouched
-                              reasons[name] = (reason or "failed") + (
-                                  f" (registry listed {gt.requested}, delivered {gt.delivered})" if gt.requested else "")
-                              state = "unresolved"
+                              if state in ("recovered", "coverage_hole"):
+                                  os.replace(candidate, path)
                       out[state].append(name)
                       print(f"  [{i}/{len(names)}] {name}: {state}", flush=True)
 

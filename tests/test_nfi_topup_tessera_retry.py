@@ -220,3 +220,16 @@ def test_source_is_pinned_and_guarded_before_any_python_runs():
     if blob.returncode != 0:
         pytest.skip("pinned commit not in this clone")
     assert hashlib.sha256(blob.stdout).hexdigest() == ENV["HELPER_SHA256"]
+
+
+def test_invalid_retry_preserves_accepted_partial_bytes(tmp_path, monkeypatch):
+    layout = {2018: {"tile": {"has_tessera": np.array(0)}}}
+    _, code, _ = execute(tmp_path, monkeypatch, layout, {"tile": "partial"}, years="2018")
+    assert code == 0
+    path = tmp_path / "unified_v2_512_nfi2018_staging/tile.npz"
+    before = path.read_bytes()
+    _, code, reports = execute(tmp_path, monkeypatch, {}, {"tile": "nan"}, years="2018")
+    assert code != 0
+    assert reports[2018]["unresolved"] == ["tile"]
+    assert path.read_bytes() == before
+    assert not list(path.parent.glob(".tessera-retry-*"))
