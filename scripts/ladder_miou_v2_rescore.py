@@ -101,7 +101,7 @@ def _iou_json(per_class: dict[int, float]) -> dict[str, float | None]:
 
 
 def val_fingerprint(cm: np.ndarray) -> dict:
-    """Identity of the scored val set as seen through its target rows.
+    """Aggregate target counts; not sample, pixel, or label identity.
 
     ``target_row_sums_sha256`` hashes the UTF-8 JSON list of per-class target
     pixel counts (``json.dumps([int, ...])``, default separators).
@@ -120,14 +120,15 @@ def val_fingerprint(cm: np.ndarray) -> dict:
 def split_identity(tiles_root: Path) -> dict:
     split_file = tiles_root / "split_val.txt"
     if split_file.is_file():
-        return {"split_hash": sha256_file(split_file), "split_file": str(split_file)}
+        return {"split_hash": sha256_file(split_file), "split_file": str(split_file),
+                "split_note": "Current split-file bytes only; historical use is not established."}
     return {
         "split_hash": None,
         "split_rule": SPLIT_RULE,
         "split_note": (
-            f"{split_file} does not exist, so the trainer used the hash rule; "
-            "the val set is pinned by the rule plus the per-cell target "
-            "row-sum fingerprint (tile filters differ per backbone)."
+            f"{split_file} does not exist at rescore time. The hash rule is the "
+            "trainer fallback, but historical use and sample membership are not "
+            "established. Target row sums describe class counts, not set identity."
         ),
     }
 
@@ -220,14 +221,21 @@ def rescore_cell(
     epochs = log.get("epochs", [])
     # Earlier new-best epochs also stored their matrix: score them too, so
     # "would v2 have selected another epoch" is answered where evidence exists.
-    recorded = [
-        {"epoch": e["epoch"],
-         "old_miou": round(legacy_miou_from_confusion(e["confusion_matrix"])[0], 6),
-         "new_miou": round(miou_from_confusion(
-             np.asarray(e["confusion_matrix"], dtype=np.int64), IGNORE_INDEX)[0], 6)}
-        for e in epochs if e.get("confusion_matrix") is not None
-    ]
-    v2_best = max(recorded, key=lambda e: (e["new_miou"], e["epoch"]))
+    recorded = []
+    v2_best, best_selection_score = None, float("-inf")
+    for e in sorted(epochs, key=lambda e: e["epoch"]):
+        if e.get("confusion_matrix") is None:
+            continue
+        score = miou_from_confusion(
+            np.asarray(e["confusion_matrix"], dtype=np.int64), IGNORE_INDEX)[0]
+        entry = {"epoch": e["epoch"],
+                 "old_miou": round(legacy_miou_from_confusion(e["confusion_matrix"])[0], 6),
+                 "new_miou": round(score, 6)}
+        recorded.append(entry)
+        # Trainer compares its 4-dp metric with strict >: the first tie wins.
+        selection_score = round(score, 4)
+        if selection_score > best_selection_score:
+            v2_best, best_selection_score = entry, selection_score
     return {
         "cell": cell_dir.name,
         "cell_path": str(cell_dir),

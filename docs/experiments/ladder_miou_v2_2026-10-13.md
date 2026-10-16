@@ -117,9 +117,9 @@ R3 and R4 under both metrics. One run per cell cannot separate them.
 | terramind | +0.0222 | +0.0263 | −0.0007 | −0.0018 |
 | tessera | +0.0320 | +0.0362 | −0.0015 | −0.0016 |
 
-R3 and R4 are scored on **identical val targets**: the target row-sum hash is
-equal in all seven columns, as expected, since R4 only adds the Trädslag
-fraction head on R3's labels. So R4 − R3 compares the same pixels and labels.
+R3 and R4 have **equal per-class target counts** in all seven columns.
+This is consistent with R4 adding the Trädslag fraction head on R3's labels,
+but equal counts do not establish identical samples, pixels, or label maps.
 R3 − R2 does not: the targets change from the NMD2023 sidecar to the distilled
 labels, under either metric. **R1 (23 classes) is not comparable with R2–R4
 (28 classes)** ([label_source_ladder.md](label_source_ladder.md), "The
@@ -141,7 +141,8 @@ touched by this rescore**.
 What the new numbers change: the level of every ladder mIoU, by +0.03 to
 +0.05. A future R5 run will score under v2 natively. Compare it against the v2
 R4 column above, never the old one, and only after checking that its class
-vocabulary and val target fingerprint match R4's.
+vocabulary, sample membership, pixel masks and label content match R4's.
+The aggregate target fingerprint alone cannot establish that equivalence.
 
 What they do not change:
 
@@ -172,10 +173,10 @@ What they do not change:
   three measured, by amounts of that order.
 - **No git sha is recorded in the checkpoints or logs.** The training code
   version behind each cell is not bound by this record.
-- **The val set is per backbone.** It is the trainer's hash split,
-  `md5(file name incl. .npz) % 100 < 10`, because
-  `/cephfs/unified_v2_512/split_val.txt` does not exist. That rule is then
-  filtered by each backbone's tile requirements:
+- **Historical val membership is not authenticated.** The trainer fallback is
+  `md5(file name incl. .npz) % 100 < 10`. The split file was absent at rescore
+  time; this does not establish its absence during training. Reported tile
+  counts differ by backbone:
   - 825 tiles: clay, prithvi300m, prithvi300m4f, prithvi600m, and tessera at
     R1–R2;
   - 819 tiles: croma and terramind (SAR subset);
@@ -197,8 +198,9 @@ What they do not change:
   (0.7 s) and `prithvi300m4f_r1/r2` (1.9 s) were launched the same way.
 - **`tessera`'s val set changes between R2 and R3:** 3 tiles fewer
   (209,563,200 → 208,801,152 px, exactly 3 × 504²). The other six columns keep
-  one tile count across all four rungs. The cause was not investigated. It
-  does not affect R4 − R3, which shares targets.
+  one tile count across all four rungs. The cause was not investigated.
+  R3 and R4 have matching aggregate target counts, but their sample membership
+  and label-map identity remain unverified; equivalence cannot be concluded.
 - **`status: "stopped"`** in `prithvi300m4f_r1`, `terramind_r1` and
   `tessera_r1`, although all three logged 30 epochs and their checkpoints
   pass the reverse check. Not investigated.
@@ -229,3 +231,14 @@ the run: none changed, and exactly 28 files were added. The on-PVC summary
 equals the block printed in the pod log, and each per-cell file equals its
 summary record. Log sha256:
 `b215c97401b4f8cd17131d9d99a24009e3f43a8a74e82b9a045917f05d0740f1`.
+
+### Review qualification (2026-10-15)
+
+The committed JSON remains the unchanged output of the historical CPU job.
+Its `split_note` overstates validation-set identity: row sums authenticate
+class counts only, and current split-file absence does not prove historical
+use of the fallback. The corrected script selects the earliest recorded
+epoch tied at the trainer's four-decimal precision, before six-decimal report
+formatting. Recorded matrices cover only historical new-best epochs; this
+cannot reconstruct selection across all training epochs. The historical job
+pin and JSON are retained as execution evidence, not regenerated results.

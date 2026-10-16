@@ -182,3 +182,21 @@ def test_checkpoint_loader_reads_numpy_scalar_metrics(tmp_path):
     assert int(ckpt["epoch"]) == 7 and float(ckpt["metrics"]["miou"]) == 0.4321
     with pytest.raises(Exception, match="sha256 mismatch"):
         rescore.load_checkpoint_cpu(path, "0" * 64, path.stat().st_size)
+
+
+@pytest.mark.parametrize("matrices", [
+    [[[0, 2], [0, 2]], [[0, 1], [0, 2]]],
+    [[[0, 5000], [5000, 5000]], [[0, 0], [49999, 50001]]],
+])
+def test_v2_selection_keeps_first_epoch_tied_at_trainer_precision(tmp_path, matrices):
+    cell = tmp_path / "clay_r2"
+    cell.mkdir()
+    old = round(rescore.legacy_miou_from_confusion(matrices[1])[0], 4)
+    epochs = [{"epoch": i + 1, "confusion_matrix": cm} for i, cm in enumerate(matrices)]
+    # Input order is not a substitute for chronological trainer order.
+    (cell / "training_log.json").write_text(json.dumps(
+        {"best_epoch": 2, "best_metric": old, "epochs": list(reversed(epochs))}))
+    (cell / "best_model.pt").write_bytes(b"fixture")
+    ckpt = {"epoch": 2, "metrics": {"miou": old}, "config": {"num_classes": 2}}
+    rec = rescore.rescore_cell(cell, load_checkpoint=lambda *_: ckpt)
+    assert rec["log_context"]["v2_best_recorded_epoch"] == 1
