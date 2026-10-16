@@ -10,6 +10,14 @@
 #   __INPUT_VALIDATION_ARGS__ empty for content; immutable requires receipt,
 #       pinned receipt SHA, immutable root and --assume-immutable-inputs
 #       See docs/operations/prediction-cache-migration.md; no real snapshot assumed.
+#   __ACTIVE_DEADLINE_SECONDS__ explicit per validation mode; no default.
+#       immutable: 1800 is measured-safe. Stage B scoring without payload
+#       hashing took ~2 min per truth set at the 2026-08-17 parity gate
+#       (docs/plans/faster_validation_architecture.md), so 1800 is ~15x.
+#       content: no cluster measurement exists. Every scored tile is read
+#       and SHA-256 hashed once (estimated ~0.5 TB for LUCAS). Size it from
+#       the byte total the scorer prints and a read rate measured on the
+#       PVC; do not reuse the immutable value.
 #   __TRUTH_ARGS__ truth-index args, e.g. for nfi:
 #       "--plot-index /data/nfi/nfi_index_unified_v2_512.parquet"
 #     for lucas:
@@ -27,7 +35,7 @@ metadata:
     purpose: score-truth
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 1800   # Operator must size this deadline for the explicit validation mode
+  activeDeadlineSeconds: __ACTIVE_DEADLINE_SECONDS__
   ttlSecondsAfterFinished: 172800
   template:
     metadata:

@@ -43,6 +43,9 @@ of their file sizes using stat calls before reading tile payloads. Without
 not a timing estimate: filtering can reduce the set; repeated predictor calls
 verify again. Prediction arrays, receipt reads and coordinate/crop reads are
 additional I/O. There is no promised runtime or throughput.
+The scoring template therefore has no default `activeDeadlineSeconds`:
+`__ACTIVE_DEADLINE_SECONDS__` is set per mode, and its header gives the
+measured basis for immutable mode.
 
 Choose exactly one mode, always with `--producer-pin <approved-contract-sha>`:
 

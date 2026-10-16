@@ -10,7 +10,10 @@ from imint.eval.metrics import per_class_iou
 from imint.schema.unified_schema import UNIFIED_CLASSES
 
 
-@pytest.mark.parametrize("ignore_index", [0, 2, -1, 255])
+# In-range values only: -1 and 255 are outside [0, num_classes) and are
+# excluded by the range check whether or not ignore_index is honoured
+# (covered by test_invalid_predictions_on_excluded_targets_are_ignored).
+@pytest.mark.parametrize("ignore_index", [0, 2, 22])
 def test_predictions_on_ignored_targets_do_not_change_metrics(ignore_index):
     target = np.array([[1, ignore_index], [ignore_index, ignore_index]])
     for ignored_prediction in (0, 1, 2):

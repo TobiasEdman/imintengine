@@ -172,6 +172,14 @@ def test_stage_a_idempotent_skip(tiles, cache_dir_tmp, checkpoint):
     assert n_written2 == 0 and n_skipped2 == 3
 
 
+def test_fresh_cache_logs_one_summary_not_per_tile_errors(tiles, cache_dir_tmp, checkpoint, capsys):
+    _run_stage_a(FakeDualHead(), tiles, cache_dir_tmp, checkpoint)
+    out = capsys.readouterr().out
+    assert "invalid prediction cache" not in out
+    assert out.count("tiles not cached; inferring") == 1
+    assert f"crop {TILE}: 3/3 tiles not cached" in out
+
+
 def test_dataset_threads_model_num_frames(tiles):
     """infer_tiles must pass the model's frame count into
     _build_inference_inputs. A single-frame ladder checkpoint (num_frames=1)

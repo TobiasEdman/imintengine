@@ -332,3 +332,18 @@ except RuntimeError as e:
 else:
     raise AssertionError('used model config mutation escaped')
 """)
+
+
+def test_ladder_consumers_import_checkpoint_hash_without_producer_capture():
+    # Consumers only need the checkpoint hash. Importing it through
+    # infer_tiles would turn on producer capture in a non-producer process.
+    probe('''
+import sys
+calls = []
+sys.addaudithook = calls.append
+sys.path.insert(0, 'scripts')
+import ladder_inference_matrix, ladder_holdout_eval
+assert calls == [], 'ladder consumer installed the producer observer'
+assert 'infer_tiles' not in sys.modules and 'scripts.infer_tiles' not in sys.modules
+print('ladder consumers are inert')
+''')
