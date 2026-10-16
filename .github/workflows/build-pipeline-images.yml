@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = pull_request ]; then
-            git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed-files.txt"
+            git diff --no-renames --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed-files.txt"
             set -- --changed-files "$RUNNER_TEMP/changed-files.txt"
           fi
           python3 .github/scripts/select_pipeline_images.py \

@@ -81,3 +81,39 @@ def test_build_summary_is_a_stable_check_on_every_pull_request():
     assert "strategy" not in summary and summary["if"] == "always()"
     assert set(summary["needs"]) == {"select_images", "pr_build", "publish"}
     assert "needs.select_images.outputs.build == 'true'" in workflow["jobs"]["pr_build"]["if"]
+
+
+@pytest.mark.parametrize("destination,expected", [
+    ("docs/run_cloud_models.py", ["cloud-models"]),
+    ("docker/c2rcc-snap/run_cloud_models.py", ["cloud-models", "c2rcc-snap"]),
+])
+def test_workflow_detects_both_sides_of_real_rename(tmp_path, destination, expected):
+    import shlex
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+    git("init")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "diff.renames", "true")
+    old = repo / "docker/cloud-models/run_cloud_models.py"
+    old.parent.mkdir(parents=True)
+    old.write_text("print('image entrypoint')\n")
+    git("add", ".")
+    git("commit", "-m", "Initial")
+    new = repo / destination
+    new.parent.mkdir(parents=True, exist_ok=True)
+    old.rename(new)
+    git("add", "-A")
+    git("commit", "-m", "Move entrypoint")
+    # Execute the workflow's actual producer, not a manually supplied path list.
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    commands = [step.get("run", "") for job in workflow["jobs"].values() for step in job.get("steps", [])]
+    line = next(line.strip() for command in commands for line in command.splitlines()
+                if line.strip().startswith("git diff "))
+    args = shlex.split(line.split(" > ", 1)[0])
+    paths = subprocess.run(args, cwd=repo, check=True, capture_output=True, text=True).stdout.splitlines()
+    assert "docker/cloud-models/run_cloud_models.py" in paths
+    assert destination in paths
+    assert _select(tmp_path, "pull_request", changed=paths) == expected
