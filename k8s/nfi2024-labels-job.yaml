@@ -84,7 +84,7 @@ spec:
               import numpy as np
 
               sys.path.insert(0, "/workspace/ie")
-              from imint.training.unified_schema import UNIFIED_CLASS_NAMES
+              from imint.schema.unified_schema import UNIFIED_CLASS_NAMES
 
               tot, bad, n = Counter(), [], 0
               for p in sorted(glob.glob("/data/unified_v2_512_nfi2024_staging/*.npz")):

@@ -49,6 +49,19 @@ def cache_path_for(cache_dir: str | Path, ckpt_sha: str, tile_path: str | Path) 
     return Path(cache_dir) / ckpt_sha / f"{stem}.npz"
 
 
+def ckpt_sha256(checkpoint: str) -> str:
+    """First 16 hex of the checkpoint's sha256 — the cache subdir name.
+
+    Keys the cache to the exact checkpoint bytes so two checkpoints never share
+    a cache dir and a re-trained model invalidates its old predictions.
+    """
+    h = hashlib.sha256()
+    with open(checkpoint, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
 class CacheValidationError(ValueError):
     """The cache is stale, incomplete, or lacks authenticated provenance."""
 

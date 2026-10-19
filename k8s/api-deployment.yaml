@@ -1,5 +1,11 @@
 # ImintEngine API — single-replica K8s deployment (ephemeral job state).
 #
+# Prerequisite: the ConfigMap imint-api-resource-budget (key max_pixels)
+# must exist in namespace imint before apply, holding your validated pixel
+# budget; the repo ships no value (see imint/api/v1/README.md). Without
+# it the pod stays in CreateContainerConfigError:
+#   kubectl -n imint create configmap imint-api-resource-budget \
+#     --from-literal=max_pixels="$VALIDATED_MAX_PIXELS"
 # Apply: kubectl apply -f k8s/api-deployment.yaml
 # Do not scale above one replica: there is no shared job store.
 # Recreate prevents overlap during upgrades. Restart loses jobs and outputs

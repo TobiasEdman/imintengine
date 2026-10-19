@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from imint.metrics import compute_miou  # noqa: E402
 from imint.schema.unified_schema import NUM_UNIFIED_CLASSES  # noqa: E402
 from gen_ladder_manifests import DISTILL  # noqa: E402
-from infer_tiles import ckpt_sha256  # noqa: E402
+from scripts.cache_predict import ckpt_sha256  # noqa: E402
 from imint.eval.fieldtruth import sha256_file  # noqa: E402
 
 NUM_CLASSES_28 = 28
