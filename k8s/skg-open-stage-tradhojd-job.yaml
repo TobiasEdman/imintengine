@@ -24,10 +24,15 @@
 # that would leave less than 50 GiB free. Re-apply under a new name to
 # resume: finished counties are skipped.
 #
-# Grunddata and markfukt are not touched, and their raw zips stay. The
-# reader (imint/training/skg_open.read_tradhojd) refuses any window whose
-# county is not yet staged. Writes ONLY under /data/skg_open. No tile is
-# touched.
+# Grunddata and markfukt are not touched by this Job. The reader
+# (imint/training/skg_open.read_tradhojd) refuses any window whose county is
+# not yet staged. Writes ONLY under /data/skg_open. No tile is touched.
+#
+# The script holds /data/skg_open/MANIFEST.lock from its first manifest read
+# to its last save and refuses to start while another writer holds it (the
+# raw-drop Job takes the same lock). Apply only when no skg-open-stage Job
+# shows ACTIVE > 0 in `kubectl get jobs -l purpose=skg-open-stage`; a lock
+# left by a killed pod is removed by hand after that check.
 #
 # Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256 (`git show
 # <sha>:scripts/stage_skg_open.py | sha256sum`); the pod refuses to run if
@@ -100,8 +105,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "3575efaa3dfe95b1cf0899509e2dc5590c0acdfe"}
-            - {name: IMINT_SCRIPT_SHA256, value: "96f0f20701919381bd3cbe113bb7e38ae3c02350dd7961ffea315cee10ec9d0c"}
+            - {name: IMINT_COMMIT, value: "d535f53d3fbf989423ff7508f36ce66705a0f1f6"}
+            - {name: IMINT_SCRIPT_SHA256, value: "22a7879189e07d79594564916ded564143d737fea3ce38195e7ad6cdafd08ab7"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
             - {name: GDAL_CACHEMAX, value: "512"}
