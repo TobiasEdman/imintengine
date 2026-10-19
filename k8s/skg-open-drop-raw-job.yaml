@@ -9,11 +9,15 @@
 # names it as its source still matches its recorded sha256; raw_deleted_at
 # is then recorded, so stage_skg_open.is_done skips the item later. Derived
 # rasters, VRTs and every Trädhöjd file are never touched. Exit 2 = some zips
-# kept (listed).
+# kept (listed). A zip already gone without a marker (an earlier run that
+# died mid-way) is marked raw_absent_at_drop when its raster verifies.
 #
-# MANIFEST.json is rewritten whole: apply this ONLY while no skg-open-stage
-# Job is active (`kubectl get jobs -l purpose=skg-open-stage`). The script
-# also refuses to save if the manifest changes under it.
+# MANIFEST.json is rewritten whole. The script takes /data/skg_open/
+# MANIFEST.lock (stage_skg_open takes it too) and refuses while it exists;
+# it also refuses to save if the manifest changes under it. Apply only when
+# no skg-open-stage Job is ACTIVE: `kubectl get jobs -l purpose=skg-open-stage`
+# must show no Job with ACTIVE > 0. A lock left by a killed pod is removed by
+# hand after that check.
 #
 # Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256; the pod refuses
 # to run if either check fails.
@@ -71,8 +75,8 @@ spec:
               echo "=== done (exit ${RC}): $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "beb0bba67a5873ba0239f2885b68c30d91657acf"}
-            - {name: IMINT_SCRIPT_SHA256, value: "f2fc4a18a9c1a89ef12635b2521d797ea3e35b460f987e9e8c2f4adf7600353d"}
+            - {name: IMINT_COMMIT, value: "ec6bf59810a0d0f9b0808549a88f9567e31b4f8d"}
+            - {name: IMINT_SCRIPT_SHA256, value: "5d58f3cc8c2266b00e87847478e5ff22ad0486cc3ca539545b426fe037eaaa7c"}
           resources:
             requests: {cpu: "2", memory: "4Gi"}
             limits: {cpu: "2", memory: "4Gi"}
