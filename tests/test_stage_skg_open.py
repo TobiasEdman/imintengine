@@ -452,3 +452,49 @@ def test_the_floor_also_covers_inflating_a_deflate64_zip(monkeypatch, tmp_path):
                     "--drop-raw", "--min-free-gib", "50"])
     assert code == 3 and calls == [("download", "sksTradhojd01.zip")]
     assert (tmp_path / "m/raw/sksTradhojd01.zip").exists()           # kept for the resumed run
+
+
+
+def test_a_crash_between_record_and_delete_is_finished_on_resume(monkeypatch, tmp_path):
+    """Review B1: derivation recorded, raw zip still on disk -> resume re-verifies, deletes, moves on."""
+    dest = tmp_path / "m"
+    rec = st.derive_tradhojd_10m(str(_tradhojd_src(tmp_path)), tmp_path / "der.tif", "p90")
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    (dest / "tradhojd").mkdir(parents=True); (dest / "raw").mkdir()
+    shutil.copy(tmp_path / "der.tif", dest / "tradhojd/tradhojd_10m_01.tif")
+    (dest / "raw/sksTradhojd01.zip").write_bytes(b"zip")
+    st.save_manifest(dest, {"files": {"sksTradhojd01.zip": {"sha256": "a" * 64, "bytes": 3}},
+                            "derived": {"tradhojd/tradhojd_10m_01.tif": {
+                                **rec, "bytes": (dest / "tradhojd/tradhojd_10m_01.tif").stat().st_size,
+                                "sha256": st.sha256_of(dest / "tradhojd/tradhojd_10m_01.tif")}},
+                            "vrt": {}, "history": []})
+    code = st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
+    assert code == 0 and calls == []                                   # no re-download, no re-derive
+    assert not (dest / "raw/sksTradhojd01.zip").exists()
+    assert snaps[-1]["files"]["sksTradhojd01.zip"]["raw_deleted_at"]
+    assert snaps[-1]["vrt"]["tradhojd/tradhojd_10m.vrt"]["sources"] == ["tradhojd/tradhojd_10m_01.tif"]
+
+
+def test_a_tampered_derived_raster_is_never_trusted_to_delete_the_raw_zip(monkeypatch, tmp_path):
+    dest = tmp_path / "m"
+    rec = st.derive_tradhojd_10m(str(_tradhojd_src(tmp_path)), tmp_path / "der.tif", "p90")
+    _staging(monkeypatch, tmp_path)
+    (dest / "tradhojd").mkdir(parents=True); (dest / "raw").mkdir()
+    (dest / "tradhojd/tradhojd_10m_01.tif").write_bytes(b"not the recorded raster")
+    (dest / "raw/sksTradhojd01.zip").write_bytes(b"zip")
+    st.save_manifest(dest, {"files": {"sksTradhojd01.zip": {"sha256": "a" * 64, "bytes": 3}},
+                            "derived": {"tradhojd/tradhojd_10m_01.tif": rec | {"sha256": "b" * 64}},
+                            "vrt": {}, "history": []})
+    with pytest.raises(RuntimeError, match="sha256 differs from its record"):
+        st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
+    assert (dest / "raw/sksTradhojd01.zip").exists()
+
+
+@pytest.mark.parametrize("leftover", ["sksTradhojd03.zip.part", "sksTradhojd03.zip.upstream-changed"])
+def test_the_one_county_guard_also_sees_partial_and_superseded_files(monkeypatch, tmp_path, leftover):
+    calls, _ = _staging(monkeypatch, tmp_path)
+    (tmp_path / "m/raw").mkdir(parents=True)
+    (tmp_path / "m/raw" / leftover).write_bytes(b"x")
+    with pytest.raises(RuntimeError, match="one county at a time"):
+        st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
+    assert calls == []

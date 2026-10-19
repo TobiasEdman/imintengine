@@ -596,6 +596,24 @@ def main(argv: list[str] | None = None) -> int:
     done = skipped = 0
     stopped = None
     for it in items:
+        raw = dest / "raw" / it.name
+        der = manifest["derived"].get(it.derived)
+        if (args.drop_raw and it.product == "tradhojd" and der and der.get("sha256")
+                and raw.exists() and (dest / it.derived).exists()
+                and not manifest["files"].get(it.name, {}).get("raw_deleted_at")):
+            # crashed after the verified derivation was recorded, before the delete:
+            # re-verify the raster on disk against its record, then finish the delete
+            out = dest / it.derived
+            if sha256_of(out) != der["sha256"]:
+                raise RuntimeError(f"{it.derived}: sha256 differs from its record; refusing to delete {it.name}")
+            verify_tradhojd_10m(out, der)
+            raw.unlink()
+            manifest["files"][it.name]["raw_deleted_at"] = _now()
+            save_manifest(dest, manifest)
+            vrt = "tradhojd/tradhojd_10m.vrt"
+            manifest["vrt"][vrt] = build_vrt(dest, vrt, staged_vrt_sources(manifest, dest, vrt), *vrt_nodata(vrt))
+            save_manifest(dest, manifest)
+            print(f"    resumed {it.name}: derived raster re-verified, raw zip deleted", flush=True)
         if is_done(it, manifest, dest):
             skipped += 1
             continue
@@ -603,7 +621,8 @@ def main(argv: list[str] | None = None) -> int:
         raw = dest / "raw" / it.name
         rec = manifest["files"].get(it.name) or {}
         if args.drop_raw and it.product == "tradhojd":
-            others = sorted(q.name for q in (dest / "raw").glob("sksTradhojd*.zip") if q.name != it.name)
+            mine = {it.name, it.name + ".part", it.name + ".upstream-changed"}
+            others = sorted(q.name for q in (dest / "raw").glob("sksTradhojd*") if q.name not in mine)
             if others:
                 raise RuntimeError(f"refusing {it.name}: raw Trädhöjd zips still on disk {others}; "
                                    "one county at a time")
