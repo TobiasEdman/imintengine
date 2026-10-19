@@ -51,6 +51,9 @@ These named artifacts contain historical training/validation mIoU, or
 comparisons informed by it. Preserve their numbers and original context;
 do not interpret a larger v2 number as improvement over them. No results,
 checkpoints or datasets have been recomputed by this migration.
+One explicit rescore has been made since, from stored best-epoch confusion
+matrices and without modifying any log or checkpoint: the 28 distillation-ladder
+cells, in [ladder_miou_v2_2026-10-13.md](../experiments/ladder_miou_v2_2026-10-13.md).
 
 | Artifact | Historical mIoU / affected context |
 |---|---|

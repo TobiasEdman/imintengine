@@ -1,0 +1,7343 @@
+{
+ "schema": "ladder-miou-v2-rescore/1",
+ "date": "2026-10-13",
+ "report": "docs/experiments/ladder_miou_v2_2026-10-13.md",
+ "method": "stored-confusion-matrix",
+ "gpu_seconds": 0,
+ "metric_version_old": "miou-unversioned-v1",
+ "metric_version_new": "miou-ignore-target-v2",
+ "ignore_index": 0,
+ "old_metric_definition": "imint/metrics.py compute_miou at 905c656^1 (pre-PR #76): target==0 rows kept in the confusion matrix; frozen as legacy_miou_from_confusion",
+ "commits": {
+  "script_and_tests": "52a0c90a9b5789df43df59158478bc85dff64d01",
+  "job_manifest_first": "d50ba1327195165f41abaf626cfb6f977144a9ca",
+  "job_manifest_run": "659abcba2532e07a9f15a2ccde435545e37eb297",
+  "pinned_in_job": "52a0c90a9b5789df43df59158478bc85dff64d01",
+  "branch": "claude/ladder-miou-recompute-d2e9ef"
+ },
+ "source_guards_sha256": {
+  "scripts/ladder_miou_v2_rescore.py": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+  "imint/metrics.py": "ac4dc4dbf11dcfdc32918b7cca00114e72709792742f5b2b71b696a2dda78455",
+  "scripts/inference_comparison.py": "6c106a2d154be67e8e1a8c89e0cbecb0a89c43cb42cd2033bc8236b969d59419"
+ },
+ "cluster": {
+  "context": "icekube",
+  "namespace": "prithvi-training-default",
+  "pvc": "training-data-cephfs"
+ },
+ "job": {
+  "manifest": "k8s/ladder-miou-v2-rescore-job.yaml",
+  "name": "ladder-miou-v2-rescore-xv575",
+  "uid": "ebb11184-3f04-4ff5-90bd-1e8fbfa3b867",
+  "pod": "ladder-miou-v2-rescore-xv575-x9lsn",
+  "node": "p02r09srv06",
+  "start": "2026-10-13T20:35:19Z",
+  "completion": "2026-10-13T20:43:06Z",
+  "exit_code": 0,
+  "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+  "image_id_reported": "docker-pullable://python@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+  "runtime": {
+   "numpy": "2.4.6",
+   "torch": "2.10.0+cpu",
+   "freeze_record": "/cephfs/ops/deps/ladder-inference-matrix-20260924T050551Z-$.txt"
+  },
+  "resources": {
+   "cpu": "2",
+   "memory": "8Gi",
+   "gpu": 0
+  },
+  "log_sha256": "b215c97401b4f8cd17131d9d99a24009e3f43a8a74e82b9a045917f05d0740f1",
+  "log_bytes": 124879
+ },
+ "rejected_submission": {
+  "name": "ladder-miou-v2-rescore-72rnl",
+  "uid": "f284be1f-a575-43cc-b7e3-ece3952d5df7",
+  "manifest_commit": "d50ba1327195165f41abaf626cfb6f977144a9ca",
+  "reason": "iceguard-webhook: resource limits must equal requests (ephemeral-storage 16Gi != 8Gi, memory 12Gi != 8Gi)",
+  "pod_created": false,
+  "state": "suspended (not deleted)"
+ },
+ "outputs": {
+  "summary": "/cephfs/checkpoints/ladder/_miou_v2_rescore_20261013.json",
+  "summary_sha256": "7af43901e76399096d4ee569633a8895db7c2fa05e26982a96b45af7cdbea39a",
+  "per_cell": [
+   "/cephfs/checkpoints/ladder/clay_r1/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/clay_r2/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/clay_r3/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/clay_r4/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/croma_r1/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/croma_r2/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/croma_r3/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/croma_r4/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m4f_r1/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m4f_r2/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m4f_r3/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m4f_r4/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m_r1/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m_r2/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m_r3/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi300m_r4/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi600m_r1/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi600m_r2/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi600m_r3/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/prithvi600m_r4/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/terramind_r1/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/terramind_r2/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/terramind_r3/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/terramind_r4/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/tessera_r1/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/tessera_r2/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/tessera_r3/miou_v2_rescore.json",
+   "/cephfs/checkpoints/ladder/tessera_r4/miou_v2_rescore.json"
+  ],
+  "summary_equals_log_block": true,
+  "per_cell_equal_summary_records": true
+ },
+ "write_safety": {
+  "pre_existing_files_checked": 132,
+  "changed": 0,
+  "removed": 0,
+  "added": 28,
+  "training_log_json_unchanged": 28,
+  "method": "mtime_ns + size of every file under the 28 cell dirs, read via the read-only training-dashboard pod before and after the run"
+ },
+ "split": {
+  "split_hash": null,
+  "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+  "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone)."
+ },
+ "inputs": [
+  {
+   "cell": "clay_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r1",
+   "training_log_json": {
+    "sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+    "size": 235613
+   },
+   "best_model_pt": {
+    "sha256": "c3e696098e47849912af751c602295015af401439f69a04cb025a7209c7c022f",
+    "size": 2601007020
+   }
+  },
+  {
+   "cell": "clay_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r2",
+   "training_log_json": {
+    "sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+    "size": 291234
+   },
+   "best_model_pt": {
+    "sha256": "0a37ebdbbae8ac61145424350ae8f2990225d2cb15a3e1c178c9d42134c226e2",
+    "size": 2601012332
+   }
+  },
+  {
+   "cell": "clay_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r3",
+   "training_log_json": {
+    "sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+    "size": 331003
+   },
+   "best_model_pt": {
+    "sha256": "078a93b0cef7d7d60411828447cffe4e3e6180619e5d4e0a3ead570a0d66d83a",
+    "size": 2601012332
+   }
+  },
+  {
+   "cell": "clay_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r4",
+   "training_log_json": {
+    "sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+    "size": 292343
+   },
+   "best_model_pt": {
+    "sha256": "4efd6edc52eee83e2b43e927f713313ad79b99a395d3bdd49b42055d2a318273",
+    "size": 2601012332
+   }
+  },
+  {
+   "cell": "croma_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r1",
+   "training_log_json": {
+    "sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+    "size": 225668
+   },
+   "best_model_pt": {
+    "sha256": "ad824f1be8a040372aaec700392b5198c4effb9b86c5aae0c65256dccbe2a0dd",
+    "size": 834649493
+   }
+  },
+  {
+   "cell": "croma_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r2",
+   "training_log_json": {
+    "sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+    "size": 316190
+   },
+   "best_model_pt": {
+    "sha256": "dbfc04cf9475ca6b604dd5133191854736e961deebeb992be855f211d152bd80",
+    "size": 834654805
+   }
+  },
+  {
+   "cell": "croma_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r3",
+   "training_log_json": {
+    "sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+    "size": 342710
+   },
+   "best_model_pt": {
+    "sha256": "1fc457d6c11aa30f72fe23567463f3a307a8f5298bf023b42dec8929fd504b9c",
+    "size": 834654805
+   }
+  },
+  {
+   "cell": "croma_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r4",
+   "training_log_json": {
+    "sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+    "size": 291096
+   },
+   "best_model_pt": {
+    "sha256": "689d0e8577436f4220628cc729982e0bd7165983d2894ef35f0ebc78cdf1ffc6",
+    "size": 834654805
+   }
+  },
+  {
+   "cell": "prithvi300m4f_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r1",
+   "training_log_json": {
+    "sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+    "size": 225349
+   },
+   "best_model_pt": {
+    "sha256": "5da3a0f9cefd63cf2cfe4facb5c9021a9f6a71cf7c066ab5858f61a54b2694ab",
+    "size": 1370848619
+   }
+  },
+  {
+   "cell": "prithvi300m4f_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r2",
+   "training_log_json": {
+    "sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+    "size": 302990
+   },
+   "best_model_pt": {
+    "sha256": "9f013d26fb3ba8f6afb510e0f1ca7cadf988b29201cab45a065cb35ccfd972a9",
+    "size": 1370853931
+   }
+  },
+  {
+   "cell": "prithvi300m4f_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r3",
+   "training_log_json": {
+    "sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+    "size": 316080
+   },
+   "best_model_pt": {
+    "sha256": "ec4530475504696497c9860a987a3fabc2c4f31efcdeae162fc2111790d7581a",
+    "size": 1370854334
+   }
+  },
+  {
+   "cell": "prithvi300m4f_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r4",
+   "training_log_json": {
+    "sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+    "size": 317199
+   },
+   "best_model_pt": {
+    "sha256": "b8824fcb43b940bd77fba8cd1e1f9ddd40c05938f9cb4213f52ceb5626c1289f",
+    "size": 1370854334
+   }
+  },
+  {
+   "cell": "prithvi300m_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r1",
+   "training_log_json": {
+    "sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+    "size": 244214
+   },
+   "best_model_pt": {
+    "sha256": "d3823ceca5b727eacad3f06b2218ba537b0846172d04ac296954313aee012ad7",
+    "size": 1285888363
+   }
+  },
+  {
+   "cell": "prithvi300m_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r2",
+   "training_log_json": {
+    "sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+    "size": 290509
+   },
+   "best_model_pt": {
+    "sha256": "a27dadd9caf1c9ccfba6ecbd76ac7815fcb7236978e9df807e1d1bf7a498cda0",
+    "size": 1285893675
+   }
+  },
+  {
+   "cell": "prithvi300m_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r3",
+   "training_log_json": {
+    "sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+    "size": 303119
+   },
+   "best_model_pt": {
+    "sha256": "e42c0b15f633f3adf3c68bfa5fee1292246aa5e3f333c1f270c146fc62701df7",
+    "size": 1285893675
+   }
+  },
+  {
+   "cell": "prithvi300m_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r4",
+   "training_log_json": {
+    "sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+    "size": 317213
+   },
+   "best_model_pt": {
+    "sha256": "ecd0b3724e1d009fb795467006197ba305d2f1455d9dcdc3c80a6a517dcaee84",
+    "size": 1285893675
+   }
+  },
+  {
+   "cell": "prithvi600m_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r1",
+   "training_log_json": {
+    "sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+    "size": 216006
+   },
+   "best_model_pt": {
+    "sha256": "9115a3d411ecfd0babbaef9a6b7448ea3449ec68e97dbf0cd52abac415a63916",
+    "size": 2741613769
+   }
+  },
+  {
+   "cell": "prithvi600m_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r2",
+   "training_log_json": {
+    "sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+    "size": 250431
+   },
+   "best_model_pt": {
+    "sha256": "89d544c06fd353772722dec5600a4ba8696fd8971250f471b47f6b53828d1d46",
+    "size": 2741619081
+   }
+  },
+  {
+   "cell": "prithvi600m_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r3",
+   "training_log_json": {
+    "sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+    "size": 276528
+   },
+   "best_model_pt": {
+    "sha256": "d4f926b2d57737982d2439b38dcde8ed723ddd31ec66369c428e4f7cd07cf43a",
+    "size": 2741619081
+   }
+  },
+  {
+   "cell": "prithvi600m_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r4",
+   "training_log_json": {
+    "sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+    "size": 329156
+   },
+   "best_model_pt": {
+    "sha256": "edf46dd6c2c19ba2f965afcdb2911b14a65d0c534057bcd185693b56b2ae3772",
+    "size": 2741619081
+   }
+  },
+  {
+   "cell": "terramind_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r1",
+   "training_log_json": {
+    "sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+    "size": 253419
+   },
+   "best_model_pt": {
+    "sha256": "4aea9aad163bd0e4ef67f2be678669e1d2411b1634b278d99533884960c5a551",
+    "size": 401353531
+   }
+  },
+  {
+   "cell": "terramind_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r2",
+   "training_log_json": {
+    "sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+    "size": 316753
+   },
+   "best_model_pt": {
+    "sha256": "97316cf22612288072f0278f5c90e1a987a845a35acb1dcb431cc13432b4fc8f",
+    "size": 401358843
+   }
+  },
+  {
+   "cell": "terramind_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r3",
+   "training_log_json": {
+    "sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+    "size": 303378
+   },
+   "best_model_pt": {
+    "sha256": "ee752b95cbcc874f976a2db8195eaedf56388caeff9adf71630a56e5adb5df1f",
+    "size": 401358843
+   }
+  },
+  {
+   "cell": "terramind_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r4",
+   "training_log_json": {
+    "sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+    "size": 330811
+   },
+   "best_model_pt": {
+    "sha256": "a8cece4a785df3d0b754df3ad63b85c4305f8bac163ff7a1137d2bb3e0926542",
+    "size": 401358843
+   }
+  },
+  {
+   "cell": "tessera_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r1",
+   "training_log_json": {
+    "sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+    "size": 205944
+   },
+   "best_model_pt": {
+    "sha256": "1f31188c851f52b003e7669c962841a94d50e739800e545657e54afe6f3fc235",
+    "size": 1593570
+   }
+  },
+  {
+   "cell": "tessera_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r2",
+   "training_log_json": {
+    "sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+    "size": 288304
+   },
+   "best_model_pt": {
+    "sha256": "9dd7cfcad09b26576d23c846c29c3fd540d463b97a72df0b7557f6558dbced04",
+    "size": 1596322
+   }
+  },
+  {
+   "cell": "tessera_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r3",
+   "training_log_json": {
+    "sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+    "size": 288178
+   },
+   "best_model_pt": {
+    "sha256": "2d673c191a380da00725ad90638980afbc5f7bdaa7fe655770d701a37e583f4f",
+    "size": 1596322
+   }
+  },
+  {
+   "cell": "tessera_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r4",
+   "training_log_json": {
+    "sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+    "size": 289201
+   },
+   "best_model_pt": {
+    "sha256": "1270bb2af88074840020f3b481ed5e98a72f0b7ceb51befac2b8fa4675385668",
+    "size": 1596322
+   }
+  }
+ ],
+ "results": [
+  {
+   "backbone": "clay",
+   "best_epoch": 30,
+   "best_model_pt": {
+    "sha256": "c3e696098e47849912af751c602295015af401439f69a04cb025a7209c7c022f",
+    "size": 2601007020
+   },
+   "cell": "clay_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r1",
+   "delta": 0.032414,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 618.0,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 22,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.352195,
+      "old_miou": 0.33291
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.376107,
+      "old_miou": 0.355245
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.405638,
+      "old_miou": 0.380803
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.412304,
+      "old_miou": 0.387236
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.423028,
+      "old_miou": 0.3974
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.425412,
+      "old_miou": 0.399028
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.435709,
+      "old_miou": 0.408937
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.442694,
+      "old_miou": 0.414091
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.445952,
+      "old_miou": 0.41784
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.454781,
+      "old_miou": 0.425549
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.458884,
+      "old_miou": 0.430077
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.463588,
+      "old_miou": 0.433066
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.466543,
+      "old_miou": 0.435953
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.468948,
+      "old_miou": 0.438321
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.472974,
+      "old_miou": 0.441761
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.476306,
+      "old_miou": 0.444521
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.478094,
+      "old_miou": 0.446737
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.479001,
+      "old_miou": 0.446886
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.480974,
+      "old_miou": 0.448958
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.484157,
+      "old_miou": 0.4521
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.48632,
+      "old_miou": 0.453542
+     },
+     {
+      "epoch": 30,
+      "new_miou": 0.486475,
+      "old_miou": 0.454061
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 26,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.4535
+    },
+    "started_at": "2026-08-30T10:33:19.436578+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-30T21:39:13.345814+00:00",
+    "v2_best_recorded_epoch": 30
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.486475,
+   "new_per_class_iou": {
+    "1": 0.406972,
+    "10": 0.949364,
+    "11": 0.605175,
+    "12": 0.484417,
+    "13": 0.296697,
+    "14": 0.534537,
+    "15": 0.585133,
+    "16": 0.303278,
+    "17": 0.615147,
+    "18": 0.822418,
+    "19": 0.36494,
+    "2": 0.416386,
+    "20": 0.347125,
+    "21": 0.635254,
+    "22": 0.421565,
+    "3": 0.302853,
+    "4": 0.251536,
+    "5": 0.44307,
+    "6": 0.536441,
+    "7": 0.645229,
+    "8": 0.410694,
+    "9": 0.324216
+   },
+   "num_classes": 23,
+   "old_miou_recomputed": 0.454061,
+   "old_per_class_iou": {
+    "1": 0.406796,
+    "10": 0.945465,
+    "11": 0.540729,
+    "12": 0.43934,
+    "13": 0.259039,
+    "14": 0.510612,
+    "15": 0.498894,
+    "16": 0.288457,
+    "17": 0.489153,
+    "18": 0.725977,
+    "19": 0.312425,
+    "2": 0.416136,
+    "20": 0.322691,
+    "21": 0.534224,
+    "22": 0.419605,
+    "3": 0.301921,
+    "4": 0.251435,
+    "5": 0.437036,
+    "6": 0.535482,
+    "7": 0.629637,
+    "8": 0.403912,
+    "9": 0.320376
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 30,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4541,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 1,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4541,
+   "training_log_json": {
+    "sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+    "size": 235613
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "958e4e801aca024c27b04c7193d9aa69bad41cb05f75003d40d429fa8a33dcdb",
+    "target0_share": 0.031101,
+    "target_row_sums": [
+     6517615,
+     26443347,
+     17217125,
+     24555953,
+     12721273,
+     8117220,
+     17217149,
+     13161555,
+     22311604,
+     8111002,
+     20949238,
+     6069356,
+     4464637,
+     1372638,
+     1899136,
+     7810968,
+     2349438,
+     1004233,
+     1026278,
+     633063,
+     606698,
+     342603,
+     4661071
+    ],
+    "target_row_sums_sha256": "4887572deb7fcf9f15175bc57a300c096f267455d698f62fe011ea19db98d971"
+   }
+  },
+  {
+   "backbone": "clay",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "0a37ebdbbae8ac61145424350ae8f2990225d2cb15a3e1c178c9d42134c226e2",
+    "size": 2601012332
+   },
+   "cell": "clay_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r2",
+   "delta": 0.035585,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 639.4,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.276418,
+      "old_miou": 0.253509
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.316005,
+      "old_miou": 0.292122
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.342822,
+      "old_miou": 0.314594
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.353563,
+      "old_miou": 0.325256
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.366164,
+      "old_miou": 0.336474
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.369506,
+      "old_miou": 0.339298
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.375557,
+      "old_miou": 0.344763
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.385661,
+      "old_miou": 0.353843
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.396555,
+      "old_miou": 0.364703
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.398518,
+      "old_miou": 0.366131
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.406788,
+      "old_miou": 0.372434
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.408748,
+      "old_miou": 0.375166
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.414426,
+      "old_miou": 0.381063
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.416592,
+      "old_miou": 0.382135
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.419864,
+      "old_miou": 0.385728
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.422019,
+      "old_miou": 0.386862
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.423916,
+      "old_miou": 0.389349
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.425928,
+      "old_miou": 0.389997
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.425819,
+      "old_miou": 0.390234
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 26,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.39
+    },
+    "started_at": "2026-08-31T09:07:50.834577+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-31T20:08:45.936016+00:00",
+    "v2_best_recorded_epoch": 26
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.425819,
+   "new_per_class_iou": {
+    "1": 0.453292,
+    "10": 0.94532,
+    "11": 0.607147,
+    "12": 0.478992,
+    "13": 0.295504,
+    "14": 0.520906,
+    "15": 0.600784,
+    "16": 0.335505,
+    "17": 0.64366,
+    "18": 0.824351,
+    "19": 0.327841,
+    "2": 0.415549,
+    "20": 0.359565,
+    "21": 0.619301,
+    "22": 0.429542,
+    "23": 0.482224,
+    "24": 0.115074,
+    "25": 0.139417,
+    "26": 0.256865,
+    "27": 0.175168,
+    "3": 0.317211,
+    "4": 0.232666,
+    "5": 0.498585,
+    "6": 0.383705,
+    "7": 0.645791,
+    "8": 0.158431,
+    "9": 0.234728
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.390234,
+   "old_per_class_iou": {
+    "1": 0.448353,
+    "10": 0.877344,
+    "11": 0.562361,
+    "12": 0.455804,
+    "13": 0.274356,
+    "14": 0.502778,
+    "15": 0.548446,
+    "16": 0.325485,
+    "17": 0.522369,
+    "18": 0.734151,
+    "19": 0.290377,
+    "2": 0.38223,
+    "20": 0.344903,
+    "21": 0.516165,
+    "22": 0.422807,
+    "23": 0.480305,
+    "24": 0.10242,
+    "25": 0.091554,
+    "26": 0.234368,
+    "27": 0.118151,
+    "3": 0.302454,
+    "4": 0.213463,
+    "5": 0.465262,
+    "6": 0.377729,
+    "7": 0.562106,
+    "8": 0.146558,
+    "9": 0.234023
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.3902,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 2,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.3902,
+   "training_log_json": {
+    "sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+    "size": 291234
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "1bad8cf953a74dfdadc8754101a00b07dfa0aec5b4b309980353005c07ba63ef",
+    "target0_share": 0.105888,
+    "target_row_sums": [
+     22190151,
+     24908909,
+     16197946,
+     29525293,
+     11396809,
+     12208149,
+     10685226,
+     8673354,
+     1123245,
+     8666900,
+     19440773,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723960,
+     3148164,
+     5786903,
+     447904
+    ],
+    "target_row_sums_sha256": "6840b8d49127ad060a7727ae7a21c8c451bbb44e17c52de8ca4c5f1af4b31c47"
+   }
+  },
+  {
+   "backbone": "clay",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "078a93b0cef7d7d60411828447cffe4e3e6180619e5d4e0a3ead570a0d66d83a",
+    "size": 2601012332
+   },
+   "cell": "clay_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r3",
+   "delta": 0.038963,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 626.2,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 22,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.297912,
+      "old_miou": 0.274253
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.334432,
+      "old_miou": 0.308995
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.368708,
+      "old_miou": 0.33814
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.379822,
+      "old_miou": 0.34911
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.391939,
+      "old_miou": 0.359772
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.396824,
+      "old_miou": 0.363787
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.40565,
+      "old_miou": 0.372583
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.413694,
+      "old_miou": 0.37949
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.425628,
+      "old_miou": 0.391164
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.426857,
+      "old_miou": 0.391693
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.430702,
+      "old_miou": 0.394408
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.437893,
+      "old_miou": 0.400287
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.438871,
+      "old_miou": 0.401426
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.438365,
+      "old_miou": 0.40157
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.446489,
+      "old_miou": 0.409771
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.448759,
+      "old_miou": 0.41109
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.451923,
+      "old_miou": 0.413713
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.452911,
+      "old_miou": 0.414911
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.453796,
+      "old_miou": 0.415927
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.454758,
+      "old_miou": 0.417121
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.456845,
+      "old_miou": 0.417935
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.457999,
+      "old_miou": 0.419036
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4187
+    },
+    "started_at": "2026-09-01T05:24:10.020910+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-01T16:27:46.887187+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.457999,
+   "new_per_class_iou": {
+    "1": 0.644391,
+    "10": 0.946151,
+    "11": 0.605369,
+    "12": 0.480031,
+    "13": 0.300308,
+    "14": 0.520891,
+    "15": 0.59991,
+    "16": 0.330972,
+    "17": 0.649209,
+    "18": 0.825246,
+    "19": 0.329534,
+    "2": 0.619578,
+    "20": 0.346296,
+    "21": 0.622891,
+    "22": 0.429022,
+    "23": 0.497507,
+    "24": 0.121144,
+    "25": 0.143785,
+    "26": 0.257968,
+    "27": 0.176172,
+    "3": 0.542377,
+    "4": 0.454628,
+    "5": 0.510352,
+    "6": 0.374055,
+    "7": 0.647402,
+    "8": 0.157964,
+    "9": 0.23283
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.419036,
+   "old_per_class_iou": {
+    "1": 0.630032,
+    "10": 0.878281,
+    "11": 0.561814,
+    "12": 0.458024,
+    "13": 0.281263,
+    "14": 0.50363,
+    "15": 0.547605,
+    "16": 0.321238,
+    "17": 0.52847,
+    "18": 0.729135,
+    "19": 0.289229,
+    "2": 0.566775,
+    "20": 0.33271,
+    "21": 0.515637,
+    "22": 0.422276,
+    "23": 0.495466,
+    "24": 0.108417,
+    "25": 0.093524,
+    "26": 0.234222,
+    "27": 0.118587,
+    "3": 0.512798,
+    "4": 0.403393,
+    "5": 0.475988,
+    "6": 0.368196,
+    "7": 0.55909,
+    "8": 0.145987,
+    "9": 0.232193
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.419,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 3,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.419,
+   "training_log_json": {
+    "sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+    "size": 331003
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "c1b90d942058b5a341836170b606f45a377fbb7bd21096efff08e900efcf49c7",
+    "target0_share": 0.105888,
+    "target_row_sums": [
+     22190151,
+     34546890,
+     21069107,
+     14800129,
+     11612831,
+     12208149,
+     10685226,
+     8673354,
+     1123245,
+     8666900,
+     19440773,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723960,
+     3148164,
+     5786903,
+     447904
+    ],
+    "target_row_sums_sha256": "ac33bb05b2405e0dad2b404957a446828c66d233edbdbce1166fc2060bba8009"
+   }
+  },
+  {
+   "backbone": "clay",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "4efd6edc52eee83e2b43e927f713313ad79b99a395d3bdd49b42055d2a318273",
+    "size": 2601012332
+   },
+   "cell": "clay_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/clay_r4",
+   "delta": 0.0387,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 718.0,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.297074,
+      "old_miou": 0.273138
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.33226,
+      "old_miou": 0.307338
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.367949,
+      "old_miou": 0.337305
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.378303,
+      "old_miou": 0.346809
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.387997,
+      "old_miou": 0.355973
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.396911,
+      "old_miou": 0.364212
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.401541,
+      "old_miou": 0.368952
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.413131,
+      "old_miou": 0.379718
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.421877,
+      "old_miou": 0.388252
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.426016,
+      "old_miou": 0.390337
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.429082,
+      "old_miou": 0.392962
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.4368,
+      "old_miou": 0.400187
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.444045,
+      "old_miou": 0.407432
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.4479,
+      "old_miou": 0.410436
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.450099,
+      "old_miou": 0.412269
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.451474,
+      "old_miou": 0.413765
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.45314,
+      "old_miou": 0.415823
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.455015,
+      "old_miou": 0.416337
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.455763,
+      "old_miou": 0.417063
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 26,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.4163
+    },
+    "started_at": "2026-09-01T22:14:01.830562+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-02T10:04:24.871860+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.455763,
+   "new_per_class_iou": {
+    "1": 0.641156,
+    "10": 0.945443,
+    "11": 0.604939,
+    "12": 0.476472,
+    "13": 0.298247,
+    "14": 0.523847,
+    "15": 0.59756,
+    "16": 0.330477,
+    "17": 0.648477,
+    "18": 0.82015,
+    "19": 0.334079,
+    "2": 0.616322,
+    "20": 0.338074,
+    "21": 0.617406,
+    "22": 0.426532,
+    "23": 0.491546,
+    "24": 0.120264,
+    "25": 0.141846,
+    "26": 0.256045,
+    "27": 0.17501,
+    "3": 0.541531,
+    "4": 0.451119,
+    "5": 0.510113,
+    "6": 0.369116,
+    "7": 0.645392,
+    "8": 0.153137,
+    "9": 0.231311
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.417063,
+   "old_per_class_iou": {
+    "1": 0.626658,
+    "10": 0.877555,
+    "11": 0.559956,
+    "12": 0.452831,
+    "13": 0.275542,
+    "14": 0.507106,
+    "15": 0.547704,
+    "16": 0.320958,
+    "17": 0.53105,
+    "18": 0.724963,
+    "19": 0.29294,
+    "2": 0.564323,
+    "20": 0.324677,
+    "21": 0.5117,
+    "22": 0.420168,
+    "23": 0.490227,
+    "24": 0.108458,
+    "25": 0.093327,
+    "26": 0.230827,
+    "27": 0.119425,
+    "3": 0.509312,
+    "4": 0.400433,
+    "5": 0.476868,
+    "6": 0.363085,
+    "7": 0.558342,
+    "8": 0.14164,
+    "9": 0.230636
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4171,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 4,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4171,
+   "training_log_json": {
+    "sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+    "size": 292343
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "8c12fb89f525c0a086c1fd5895adb5105faaaedebf3a1cc421939013512def3f",
+    "target0_share": 0.105888,
+    "target_row_sums": [
+     22190151,
+     34546890,
+     21069107,
+     14800129,
+     11612831,
+     12208149,
+     10685226,
+     8673354,
+     1123245,
+     8666900,
+     19440773,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723960,
+     3148164,
+     5786903,
+     447904
+    ],
+    "target_row_sums_sha256": "ac33bb05b2405e0dad2b404957a446828c66d233edbdbce1166fc2060bba8009"
+   }
+  },
+  {
+   "backbone": "croma",
+   "best_epoch": 27,
+   "best_model_pt": {
+    "sha256": "ad824f1be8a040372aaec700392b5198c4effb9b86c5aae0c65256dccbe2a0dd",
+    "size": 834649493
+   },
+   "cell": "croma_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r1",
+   "delta": 0.040571,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 3137.9,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 21,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.379539,
+      "old_miou": 0.356574
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.421059,
+      "old_miou": 0.394049
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.456038,
+      "old_miou": 0.423854
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.470598,
+      "old_miou": 0.436463
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.471882,
+      "old_miou": 0.439039
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.483454,
+      "old_miou": 0.447647
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.487039,
+      "old_miou": 0.452021
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.494242,
+      "old_miou": 0.456863
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.503987,
+      "old_miou": 0.4671
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.512035,
+      "old_miou": 0.475153
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.516094,
+      "old_miou": 0.4757
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.515721,
+      "old_miou": 0.477078
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.525228,
+      "old_miou": 0.485899
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.528131,
+      "old_miou": 0.488546
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.530437,
+      "old_miou": 0.490607
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.531313,
+      "old_miou": 0.491771
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.535259,
+      "old_miou": 0.495814
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.539256,
+      "old_miou": 0.499006
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.542413,
+      "old_miou": 0.502346
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.545372,
+      "old_miou": 0.504835
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.546134,
+      "old_miou": 0.505563
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.5052
+    },
+    "started_at": "2026-08-29T21:05:26.414740+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-31T07:37:32.080782+00:00",
+    "v2_best_recorded_epoch": 27
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.546134,
+   "new_per_class_iou": {
+    "1": 0.430846,
+    "10": 0.953662,
+    "11": 0.707479,
+    "12": 0.571167,
+    "13": 0.346349,
+    "14": 0.776404,
+    "15": 0.618981,
+    "16": 0.337574,
+    "17": 0.757182,
+    "18": 0.874691,
+    "19": 0.534502,
+    "2": 0.440812,
+    "20": 0.486468,
+    "21": 0.733696,
+    "22": 0.503787,
+    "3": 0.308878,
+    "4": 0.258188,
+    "5": 0.437658,
+    "6": 0.54902,
+    "7": 0.641373,
+    "8": 0.413048,
+    "9": 0.333177
+   },
+   "num_classes": 23,
+   "old_miou_recomputed": 0.505563,
+   "old_per_class_iou": {
+    "1": 0.430316,
+    "10": 0.949569,
+    "11": 0.633014,
+    "12": 0.516841,
+    "13": 0.308445,
+    "14": 0.701097,
+    "15": 0.52488,
+    "16": 0.322114,
+    "17": 0.576714,
+    "18": 0.762587,
+    "19": 0.460259,
+    "2": 0.440293,
+    "20": 0.455397,
+    "21": 0.63062,
+    "22": 0.502093,
+    "3": 0.307469,
+    "4": 0.257927,
+    "5": 0.430282,
+    "6": 0.54795,
+    "7": 0.629963,
+    "8": 0.405076,
+    "9": 0.329479
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 27,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5056,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 1,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5056,
+   "training_log_json": {
+    "sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+    "size": 225668
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 208039104,
+    "confusion_matrix_sha256": "db11c7d6fba9b36907d1fbe11c03cc6f22d6506eda562e859ebcf8a7b66f009f",
+    "target0_share": 0.031146,
+    "target_row_sums": [
+     6479673,
+     26355929,
+     17098943,
+     24439643,
+     12658440,
+     8102298,
+     17150186,
+     13037168,
+     21929712,
+     8011609,
+     20862800,
+     5988773,
+     4406903,
+     1361615,
+     1856158,
+     7762788,
+     2340855,
+     1000162,
+     986864,
+     614735,
+     602598,
+     342361,
+     4648891
+    ],
+    "target_row_sums_sha256": "f9913c5132eff020d8262579e2c70ada1d9cc80a72db4974a6903248eac2e714"
+   }
+  },
+  {
+   "backbone": "croma",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "dbfc04cf9475ca6b604dd5133191854736e961deebeb992be855f211d152bd80",
+    "size": 834654805
+   },
+   "cell": "croma_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r2",
+   "delta": 0.040999,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 3694.5,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 21,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.299011,
+      "old_miou": 0.274772
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.368939,
+      "old_miou": 0.339989
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.397227,
+      "old_miou": 0.364567
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.41439,
+      "old_miou": 0.379253
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.423828,
+      "old_miou": 0.388341
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.433018,
+      "old_miou": 0.39689
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.445917,
+      "old_miou": 0.408037
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.444885,
+      "old_miou": 0.408435
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.459444,
+      "old_miou": 0.420567
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.462579,
+      "old_miou": 0.423859
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.468702,
+      "old_miou": 0.428605
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.469847,
+      "old_miou": 0.430559
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.471515,
+      "old_miou": 0.433068
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.474325,
+      "old_miou": 0.433172
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.474065,
+      "old_miou": 0.434164
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.478155,
+      "old_miou": 0.437624
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.478646,
+      "old_miou": 0.438377
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.479795,
+      "old_miou": 0.439637
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.481136,
+      "old_miou": 0.441104
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.482624,
+      "old_miou": 0.441842
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.483043,
+      "old_miou": 0.442044
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 27,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.4418
+    },
+    "started_at": "2026-08-31T02:57:17.557921+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-01T17:57:46.740874+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.483043,
+   "new_per_class_iou": {
+    "1": 0.488542,
+    "10": 0.949837,
+    "11": 0.698255,
+    "12": 0.568864,
+    "13": 0.338571,
+    "14": 0.769829,
+    "15": 0.640212,
+    "16": 0.362723,
+    "17": 0.776053,
+    "18": 0.873057,
+    "19": 0.501151,
+    "2": 0.447588,
+    "20": 0.455533,
+    "21": 0.731433,
+    "22": 0.504304,
+    "23": 0.6395,
+    "24": 0.113925,
+    "25": 0.140284,
+    "26": 0.263902,
+    "27": 0.196562,
+    "3": 0.326785,
+    "4": 0.236514,
+    "5": 0.499588,
+    "6": 0.412731,
+    "7": 0.65674,
+    "8": 0.207849,
+    "9": 0.241828
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.442044,
+   "old_per_class_iou": {
+    "1": 0.484141,
+    "10": 0.884821,
+    "11": 0.655276,
+    "12": 0.542938,
+    "13": 0.318487,
+    "14": 0.707883,
+    "15": 0.584839,
+    "16": 0.3537,
+    "17": 0.612803,
+    "18": 0.751807,
+    "19": 0.438272,
+    "2": 0.410964,
+    "20": 0.436353,
+    "21": 0.639259,
+    "22": 0.497664,
+    "23": 0.636314,
+    "24": 0.102382,
+    "25": 0.090432,
+    "26": 0.243102,
+    "27": 0.141831,
+    "3": 0.308281,
+    "4": 0.220397,
+    "5": 0.467613,
+    "6": 0.404296,
+    "7": 0.575488,
+    "8": 0.184924,
+    "9": 0.24091
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.442,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 2,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.442,
+   "training_log_json": {
+    "sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+    "size": 316190
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 208039104,
+    "confusion_matrix_sha256": "38c5af3a090eda95c801bddb725b24838c335b38159c3c2b510f547a6cdbfedd",
+    "target0_share": 0.103804,
+    "target_row_sums": [
+     21595347,
+     24899381,
+     16151711,
+     29365015,
+     11351629,
+     12182423,
+     10674164,
+     8613833,
+     1114441,
+     8559683,
+     19420501,
+     6315120,
+     4709657,
+     1469782,
+     1879648,
+     8262456,
+     2348977,
+     1009152,
+     987784,
+     663007,
+     619268,
+     343074,
+     4407321,
+     98293,
+     1705568,
+     3115547,
+     5731092,
+     445230
+    ],
+    "target_row_sums_sha256": "81e76123635e7bb24ecd037f3f0f49862072d622881d52229af212df6330c8fc"
+   }
+  },
+  {
+   "backbone": "croma",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "1fc457d6c11aa30f72fe23567463f3a307a8f5298bf023b42dec8929fd504b9c",
+    "size": 834654805
+   },
+   "cell": "croma_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r3",
+   "delta": 0.044372,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 3680.2,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 23,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.319086,
+      "old_miou": 0.29429
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.392486,
+      "old_miou": 0.362326
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.423449,
+      "old_miou": 0.387988
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.442439,
+      "old_miou": 0.404845
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.453018,
+      "old_miou": 0.414808
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.456894,
+      "old_miou": 0.418523
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.467575,
+      "old_miou": 0.426852
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.47316,
+      "old_miou": 0.433487
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.474848,
+      "old_miou": 0.436497
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.484382,
+      "old_miou": 0.442971
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.487955,
+      "old_miou": 0.445752
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.494016,
+      "old_miou": 0.452042
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.498228,
+      "old_miou": 0.455701
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.500539,
+      "old_miou": 0.457607
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.502351,
+      "old_miou": 0.460016
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.503335,
+      "old_miou": 0.462004
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.506423,
+      "old_miou": 0.463439
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.511159,
+      "old_miou": 0.467599
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.511319,
+      "old_miou": 0.468283
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.513725,
+      "old_miou": 0.470426
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.514692,
+      "old_miou": 0.470555
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.515724,
+      "old_miou": 0.471704
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.516372,
+      "old_miou": 0.472
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 29,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.472
+    },
+    "started_at": "2026-09-08T16:18:19.563069+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-10T07:26:07.845636+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.516372,
+   "new_per_class_iou": {
+    "1": 0.677334,
+    "10": 0.949259,
+    "11": 0.697944,
+    "12": 0.567318,
+    "13": 0.3385,
+    "14": 0.766563,
+    "15": 0.639998,
+    "16": 0.362046,
+    "17": 0.775687,
+    "18": 0.875458,
+    "19": 0.506606,
+    "2": 0.639772,
+    "20": 0.459879,
+    "21": 0.73714,
+    "22": 0.507292,
+    "23": 0.660064,
+    "24": 0.120451,
+    "25": 0.146006,
+    "26": 0.264424,
+    "27": 0.197853,
+    "3": 0.573128,
+    "4": 0.46055,
+    "5": 0.514048,
+    "6": 0.407138,
+    "7": 0.657074,
+    "8": 0.201846,
+    "9": 0.238672
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.472,
+   "old_per_class_iou": {
+    "1": 0.658767,
+    "10": 0.884126,
+    "11": 0.655101,
+    "12": 0.540545,
+    "13": 0.319503,
+    "14": 0.704017,
+    "15": 0.583716,
+    "16": 0.353391,
+    "17": 0.605231,
+    "18": 0.769199,
+    "19": 0.442002,
+    "2": 0.577868,
+    "20": 0.441626,
+    "21": 0.641691,
+    "22": 0.500515,
+    "23": 0.657011,
+    "24": 0.106988,
+    "25": 0.09252,
+    "26": 0.242857,
+    "27": 0.140537,
+    "3": 0.537782,
+    "4": 0.414745,
+    "5": 0.481756,
+    "6": 0.399262,
+    "7": 0.574916,
+    "8": 0.180637,
+    "9": 0.237698
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.472,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 3,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.472,
+   "training_log_json": {
+    "sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+    "size": 342710
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 208039104,
+    "confusion_matrix_sha256": "afa3b23f2d22d7624018852d306d03b099061fdf8bb1a79928750062940b4fd3",
+    "target0_share": 0.103804,
+    "target_row_sums": [
+     21595347,
+     40146789,
+     20596999,
+     12310601,
+     8713347,
+     12182423,
+     10674164,
+     8613833,
+     1114441,
+     8559683,
+     19420501,
+     6315120,
+     4709657,
+     1469782,
+     1879648,
+     8262456,
+     2348977,
+     1009152,
+     987784,
+     663007,
+     619268,
+     343074,
+     4407321,
+     98293,
+     1705568,
+     3115547,
+     5731092,
+     445230
+    ],
+    "target_row_sums_sha256": "31ab0232c322aa3025a0ba22a5a870b821f189a767f746ef1664d245c9139495"
+   }
+  },
+  {
+   "backbone": "croma",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "689d0e8577436f4220628cc729982e0bd7165983d2894ef35f0ebc78cdf1ffc6",
+    "size": 834654805
+   },
+   "cell": "croma_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/croma_r4",
+   "delta": 0.044065,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 3129.9,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.317766,
+      "old_miou": 0.293195
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.396632,
+      "old_miou": 0.36567
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.415112,
+      "old_miou": 0.379548
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.438496,
+      "old_miou": 0.401145
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.457,
+      "old_miou": 0.418672
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.471826,
+      "old_miou": 0.432671
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.478096,
+      "old_miou": 0.439072
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.484781,
+      "old_miou": 0.443286
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.491334,
+      "old_miou": 0.449177
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.494473,
+      "old_miou": 0.452422
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.498305,
+      "old_miou": 0.455211
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.499034,
+      "old_miou": 0.457227
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.501813,
+      "old_miou": 0.460984
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.50621,
+      "old_miou": 0.462154
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.508933,
+      "old_miou": 0.465856
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.51114,
+      "old_miou": 0.468065
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.513667,
+      "old_miou": 0.470377
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.514991,
+      "old_miou": 0.471409
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.515635,
+      "old_miou": 0.47157
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 29,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4716
+    },
+    "started_at": "2026-09-08T16:18:18.843478+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-10T02:49:25.943711+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.515635,
+   "new_per_class_iou": {
+    "1": 0.674403,
+    "10": 0.948517,
+    "11": 0.701481,
+    "12": 0.571314,
+    "13": 0.343976,
+    "14": 0.772383,
+    "15": 0.637402,
+    "16": 0.361427,
+    "17": 0.773651,
+    "18": 0.871258,
+    "19": 0.503356,
+    "2": 0.638746,
+    "20": 0.461321,
+    "21": 0.727773,
+    "22": 0.506736,
+    "23": 0.666366,
+    "24": 0.120253,
+    "25": 0.144639,
+    "26": 0.264052,
+    "27": 0.191647,
+    "3": 0.567879,
+    "4": 0.457698,
+    "5": 0.513334,
+    "6": 0.404774,
+    "7": 0.655466,
+    "8": 0.204843,
+    "9": 0.237442
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.47157,
+   "old_per_class_iou": {
+    "1": 0.655765,
+    "10": 0.883597,
+    "11": 0.658493,
+    "12": 0.543965,
+    "13": 0.324687,
+    "14": 0.710437,
+    "15": 0.581967,
+    "16": 0.352284,
+    "17": 0.604201,
+    "18": 0.756134,
+    "19": 0.441829,
+    "2": 0.577848,
+    "20": 0.44212,
+    "21": 0.636011,
+    "22": 0.500046,
+    "23": 0.664741,
+    "24": 0.106672,
+    "25": 0.091058,
+    "26": 0.24485,
+    "27": 0.136776,
+    "3": 0.533099,
+    "4": 0.412463,
+    "5": 0.48149,
+    "6": 0.396116,
+    "7": 0.575652,
+    "8": 0.183461,
+    "9": 0.236629
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4716,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 4,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4716,
+   "training_log_json": {
+    "sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+    "size": 291096
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 208039104,
+    "confusion_matrix_sha256": "db110de6bc8dd483ea3bac7900809550f6b0c744ae4af75912ae6ca4a210b699",
+    "target0_share": 0.103804,
+    "target_row_sums": [
+     21595347,
+     40146789,
+     20596999,
+     12310601,
+     8713347,
+     12182423,
+     10674164,
+     8613833,
+     1114441,
+     8559683,
+     19420501,
+     6315120,
+     4709657,
+     1469782,
+     1879648,
+     8262456,
+     2348977,
+     1009152,
+     987784,
+     663007,
+     619268,
+     343074,
+     4407321,
+     98293,
+     1705568,
+     3115547,
+     5731092,
+     445230
+    ],
+    "target_row_sums_sha256": "31ab0232c322aa3025a0ba22a5a870b821f189a767f746ef1664d245c9139495"
+   }
+  },
+  {
+   "backbone": "prithvi300m4f",
+   "best_epoch": 30,
+   "best_model_pt": {
+    "sha256": "5da3a0f9cefd63cf2cfe4facb5c9021a9f6a71cf7c066ab5858f61a54b2694ab",
+    "size": 1370848619
+   },
+   "cell": "prithvi300m4f_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r1",
+   "delta": 0.041267,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 287.4,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 21,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.410745,
+      "old_miou": 0.383804
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.453684,
+      "old_miou": 0.421941
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.485364,
+      "old_miou": 0.450758
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.503229,
+      "old_miou": 0.466823
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.507621,
+      "old_miou": 0.475455
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.513964,
+      "old_miou": 0.478027
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.526583,
+      "old_miou": 0.487452
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.531018,
+      "old_miou": 0.491309
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.537811,
+      "old_miou": 0.498608
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.551934,
+      "old_miou": 0.510282
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.562766,
+      "old_miou": 0.522978
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.56451,
+      "old_miou": 0.523372
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.574297,
+      "old_miou": 0.532128
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.573876,
+      "old_miou": 0.532643
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.576242,
+      "old_miou": 0.534031
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.580038,
+      "old_miou": 0.538469
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.581148,
+      "old_miou": 0.53944
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.583057,
+      "old_miou": 0.541349
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.583562,
+      "old_miou": 0.541427
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.584114,
+      "old_miou": 0.542564
+     },
+     {
+      "epoch": 30,
+      "new_miou": 0.584294,
+      "old_miou": 0.543026
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 27,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.5426
+    },
+    "started_at": "2026-09-07T20:20:27.361840+00:00",
+    "status": "stopped",
+    "updated_at": "2026-09-08T01:51:09.646827+00:00",
+    "v2_best_recorded_epoch": 30
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.584294,
+   "new_per_class_iou": {
+    "1": 0.440644,
+    "10": 0.949273,
+    "11": 0.78662,
+    "12": 0.709056,
+    "13": 0.550756,
+    "14": 0.82036,
+    "15": 0.645179,
+    "16": 0.366966,
+    "17": 0.77952,
+    "18": 0.875108,
+    "19": 0.679393,
+    "2": 0.470163,
+    "20": 0.568992,
+    "21": 0.768137,
+    "22": 0.536582,
+    "3": 0.299081,
+    "4": 0.275116,
+    "5": 0.42494,
+    "6": 0.543663,
+    "7": 0.624205,
+    "8": 0.409019,
+    "9": 0.331685
+   },
+   "num_classes": 23,
+   "old_miou_recomputed": 0.543026,
+   "old_per_class_iou": {
+    "1": 0.439629,
+    "10": 0.94517,
+    "11": 0.699721,
+    "12": 0.628093,
+    "13": 0.490181,
+    "14": 0.751291,
+    "15": 0.548937,
+    "16": 0.353721,
+    "17": 0.599596,
+    "18": 0.783727,
+    "19": 0.586835,
+    "2": 0.469128,
+    "20": 0.535612,
+    "21": 0.703277,
+    "22": 0.534813,
+    "3": 0.297717,
+    "4": 0.274376,
+    "5": 0.421631,
+    "6": 0.54238,
+    "7": 0.615601,
+    "8": 0.397985,
+    "9": 0.327156
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 30,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.543,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 1,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.543,
+   "training_log_json": {
+    "sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+    "size": 225349
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "a1a79de87782a0510827fdb54981ea4c175a648761d927bf16a02ec7e90a9199",
+    "target0_share": 0.031149,
+    "target_row_sums": [
+     6322094,
+     25609146,
+     16665757,
+     23784486,
+     12320778,
+     7853831,
+     16670564,
+     12727240,
+     21629075,
+     7867392,
+     20243486,
+     5893477,
+     4337399,
+     1334169,
+     1846190,
+     7571490,
+     2278863,
+     974585,
+     994424,
+     614623,
+     588163,
+     332075,
+     4503893
+    ],
+    "target_row_sums_sha256": "04bf00a3cdbdf95d13459a9b51993b152787edeafb02939d18b154376945e470"
+   }
+  },
+  {
+   "backbone": "prithvi300m4f",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "9f013d26fb3ba8f6afb510e0f1ca7cadf988b29201cab45a065cb35ccfd972a9",
+    "size": 1370853931
+   },
+   "cell": "prithvi300m4f_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r2",
+   "delta": 0.044614,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 295.2,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 20,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.337346,
+      "old_miou": 0.310231
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.393881,
+      "old_miou": 0.360296
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.415173,
+      "old_miou": 0.380862
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.440797,
+      "old_miou": 0.402672
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.441814,
+      "old_miou": 0.409108
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.463061,
+      "old_miou": 0.423001
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.463788,
+      "old_miou": 0.424635
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.470936,
+      "old_miou": 0.431864
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.476955,
+      "old_miou": 0.43602
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.48784,
+      "old_miou": 0.44655
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.491822,
+      "old_miou": 0.45057
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.496064,
+      "old_miou": 0.453871
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.505523,
+      "old_miou": 0.461545
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.505743,
+      "old_miou": 0.461838
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.506466,
+      "old_miou": 0.464717
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.510656,
+      "old_miou": 0.467149
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.512696,
+      "old_miou": 0.468645
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.512704,
+      "old_miou": 0.468953
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.514689,
+      "old_miou": 0.469513
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.515367,
+      "old_miou": 0.470753
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4699
+    },
+    "started_at": "2026-09-07T20:20:25.468677+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-08T01:51:10.879685+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.515367,
+   "new_per_class_iou": {
+    "1": 0.485431,
+    "10": 0.943131,
+    "11": 0.786812,
+    "12": 0.70568,
+    "13": 0.541515,
+    "14": 0.826881,
+    "15": 0.664988,
+    "16": 0.395705,
+    "17": 0.79325,
+    "18": 0.87345,
+    "19": 0.655716,
+    "2": 0.479125,
+    "20": 0.571208,
+    "21": 0.764522,
+    "22": 0.543407,
+    "23": 0.684311,
+    "24": 0.097341,
+    "25": 0.132779,
+    "26": 0.240475,
+    "27": 0.197107,
+    "3": 0.30654,
+    "4": 0.256075,
+    "5": 0.469306,
+    "6": 0.413992,
+    "7": 0.607271,
+    "8": 0.261208,
+    "9": 0.217683
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.470753,
+   "old_per_class_iou": {
+    "1": 0.478614,
+    "10": 0.874881,
+    "11": 0.711032,
+    "12": 0.652838,
+    "13": 0.48977,
+    "14": 0.761204,
+    "15": 0.600948,
+    "16": 0.38766,
+    "17": 0.607768,
+    "18": 0.774962,
+    "19": 0.591343,
+    "2": 0.439735,
+    "20": 0.547152,
+    "21": 0.699529,
+    "22": 0.534331,
+    "23": 0.673995,
+    "24": 0.088442,
+    "25": 0.095578,
+    "26": 0.212809,
+    "27": 0.134742,
+    "3": 0.287355,
+    "4": 0.238549,
+    "5": 0.437076,
+    "6": 0.402712,
+    "7": 0.534915,
+    "8": 0.236231,
+    "9": 0.216163
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4708,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 2,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4708,
+   "training_log_json": {
+    "sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+    "size": 302990
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "fccfcb4f03df6a41401e649d69e16b4e31abfc1d05edb1b58dd4b2b52ed03ce3",
+    "target0_share": 0.105948,
+    "target_row_sums": [
+     21503563,
+     24115472,
+     15677046,
+     28600152,
+     11042620,
+     11813996,
+     10345080,
+     8384591,
+     1091807,
+     8407875,
+     18783666,
+     6208961,
+     4629500,
+     1439374,
+     1869003,
+     8052881,
+     2285090,
+     983458,
+     995317,
+     661631,
+     604418,
+     332810,
+     4270064,
+     93833,
+     1670848,
+     3053641,
+     5611685,
+     434818
+    ],
+    "target_row_sums_sha256": "cdb9a71f900d06d45f0e1671e5d493305db532ed9ced4a985e2d8994b9f4fc60"
+   }
+  },
+  {
+   "backbone": "prithvi300m4f",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "ec4530475504696497c9860a987a3fabc2c4f31efcdeae162fc2111790d7581a",
+    "size": 1370854334
+   },
+   "cell": "prithvi300m4f_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r3",
+   "delta": 0.047227,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 301.1,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 21,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.351025,
+      "old_miou": 0.323103
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.406892,
+      "old_miou": 0.373158
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.434667,
+      "old_miou": 0.398552
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.464634,
+      "old_miou": 0.423029
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.461948,
+      "old_miou": 0.427566
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.48286,
+      "old_miou": 0.440466
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.484211,
+      "old_miou": 0.441996
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.493232,
+      "old_miou": 0.452166
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.495471,
+      "old_miou": 0.452462
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.51104,
+      "old_miou": 0.466398
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.516594,
+      "old_miou": 0.473217
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.516451,
+      "old_miou": 0.473732
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.52501,
+      "old_miou": 0.477837
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.526389,
+      "old_miou": 0.479994
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.527035,
+      "old_miou": 0.481631
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.531649,
+      "old_miou": 0.486624
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.534523,
+      "old_miou": 0.488912
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.537459,
+      "old_miou": 0.491548
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.537872,
+      "old_miou": 0.491991
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.539702,
+      "old_miou": 0.492501
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.540133,
+      "old_miou": 0.492907
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4929
+    },
+    "started_at": "2026-09-08T17:00:42.308641+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-08T22:35:59.639987+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.540133,
+   "new_per_class_iou": {
+    "1": 0.664119,
+    "10": 0.942572,
+    "11": 0.783241,
+    "12": 0.704329,
+    "13": 0.537946,
+    "14": 0.826236,
+    "15": 0.666886,
+    "16": 0.396823,
+    "17": 0.793256,
+    "18": 0.874627,
+    "19": 0.653911,
+    "2": 0.625197,
+    "20": 0.564462,
+    "21": 0.766537,
+    "22": 0.54492,
+    "23": 0.694768,
+    "24": 0.101099,
+    "25": 0.13861,
+    "26": 0.245783,
+    "27": 0.199273,
+    "3": 0.468886,
+    "4": 0.428909,
+    "5": 0.480454,
+    "6": 0.402326,
+    "7": 0.609198,
+    "8": 0.253901,
+    "9": 0.215331
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.492907,
+   "old_per_class_iou": {
+    "1": 0.63522,
+    "10": 0.874083,
+    "11": 0.715881,
+    "12": 0.643928,
+    "13": 0.491223,
+    "14": 0.762462,
+    "15": 0.602352,
+    "16": 0.388084,
+    "17": 0.602757,
+    "18": 0.773216,
+    "19": 0.592922,
+    "2": 0.569089,
+    "20": 0.539911,
+    "21": 0.693088,
+    "22": 0.536451,
+    "23": 0.684069,
+    "24": 0.09153,
+    "25": 0.096698,
+    "26": 0.218589,
+    "27": 0.139828,
+    "3": 0.43424,
+    "4": 0.400474,
+    "5": 0.450599,
+    "6": 0.391842,
+    "7": 0.537419,
+    "8": 0.228671,
+    "9": 0.213854
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4929,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 3,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4929,
+   "training_log_json": {
+    "sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+    "size": 316080
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "cd532c1e0bf87542dff38c26688909a452286734c11d5bba60c4e8dd72893ce1",
+    "target0_share": 0.105948,
+    "target_row_sums": [
+     21503563,
+     35221015,
+     19310008,
+     17009914,
+     7894353,
+     11813996,
+     10345080,
+     8384591,
+     1091807,
+     8407875,
+     18783666,
+     6208961,
+     4629500,
+     1439374,
+     1869003,
+     8052881,
+     2285090,
+     983458,
+     995317,
+     661631,
+     604418,
+     332810,
+     4270064,
+     93833,
+     1670848,
+     3053641,
+     5611685,
+     434818
+    ],
+    "target_row_sums_sha256": "760ffbfed1955d1b2660d382f45da583b68f4314b1ac8e2a65b97adfd5160a37"
+   }
+  },
+  {
+   "backbone": "prithvi300m4f",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "b8824fcb43b940bd77fba8cd1e1f9ddd40c05938f9cb4213f52ceb5626c1289f",
+    "size": 1370854334
+   },
+   "cell": "prithvi300m4f_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m4f_r4",
+   "delta": 0.046332,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 307.8,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 21,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.350588,
+      "old_miou": 0.322602
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.399851,
+      "old_miou": 0.366966
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.430536,
+      "old_miou": 0.394611
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.462359,
+      "old_miou": 0.421948
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.458997,
+      "old_miou": 0.423833
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.482199,
+      "old_miou": 0.440688
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.484693,
+      "old_miou": 0.442954
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.488437,
+      "old_miou": 0.449212
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.495902,
+      "old_miou": 0.453258
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.506655,
+      "old_miou": 0.462986
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.513394,
+      "old_miou": 0.469933
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.515833,
+      "old_miou": 0.473412
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.520793,
+      "old_miou": 0.476931
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.524814,
+      "old_miou": 0.478854
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.524628,
+      "old_miou": 0.479806
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.528405,
+      "old_miou": 0.48319
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.529836,
+      "old_miou": 0.483494
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.531513,
+      "old_miou": 0.485748
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.535836,
+      "old_miou": 0.489693
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.537294,
+      "old_miou": 0.489885
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.537565,
+      "old_miou": 0.491232
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.491
+    },
+    "started_at": "2026-09-08T22:40:27.471241+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-09T04:09:08.989403+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.537565,
+   "new_per_class_iou": {
+    "1": 0.661448,
+    "10": 0.942072,
+    "11": 0.78265,
+    "12": 0.701763,
+    "13": 0.53457,
+    "14": 0.822403,
+    "15": 0.664225,
+    "16": 0.393665,
+    "17": 0.787703,
+    "18": 0.871899,
+    "19": 0.653036,
+    "2": 0.620836,
+    "20": 0.560163,
+    "21": 0.760548,
+    "22": 0.543933,
+    "23": 0.689313,
+    "24": 0.101078,
+    "25": 0.138986,
+    "26": 0.244831,
+    "27": 0.195391,
+    "3": 0.465339,
+    "4": 0.424645,
+    "5": 0.479223,
+    "6": 0.401974,
+    "7": 0.605758,
+    "8": 0.250806,
+    "9": 0.215985
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.491232,
+   "old_per_class_iou": {
+    "1": 0.633562,
+    "10": 0.873883,
+    "11": 0.708006,
+    "12": 0.659148,
+    "13": 0.496275,
+    "14": 0.758445,
+    "15": 0.597895,
+    "16": 0.383686,
+    "17": 0.602182,
+    "18": 0.772877,
+    "19": 0.586777,
+    "2": 0.56402,
+    "20": 0.53863,
+    "21": 0.693453,
+    "22": 0.535016,
+    "23": 0.678016,
+    "24": 0.091125,
+    "25": 0.0975,
+    "26": 0.217287,
+    "27": 0.133931,
+    "3": 0.431867,
+    "4": 0.394569,
+    "5": 0.447849,
+    "6": 0.390875,
+    "7": 0.535338,
+    "8": 0.226427,
+    "9": 0.214638
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4912,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 4,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4912,
+   "training_log_json": {
+    "sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+    "size": 317199
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "9eda6a95162964c5790c66eaad986647ea2193d1fb95060d8d35d088d7f72f33",
+    "target0_share": 0.105948,
+    "target_row_sums": [
+     21503563,
+     35221015,
+     19310008,
+     17009914,
+     7894353,
+     11813996,
+     10345080,
+     8384591,
+     1091807,
+     8407875,
+     18783666,
+     6208961,
+     4629500,
+     1439374,
+     1869003,
+     8052881,
+     2285090,
+     983458,
+     995317,
+     661631,
+     604418,
+     332810,
+     4270064,
+     93833,
+     1670848,
+     3053641,
+     5611685,
+     434818
+    ],
+    "target_row_sums_sha256": "760ffbfed1955d1b2660d382f45da583b68f4314b1ac8e2a65b97adfd5160a37"
+   }
+  },
+  {
+   "backbone": "prithvi300m",
+   "best_epoch": 30,
+   "best_model_pt": {
+    "sha256": "d3823ceca5b727eacad3f06b2218ba537b0846172d04ac296954313aee012ad7",
+    "size": 1285888363
+   },
+   "cell": "prithvi300m_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r1",
+   "delta": 0.039636,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 132.7,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 23,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.402208,
+      "old_miou": 0.376347
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.444997,
+      "old_miou": 0.415205
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.478503,
+      "old_miou": 0.442933
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.488141,
+      "old_miou": 0.453537
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.491683,
+      "old_miou": 0.456515
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.501872,
+      "old_miou": 0.465734
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.508612,
+      "old_miou": 0.470382
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.517038,
+      "old_miou": 0.478205
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.516283,
+      "old_miou": 0.47966
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.523784,
+      "old_miou": 0.485249
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.528248,
+      "old_miou": 0.488945
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.530581,
+      "old_miou": 0.489152
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.528234,
+      "old_miou": 0.489577
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.538747,
+      "old_miou": 0.498533
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.538757,
+      "old_miou": 0.499688
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.544867,
+      "old_miou": 0.505421
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.547747,
+      "old_miou": 0.507952
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.551062,
+      "old_miou": 0.511131
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.551471,
+      "old_miou": 0.512073
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.554486,
+      "old_miou": 0.513482
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.55518,
+      "old_miou": 0.514801
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.556092,
+      "old_miou": 0.51577
+     },
+     {
+      "epoch": 30,
+      "new_miou": 0.555717,
+      "old_miou": 0.516082
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 28,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.5158
+    },
+    "started_at": "2026-08-30T06:13:13.527808+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-30T10:20:54.779675+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.555717,
+   "new_per_class_iou": {
+    "1": 0.429196,
+    "10": 0.946025,
+    "11": 0.736519,
+    "12": 0.656459,
+    "13": 0.482179,
+    "14": 0.765358,
+    "15": 0.616314,
+    "16": 0.33521,
+    "17": 0.75709,
+    "18": 0.872651,
+    "19": 0.590427,
+    "2": 0.454679,
+    "20": 0.496605,
+    "21": 0.728912,
+    "22": 0.515135,
+    "3": 0.289697,
+    "4": 0.267132,
+    "5": 0.416498,
+    "6": 0.533785,
+    "7": 0.61684,
+    "8": 0.397973,
+    "9": 0.321097
+   },
+   "num_classes": 23,
+   "old_miou_recomputed": 0.516082,
+   "old_per_class_iou": {
+    "1": 0.428493,
+    "10": 0.941824,
+    "11": 0.65496,
+    "12": 0.591672,
+    "13": 0.425082,
+    "14": 0.708467,
+    "15": 0.524768,
+    "16": 0.320903,
+    "17": 0.589747,
+    "18": 0.781828,
+    "19": 0.502388,
+    "2": 0.453475,
+    "20": 0.465462,
+    "21": 0.639152,
+    "22": 0.513291,
+    "3": 0.288473,
+    "4": 0.266715,
+    "5": 0.41268,
+    "6": 0.532624,
+    "7": 0.606207,
+    "8": 0.388615,
+    "9": 0.316973
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 30,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5161,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 1,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5161,
+   "training_log_json": {
+    "sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+    "size": 244214
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "046be8b4d73b45d26cc49dd0d50bfbdab500405c1fc32639455e8a2a8fcb5ae5",
+    "target0_share": 0.031149,
+    "target_row_sums": [
+     6322094,
+     25609146,
+     16665757,
+     23784486,
+     12320778,
+     7853831,
+     16670564,
+     12727240,
+     21629075,
+     7867392,
+     20243486,
+     5893477,
+     4337399,
+     1334169,
+     1846190,
+     7571490,
+     2278863,
+     974585,
+     994424,
+     614623,
+     588163,
+     332075,
+     4503893
+    ],
+    "target_row_sums_sha256": "04bf00a3cdbdf95d13459a9b51993b152787edeafb02939d18b154376945e470"
+   }
+  },
+  {
+   "backbone": "prithvi300m",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "a27dadd9caf1c9ccfba6ecbd76ac7815fcb7236978e9df807e1d1bf7a498cda0",
+    "size": 1285893675
+   },
+   "cell": "prithvi300m_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r2",
+   "delta": 0.041385,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 136.8,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.338855,
+      "old_miou": 0.309932
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.387585,
+      "old_miou": 0.356838
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.413995,
+      "old_miou": 0.379919
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.431582,
+      "old_miou": 0.396524
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.438298,
+      "old_miou": 0.402895
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.452438,
+      "old_miou": 0.415696
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.456346,
+      "old_miou": 0.418704
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.457418,
+      "old_miou": 0.419447
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.468394,
+      "old_miou": 0.430077
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.473056,
+      "old_miou": 0.434951
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.476024,
+      "old_miou": 0.436448
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.479034,
+      "old_miou": 0.438416
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.479753,
+      "old_miou": 0.441416
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.483572,
+      "old_miou": 0.443199
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.48624,
+      "old_miou": 0.44518
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.487051,
+      "old_miou": 0.446954
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.488545,
+      "old_miou": 0.447989
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.490343,
+      "old_miou": 0.448762
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.491145,
+      "old_miou": 0.44976
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4498
+    },
+    "started_at": "2026-08-30T21:49:48.005191+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-31T01:33:22.358274+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.491145,
+   "new_per_class_iou": {
+    "1": 0.475659,
+    "10": 0.941823,
+    "11": 0.737096,
+    "12": 0.658908,
+    "13": 0.4723,
+    "14": 0.761728,
+    "15": 0.638268,
+    "16": 0.371629,
+    "17": 0.770897,
+    "18": 0.87167,
+    "19": 0.548374,
+    "2": 0.460695,
+    "20": 0.50545,
+    "21": 0.727106,
+    "22": 0.526993,
+    "23": 0.686239,
+    "24": 0.094548,
+    "25": 0.128641,
+    "26": 0.23297,
+    "27": 0.188382,
+    "3": 0.301828,
+    "4": 0.252029,
+    "5": 0.462627,
+    "6": 0.403835,
+    "7": 0.605707,
+    "8": 0.22162,
+    "9": 0.213888
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.44976,
+   "old_per_class_iou": {
+    "1": 0.470112,
+    "10": 0.873243,
+    "11": 0.666027,
+    "12": 0.609807,
+    "13": 0.44033,
+    "14": 0.714008,
+    "15": 0.577372,
+    "16": 0.36064,
+    "17": 0.60723,
+    "18": 0.781732,
+    "19": 0.491459,
+    "2": 0.423359,
+    "20": 0.48199,
+    "21": 0.645309,
+    "22": 0.518952,
+    "23": 0.681278,
+    "24": 0.085256,
+    "25": 0.092191,
+    "26": 0.206487,
+    "27": 0.131225,
+    "3": 0.284188,
+    "4": 0.233739,
+    "5": 0.430876,
+    "6": 0.393766,
+    "7": 0.53242,
+    "8": 0.197885,
+    "9": 0.212632
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4498,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 2,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4498,
+   "training_log_json": {
+    "sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+    "size": 290509
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "48a79259ae1b73e7fdb6d5ed49be1adeebcd846c6ea8c0b391a097abc1d29b50",
+    "target0_share": 0.105948,
+    "target_row_sums": [
+     21503563,
+     24115472,
+     15677046,
+     28600152,
+     11042620,
+     11813996,
+     10345080,
+     8384591,
+     1091807,
+     8407875,
+     18783666,
+     6208961,
+     4629500,
+     1439374,
+     1869003,
+     8052881,
+     2285090,
+     983458,
+     995317,
+     661631,
+     604418,
+     332810,
+     4270064,
+     93833,
+     1670848,
+     3053641,
+     5611685,
+     434818
+    ],
+    "target_row_sums_sha256": "cdb9a71f900d06d45f0e1671e5d493305db532ed9ced4a985e2d8994b9f4fc60"
+   }
+  },
+  {
+   "backbone": "prithvi300m",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "e42c0b15f633f3adf3c68bfa5fee1292246aa5e3f333c1f270c146fc62701df7",
+    "size": 1285893675
+   },
+   "cell": "prithvi300m_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r3",
+   "delta": 0.044196,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 142.8,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 20,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.349302,
+      "old_miou": 0.31938
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.405754,
+      "old_miou": 0.3736
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.431016,
+      "old_miou": 0.395971
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.447621,
+      "old_miou": 0.41086
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.456499,
+      "old_miou": 0.419271
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.471303,
+      "old_miou": 0.43185
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.47279,
+      "old_miou": 0.434969
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.48009,
+      "old_miou": 0.441019
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.489821,
+      "old_miou": 0.448968
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.494489,
+      "old_miou": 0.454311
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.497785,
+      "old_miou": 0.455619
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.501642,
+      "old_miou": 0.458624
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.503293,
+      "old_miou": 0.461019
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.506348,
+      "old_miou": 0.463691
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.508305,
+      "old_miou": 0.465168
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.508823,
+      "old_miou": 0.465814
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.509622,
+      "old_miou": 0.466078
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.510728,
+      "old_miou": 0.467692
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.512625,
+      "old_miou": 0.468465
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.514051,
+      "old_miou": 0.469855
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4694
+    },
+    "started_at": "2026-08-31T20:49:04.960465+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-01T00:46:01.127458+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.514051,
+   "new_per_class_iou": {
+    "1": 0.680459,
+    "10": 0.940755,
+    "11": 0.735722,
+    "12": 0.658909,
+    "13": 0.474443,
+    "14": 0.758861,
+    "15": 0.641135,
+    "16": 0.370742,
+    "17": 0.765071,
+    "18": 0.874565,
+    "19": 0.553504,
+    "2": 0.631827,
+    "20": 0.494417,
+    "21": 0.733473,
+    "22": 0.528004,
+    "23": 0.682371,
+    "24": 0.099915,
+    "25": 0.134625,
+    "26": 0.239425,
+    "27": 0.188314,
+    "3": 0.467924,
+    "4": 0.32632,
+    "5": 0.475584,
+    "6": 0.395403,
+    "7": 0.602674,
+    "8": 0.214978,
+    "9": 0.209962
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.469855,
+   "old_per_class_iou": {
+    "1": 0.657743,
+    "10": 0.871905,
+    "11": 0.656405,
+    "12": 0.614816,
+    "13": 0.440424,
+    "14": 0.706061,
+    "15": 0.579864,
+    "16": 0.358877,
+    "17": 0.59442,
+    "18": 0.785299,
+    "19": 0.495257,
+    "2": 0.570814,
+    "20": 0.474499,
+    "21": 0.647261,
+    "22": 0.519921,
+    "23": 0.680693,
+    "24": 0.087977,
+    "25": 0.094749,
+    "26": 0.212216,
+    "27": 0.137713,
+    "3": 0.44438,
+    "4": 0.294637,
+    "5": 0.444962,
+    "6": 0.384626,
+    "7": 0.528302,
+    "8": 0.193956,
+    "9": 0.208306
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4699,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 3,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4699,
+   "training_log_json": {
+    "sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+    "size": 303119
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "fc66cb3834a9f7d60131747dd5f7b5f6a91652d9c7e61fb608db349b5498efb6",
+    "target0_share": 0.105948,
+    "target_row_sums": [
+     21503563,
+     35567797,
+     20195592,
+     16682888,
+     6989013,
+     11813996,
+     10345080,
+     8384591,
+     1091807,
+     8407875,
+     18783666,
+     6208961,
+     4629500,
+     1439374,
+     1869003,
+     8052881,
+     2285090,
+     983458,
+     995317,
+     661631,
+     604418,
+     332810,
+     4270064,
+     93833,
+     1670848,
+     3053641,
+     5611685,
+     434818
+    ],
+    "target_row_sums_sha256": "210486482973eabc155371b2e0536ea4624526988e193bd34fda9230afd77658"
+   }
+  },
+  {
+   "backbone": "prithvi300m",
+   "best_epoch": 30,
+   "best_model_pt": {
+    "sha256": "ecd0b3724e1d009fb795467006197ba305d2f1455d9dcdc3c80a6a517dcaee84",
+    "size": 1285893675
+   },
+   "cell": "prithvi300m_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi300m_r4",
+   "delta": 0.043466,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 146.1,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 21,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.349456,
+      "old_miou": 0.319935
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.405079,
+      "old_miou": 0.372717
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.430515,
+      "old_miou": 0.395876
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.448901,
+      "old_miou": 0.412209
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.453878,
+      "old_miou": 0.417252
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.472209,
+      "old_miou": 0.432464
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.471599,
+      "old_miou": 0.434401
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.488875,
+      "old_miou": 0.44858
+     },
+     {
+      "epoch": 14,
+      "new_miou": 0.490877,
+      "old_miou": 0.449904
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.492755,
+      "old_miou": 0.453026
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.496329,
+      "old_miou": 0.454203
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.499862,
+      "old_miou": 0.45726
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.499284,
+      "old_miou": 0.457748
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.503551,
+      "old_miou": 0.461213
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.506937,
+      "old_miou": 0.463798
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.506753,
+      "old_miou": 0.463968
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.508041,
+      "old_miou": 0.464934
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.509838,
+      "old_miou": 0.466828
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.511628,
+      "old_miou": 0.467152
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.512102,
+      "old_miou": 0.46792
+     },
+     {
+      "epoch": 30,
+      "new_miou": 0.511472,
+      "old_miou": 0.468006
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 28,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.4679
+    },
+    "started_at": "2026-09-01T00:49:17.359127+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-01T04:48:40.544138+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.511472,
+   "new_per_class_iou": {
+    "1": 0.671057,
+    "10": 0.940563,
+    "11": 0.736566,
+    "12": 0.655705,
+    "13": 0.47139,
+    "14": 0.761472,
+    "15": 0.639919,
+    "16": 0.370383,
+    "17": 0.763458,
+    "18": 0.874023,
+    "19": 0.567356,
+    "2": 0.626966,
+    "20": 0.490684,
+    "21": 0.72454,
+    "22": 0.524409,
+    "23": 0.668508,
+    "24": 0.095813,
+    "25": 0.12872,
+    "26": 0.236857,
+    "27": 0.187904,
+    "3": 0.461979,
+    "4": 0.321511,
+    "5": 0.471522,
+    "6": 0.388202,
+    "7": 0.605425,
+    "8": 0.216567,
+    "9": 0.208258
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.468006,
+   "old_per_class_iou": {
+    "1": 0.649074,
+    "10": 0.872156,
+    "11": 0.674784,
+    "12": 0.603003,
+    "13": 0.432222,
+    "14": 0.713308,
+    "15": 0.580686,
+    "16": 0.360457,
+    "17": 0.593657,
+    "18": 0.788001,
+    "19": 0.509075,
+    "2": 0.56789,
+    "20": 0.471144,
+    "21": 0.64023,
+    "22": 0.515674,
+    "23": 0.668331,
+    "24": 0.08545,
+    "25": 0.091936,
+    "26": 0.20806,
+    "27": 0.130624,
+    "3": 0.436906,
+    "4": 0.290192,
+    "5": 0.442076,
+    "6": 0.379891,
+    "7": 0.530024,
+    "8": 0.193911,
+    "9": 0.207411
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 30,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.468,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 4,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.468,
+   "training_log_json": {
+    "sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+    "size": 317213
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 202963200,
+    "confusion_matrix_sha256": "28577cae8c12baaae95a8e58506459791a56910487e66036f1f9ebb4da776034",
+    "target0_share": 0.105948,
+    "target_row_sums": [
+     21503563,
+     35567797,
+     20195592,
+     16682888,
+     6989013,
+     11813996,
+     10345080,
+     8384591,
+     1091807,
+     8407875,
+     18783666,
+     6208961,
+     4629500,
+     1439374,
+     1869003,
+     8052881,
+     2285090,
+     983458,
+     995317,
+     661631,
+     604418,
+     332810,
+     4270064,
+     93833,
+     1670848,
+     3053641,
+     5611685,
+     434818
+    ],
+    "target_row_sums_sha256": "210486482973eabc155371b2e0536ea4624526988e193bd34fda9230afd77658"
+   }
+  },
+  {
+   "backbone": "prithvi600m",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "9115a3d411ecfd0babbaef9a6b7448ea3449ec68e97dbf0cd52abac415a63916",
+    "size": 2741613769
+   },
+   "cell": "prithvi600m_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r1",
+   "delta": 0.042418,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 641.6,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 20,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.438562,
+      "old_miou": 0.410576
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.461239,
+      "old_miou": 0.43092
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.506585,
+      "old_miou": 0.4715
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.508643,
+      "old_miou": 0.479674
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.526549,
+      "old_miou": 0.488863
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.535537,
+      "old_miou": 0.495687
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.539578,
+      "old_miou": 0.499056
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.544777,
+      "old_miou": 0.5025
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.546039,
+      "old_miou": 0.503825
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.562284,
+      "old_miou": 0.518928
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.566951,
+      "old_miou": 0.52351
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.570352,
+      "old_miou": 0.526768
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.572934,
+      "old_miou": 0.530045
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.580938,
+      "old_miou": 0.536955
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.581016,
+      "old_miou": 0.538971
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.581824,
+      "old_miou": 0.539274
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.5926,
+      "old_miou": 0.550225
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.594827,
+      "old_miou": 0.553243
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.595696,
+      "old_miou": 0.55366
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.598542,
+      "old_miou": 0.556124
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 30,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.5547
+    },
+    "started_at": "2026-08-29T20:59:55.634361+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-30T06:16:56.338045+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.598542,
+   "new_per_class_iou": {
+    "1": 0.443737,
+    "10": 0.955562,
+    "11": 0.80882,
+    "12": 0.733277,
+    "13": 0.566971,
+    "14": 0.833935,
+    "15": 0.666648,
+    "16": 0.373649,
+    "17": 0.805785,
+    "18": 0.879071,
+    "19": 0.683808,
+    "2": 0.472802,
+    "20": 0.619218,
+    "21": 0.768965,
+    "22": 0.555075,
+    "3": 0.304246,
+    "4": 0.282142,
+    "5": 0.431056,
+    "6": 0.549621,
+    "7": 0.638684,
+    "8": 0.424147,
+    "9": 0.370717
+   },
+   "num_classes": 23,
+   "old_miou_recomputed": 0.556124,
+   "old_per_class_iou": {
+    "1": 0.442443,
+    "10": 0.951403,
+    "11": 0.71685,
+    "12": 0.653007,
+    "13": 0.506414,
+    "14": 0.750873,
+    "15": 0.566278,
+    "16": 0.360492,
+    "17": 0.63011,
+    "18": 0.792787,
+    "19": 0.593029,
+    "2": 0.471684,
+    "20": 0.581713,
+    "21": 0.69617,
+    "22": 0.553142,
+    "3": 0.302949,
+    "4": 0.281345,
+    "5": 0.427395,
+    "6": 0.548092,
+    "7": 0.631967,
+    "8": 0.411629,
+    "9": 0.364962
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5561,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 1,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5561,
+   "training_log_json": {
+    "sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+    "size": 216006
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "14e7971a4b4ebd1db9f0e0cb72dbfd707751ed5d10d775510d1dd6741cd1da9b",
+    "target0_share": 0.031101,
+    "target_row_sums": [
+     6517615,
+     26443347,
+     17217125,
+     24555953,
+     12721273,
+     8117220,
+     17217149,
+     13161555,
+     22311604,
+     8111002,
+     20949238,
+     6069356,
+     4464637,
+     1372638,
+     1899136,
+     7810968,
+     2349438,
+     1004233,
+     1026278,
+     633063,
+     606698,
+     342603,
+     4661071
+    ],
+    "target_row_sums_sha256": "4887572deb7fcf9f15175bc57a300c096f267455d698f62fe011ea19db98d971"
+   }
+  },
+  {
+   "backbone": "prithvi600m",
+   "best_epoch": 24,
+   "best_model_pt": {
+    "sha256": "89d544c06fd353772722dec5600a4ba8696fd8971250f471b47f6b53828d1d46",
+    "size": 2741619081
+   },
+   "cell": "prithvi600m_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r2",
+   "delta": 0.043043,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 869.6,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 16,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.378413,
+      "old_miou": 0.347676
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.392992,
+      "old_miou": 0.363936
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.418335,
+      "old_miou": 0.384512
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.447338,
+      "old_miou": 0.410368
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.458495,
+      "old_miou": 0.426215
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.470448,
+      "old_miou": 0.431263
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.474357,
+      "old_miou": 0.434243
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.482894,
+      "old_miou": 0.441838
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.488914,
+      "old_miou": 0.448627
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.498284,
+      "old_miou": 0.456711
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.49796,
+      "old_miou": 0.457248
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.505832,
+      "old_miou": 0.462683
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.512045,
+      "old_miou": 0.468111
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.519744,
+      "old_miou": 0.473933
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.517702,
+      "old_miou": 0.474025
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.523062,
+      "old_miou": 0.48002
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 28,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4793
+    },
+    "started_at": "2026-08-30T15:50:14.355564+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-31T02:42:01.044518+00:00",
+    "v2_best_recorded_epoch": 24
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.523062,
+   "new_per_class_iou": {
+    "1": 0.483079,
+    "10": 0.950465,
+    "11": 0.800608,
+    "12": 0.711558,
+    "13": 0.553077,
+    "14": 0.836902,
+    "15": 0.675606,
+    "16": 0.399029,
+    "17": 0.789222,
+    "18": 0.879192,
+    "19": 0.654279,
+    "2": 0.487523,
+    "20": 0.588592,
+    "21": 0.769066,
+    "22": 0.557155,
+    "23": 0.66314,
+    "24": 0.10335,
+    "25": 0.140645,
+    "26": 0.263718,
+    "27": 0.201424,
+    "3": 0.32241,
+    "4": 0.258614,
+    "5": 0.479598,
+    "6": 0.424944,
+    "7": 0.623561,
+    "8": 0.259018,
+    "9": 0.246905
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.48002,
+   "old_per_class_iou": {
+    "1": 0.479394,
+    "10": 0.881131,
+    "11": 0.743218,
+    "12": 0.661301,
+    "13": 0.520072,
+    "14": 0.779572,
+    "15": 0.613384,
+    "16": 0.389389,
+    "17": 0.617924,
+    "18": 0.80565,
+    "19": 0.590717,
+    "2": 0.451243,
+    "20": 0.545274,
+    "21": 0.702401,
+    "22": 0.544855,
+    "23": 0.642935,
+    "24": 0.088253,
+    "25": 0.105875,
+    "26": 0.217381,
+    "27": 0.154164,
+    "3": 0.301829,
+    "4": 0.240543,
+    "5": 0.450348,
+    "6": 0.412287,
+    "7": 0.550472,
+    "8": 0.227744,
+    "9": 0.243173
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 24,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.48,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 2,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.48,
+   "training_log_json": {
+    "sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+    "size": 250431
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "0352dd71de0d10020fcd655e79eb7a3b5e8642218c7a7669f900f0c938676f46",
+    "target0_share": 0.105888,
+    "target_row_sums": [
+     22190151,
+     24908909,
+     16197946,
+     29525293,
+     11396809,
+     12208149,
+     10685226,
+     8673354,
+     1123245,
+     8666900,
+     19440773,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723960,
+     3148164,
+     5786903,
+     447904
+    ],
+    "target_row_sums_sha256": "6840b8d49127ad060a7727ae7a21c8c451bbb44e17c52de8ca4c5f1af4b31c47"
+   }
+  },
+  {
+   "backbone": "prithvi600m",
+   "best_epoch": 24,
+   "best_model_pt": {
+    "sha256": "d4f926b2d57737982d2439b38dcde8ed723ddd31ec66369c428e4f7cd07cf43a",
+    "size": 2741619081
+   },
+   "cell": "prithvi600m_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r3",
+   "delta": 0.046169,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 656.5,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 18,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.397109,
+      "old_miou": 0.364773
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.413074,
+      "old_miou": 0.382153
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.437655,
+      "old_miou": 0.402209
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.474126,
+      "old_miou": 0.435076
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.480643,
+      "old_miou": 0.4459
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.497202,
+      "old_miou": 0.455319
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.500364,
+      "old_miou": 0.4572
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.51045,
+      "old_miou": 0.467338
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.514931,
+      "old_miou": 0.473111
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.522424,
+      "old_miou": 0.479534
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.525219,
+      "old_miou": 0.480546
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.5305,
+      "old_miou": 0.484938
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.532015,
+      "old_miou": 0.487446
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.535467,
+      "old_miou": 0.487523
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.537718,
+      "old_miou": 0.493303
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.542954,
+      "old_miou": 0.495463
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.548524,
+      "old_miou": 0.502718
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.550532,
+      "old_miou": 0.504363
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 25,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.5036
+    },
+    "started_at": "2026-09-01T05:20:48.380372+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-01T14:51:39.172866+00:00",
+    "v2_best_recorded_epoch": 24
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.550532,
+   "new_per_class_iou": {
+    "1": 0.661058,
+    "10": 0.948821,
+    "11": 0.797521,
+    "12": 0.718843,
+    "13": 0.55011,
+    "14": 0.837274,
+    "15": 0.676372,
+    "16": 0.401762,
+    "17": 0.794909,
+    "18": 0.883806,
+    "19": 0.652822,
+    "2": 0.600842,
+    "20": 0.570046,
+    "21": 0.767039,
+    "22": 0.559595,
+    "23": 0.66167,
+    "24": 0.110316,
+    "25": 0.14495,
+    "26": 0.269373,
+    "27": 0.204046,
+    "3": 0.493274,
+    "4": 0.538924,
+    "5": 0.490132,
+    "6": 0.409836,
+    "7": 0.623885,
+    "8": 0.25326,
+    "9": 0.243872
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.504363,
+   "old_per_class_iou": {
+    "1": 0.644037,
+    "10": 0.879564,
+    "11": 0.737013,
+    "12": 0.671351,
+    "13": 0.515564,
+    "14": 0.776576,
+    "15": 0.614379,
+    "16": 0.391778,
+    "17": 0.610135,
+    "18": 0.809178,
+    "19": 0.601524,
+    "2": 0.557168,
+    "20": 0.538655,
+    "21": 0.688523,
+    "22": 0.549326,
+    "23": 0.646144,
+    "24": 0.097088,
+    "25": 0.107585,
+    "26": 0.223011,
+    "27": 0.155057,
+    "3": 0.455629,
+    "4": 0.480396,
+    "5": 0.454809,
+    "6": 0.396677,
+    "7": 0.553004,
+    "8": 0.222783,
+    "9": 0.240846
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 24,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5044,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 3,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5044,
+   "training_log_json": {
+    "sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+    "size": 276528
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "f6a2aa2ae5efddc366eb6a8a3315d95b4546ca0914f4703ac46998dcbba43a08",
+    "target0_share": 0.105888,
+    "target_row_sums": [
+     22190151,
+     35315549,
+     17857749,
+     16370645,
+     12485014,
+     12208149,
+     10685226,
+     8673354,
+     1123245,
+     8666900,
+     19440773,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723960,
+     3148164,
+     5786903,
+     447904
+    ],
+    "target_row_sums_sha256": "afa91c56ef6b85d4485238eec1a2d06d1ac3513a288fd9695343ab1baa10d08b"
+   }
+  },
+  {
+   "backbone": "prithvi600m",
+   "best_epoch": 30,
+   "best_model_pt": {
+    "sha256": "edf46dd6c2c19ba2f965afcdb2911b14a65d0c534057bcd185693b56b2ae3772",
+    "size": 2741619081
+   },
+   "cell": "prithvi600m_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/prithvi600m_r4",
+   "delta": 0.04692,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 660.2,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 22,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.395212,
+      "old_miou": 0.36326
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.416937,
+      "old_miou": 0.385604
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.439899,
+      "old_miou": 0.404387
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.471269,
+      "old_miou": 0.431397
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.480264,
+      "old_miou": 0.445916
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.496391,
+      "old_miou": 0.455319
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.501149,
+      "old_miou": 0.458707
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.505658,
+      "old_miou": 0.46107
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.510788,
+      "old_miou": 0.465187
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.517324,
+      "old_miou": 0.473943
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.522623,
+      "old_miou": 0.477513
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.526821,
+      "old_miou": 0.484105
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.531032,
+      "old_miou": 0.48548
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.535371,
+      "old_miou": 0.49069
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.535652,
+      "old_miou": 0.491572
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.53957,
+      "old_miou": 0.492569
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.54451,
+      "old_miou": 0.497633
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.547166,
+      "old_miou": 0.501675
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.549939,
+      "old_miou": 0.503818
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.553109,
+      "old_miou": 0.504692
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.553524,
+      "old_miou": 0.50651
+     },
+     {
+      "epoch": 30,
+      "new_miou": 0.553574,
+      "old_miou": 0.506654
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 28,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.5065
+    },
+    "started_at": "2026-09-01T16:41:03.073322+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-02T02:04:56.372142+00:00",
+    "v2_best_recorded_epoch": 30
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.553574,
+   "new_per_class_iou": {
+    "1": 0.672626,
+    "10": 0.950948,
+    "11": 0.801375,
+    "12": 0.726866,
+    "13": 0.55607,
+    "14": 0.84067,
+    "15": 0.680874,
+    "16": 0.403092,
+    "17": 0.800251,
+    "18": 0.88679,
+    "19": 0.656067,
+    "2": 0.60474,
+    "20": 0.578645,
+    "21": 0.768945,
+    "22": 0.556405,
+    "23": 0.665142,
+    "24": 0.11101,
+    "25": 0.143741,
+    "26": 0.266612,
+    "27": 0.201051,
+    "3": 0.48873,
+    "4": 0.546573,
+    "5": 0.493244,
+    "6": 0.41383,
+    "7": 0.619779,
+    "8": 0.270912,
+    "9": 0.241509
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.506654,
+   "old_per_class_iou": {
+    "1": 0.651381,
+    "10": 0.880914,
+    "11": 0.740168,
+    "12": 0.681784,
+    "13": 0.525007,
+    "14": 0.776218,
+    "15": 0.60358,
+    "16": 0.395687,
+    "17": 0.634379,
+    "18": 0.80932,
+    "19": 0.598329,
+    "2": 0.561752,
+    "20": 0.549223,
+    "21": 0.703133,
+    "22": 0.547661,
+    "23": 0.631383,
+    "24": 0.09953,
+    "25": 0.104006,
+    "26": 0.2314,
+    "27": 0.138599,
+    "3": 0.453866,
+    "4": 0.481951,
+    "5": 0.456608,
+    "6": 0.401971,
+    "7": 0.548666,
+    "8": 0.234713,
+    "9": 0.238418
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 30,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5067,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 4,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5067,
+   "training_log_json": {
+    "sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+    "size": 329156
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "122381688ef1c06a33ce7691ab8b13a9250c174d6a889190e27ce16d3e83f2c1",
+    "target0_share": 0.105888,
+    "target_row_sums": [
+     22190151,
+     35315549,
+     17857749,
+     16370645,
+     12485014,
+     12208149,
+     10685226,
+     8673354,
+     1123245,
+     8666900,
+     19440773,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723960,
+     3148164,
+     5786903,
+     447904
+    ],
+    "target_row_sums_sha256": "afa91c56ef6b85d4485238eec1a2d06d1ac3513a288fd9695343ab1baa10d08b"
+   }
+  },
+  {
+   "backbone": "terramind",
+   "best_epoch": 30,
+   "best_model_pt": {
+    "sha256": "4aea9aad163bd0e4ef67f2be678669e1d2411b1634b278d99533884960c5a551",
+    "size": 401353531
+   },
+   "cell": "terramind_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r1",
+   "delta": 0.040747,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 209.6,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 24,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.385263,
+      "old_miou": 0.361013
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.444608,
+      "old_miou": 0.413784
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.476059,
+      "old_miou": 0.440762
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.486732,
+      "old_miou": 0.450657
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.487847,
+      "old_miou": 0.452452
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.49903,
+      "old_miou": 0.460952
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.503383,
+      "old_miou": 0.465788
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.506668,
+      "old_miou": 0.467479
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.51236,
+      "old_miou": 0.474676
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.519849,
+      "old_miou": 0.481198
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.52319,
+      "old_miou": 0.482913
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.528449,
+      "old_miou": 0.488749
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.53038,
+      "old_miou": 0.490704
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.536365,
+      "old_miou": 0.495571
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.538049,
+      "old_miou": 0.497458
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.544313,
+      "old_miou": 0.503851
+     },
+     {
+      "epoch": 19,
+      "new_miou": 0.544106,
+      "old_miou": 0.504764
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.545633,
+      "old_miou": 0.505266
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.548655,
+      "old_miou": 0.509227
+     },
+     {
+      "epoch": 24,
+      "new_miou": 0.551869,
+      "old_miou": 0.511543
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.552604,
+      "old_miou": 0.512046
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.553727,
+      "old_miou": 0.512875
+     },
+     {
+      "epoch": 29,
+      "new_miou": 0.554134,
+      "old_miou": 0.513639
+     },
+     {
+      "epoch": 30,
+      "new_miou": 0.554475,
+      "old_miou": 0.513728
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 29,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.5136
+    },
+    "started_at": "2026-08-30T10:16:51.421772+00:00",
+    "status": "stopped",
+    "updated_at": "2026-08-30T15:40:47.424948+00:00",
+    "v2_best_recorded_epoch": 30
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.554475,
+   "new_per_class_iou": {
+    "1": 0.432884,
+    "10": 0.946342,
+    "11": 0.730316,
+    "12": 0.639257,
+    "13": 0.445293,
+    "14": 0.794595,
+    "15": 0.616165,
+    "16": 0.336261,
+    "17": 0.771083,
+    "18": 0.863775,
+    "19": 0.588873,
+    "2": 0.454441,
+    "20": 0.521688,
+    "21": 0.717764,
+    "22": 0.518498,
+    "3": 0.28989,
+    "4": 0.263982,
+    "5": 0.419407,
+    "6": 0.533194,
+    "7": 0.612516,
+    "8": 0.391926,
+    "9": 0.310295
+   },
+   "num_classes": 23,
+   "old_miou_recomputed": 0.513728,
+   "old_per_class_iou": {
+    "1": 0.431728,
+    "10": 0.94241,
+    "11": 0.653057,
+    "12": 0.574397,
+    "13": 0.397918,
+    "14": 0.71539,
+    "15": 0.524504,
+    "16": 0.321094,
+    "17": 0.607035,
+    "18": 0.754498,
+    "19": 0.502792,
+    "2": 0.453572,
+    "20": 0.488948,
+    "21": 0.625723,
+    "22": 0.516623,
+    "3": 0.288405,
+    "4": 0.263598,
+    "5": 0.415313,
+    "6": 0.531876,
+    "7": 0.603648,
+    "8": 0.382764,
+    "9": 0.306711
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 30,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5137,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 1,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5137,
+   "training_log_json": {
+    "sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+    "size": 253419
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 201487104,
+    "confusion_matrix_sha256": "f547bfaabc68e729303ee7b31a6f079465f825935086243fbff2116dc1db7e0c",
+    "target0_share": 0.031193,
+    "target_row_sums": [
+     6285076,
+     25524835,
+     16550596,
+     23671644,
+     12260337,
+     7839497,
+     16605269,
+     12607057,
+     21259833,
+     7771296,
+     20160168,
+     5815697,
+     4281307,
+     1323265,
+     1804126,
+     7524850,
+     2270717,
+     970514,
+     956461,
+     596519,
+     584063,
+     331833,
+     4492144
+    ],
+    "target_row_sums_sha256": "3fa6e5f55d72c4b07fb055133e5946c555f194c28282c0de9fa69b89859d46b3"
+   }
+  },
+  {
+   "backbone": "terramind",
+   "best_epoch": 30,
+   "best_model_pt": {
+    "sha256": "97316cf22612288072f0278f5c90e1a987a845a35acb1dcb431cc13432b4fc8f",
+    "size": 401358843
+   },
+   "cell": "terramind_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r2",
+   "delta": 0.040663,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 199.0,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 21,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.331145,
+      "old_miou": 0.30476
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.389911,
+      "old_miou": 0.356741
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.414864,
+      "old_miou": 0.381492
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.424712,
+      "old_miou": 0.38899
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.434188,
+      "old_miou": 0.39713
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.440934,
+      "old_miou": 0.404307
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.453128,
+      "old_miou": 0.414031
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.455583,
+      "old_miou": 0.417803
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.458279,
+      "old_miou": 0.420475
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.46618,
+      "old_miou": 0.426479
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.46689,
+      "old_miou": 0.428416
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.471026,
+      "old_miou": 0.431916
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.476058,
+      "old_miou": 0.435539
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.479369,
+      "old_miou": 0.438366
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.480519,
+      "old_miou": 0.439706
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.480866,
+      "old_miou": 0.439875
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.482862,
+      "old_miou": 0.442199
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.48496,
+      "old_miou": 0.44517
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.486284,
+      "old_miou": 0.445708
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.486843,
+      "old_miou": 0.446488
+     },
+     {
+      "epoch": 30,
+      "new_miou": 0.487583,
+      "old_miou": 0.44692
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 27,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.4465
+    },
+    "started_at": "2026-08-31T07:59:12.176049+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-31T13:14:01.610618+00:00",
+    "v2_best_recorded_epoch": 30
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.487583,
+   "new_per_class_iou": {
+    "1": 0.470956,
+    "10": 0.94161,
+    "11": 0.731543,
+    "12": 0.640405,
+    "13": 0.442478,
+    "14": 0.791099,
+    "15": 0.639643,
+    "16": 0.363753,
+    "17": 0.770368,
+    "18": 0.867778,
+    "19": 0.567287,
+    "2": 0.459297,
+    "20": 0.51086,
+    "21": 0.711691,
+    "22": 0.526242,
+    "23": 0.670935,
+    "24": 0.087497,
+    "25": 0.120786,
+    "26": 0.232833,
+    "27": 0.184004,
+    "3": 0.302525,
+    "4": 0.239653,
+    "5": 0.460746,
+    "6": 0.397473,
+    "7": 0.601151,
+    "8": 0.221925,
+    "9": 0.210213
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.44692,
+   "old_per_class_iou": {
+    "1": 0.467565,
+    "10": 0.876574,
+    "11": 0.681744,
+    "12": 0.609138,
+    "13": 0.415062,
+    "14": 0.725306,
+    "15": 0.581241,
+    "16": 0.355073,
+    "17": 0.60261,
+    "18": 0.770254,
+    "19": 0.500202,
+    "2": 0.423832,
+    "20": 0.488702,
+    "21": 0.608636,
+    "22": 0.517408,
+    "23": 0.666928,
+    "24": 0.078711,
+    "25": 0.082555,
+    "26": 0.213447,
+    "27": 0.135857,
+    "3": 0.284264,
+    "4": 0.224503,
+    "5": 0.429593,
+    "6": 0.387764,
+    "7": 0.532497,
+    "8": 0.197872,
+    "9": 0.209512
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 30,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4469,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 2,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4469,
+   "training_log_json": {
+    "sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+    "size": 316753
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 201487104,
+    "confusion_matrix_sha256": "9b362fd7a5b363b47810ce4e7f7d2408a7a896029ab9028901e4aa34ba33a9e4",
+    "target0_share": 0.10387,
+    "target_row_sums": [
+     20928476,
+     24106230,
+     15632092,
+     28444319,
+     10998890,
+     11788882,
+     10334588,
+     8327168,
+     1083056,
+     8304317,
+     18764271,
+     6131024,
+     4573111,
+     1428493,
+     1826859,
+     8006730,
+     2277401,
+     979437,
+     957420,
+     643587,
+     600316,
+     332569,
+     4259012,
+     93833,
+     1653226,
+     3022320,
+     5557256,
+     432221
+    ],
+    "target_row_sums_sha256": "c6200e088e951fe5bb9b168b710fbf05641e2244e9b59e8acf69d54311bca577"
+   }
+  },
+  {
+   "backbone": "terramind",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "ee752b95cbcc874f976a2db8195eaedf56388caeff9adf71630a56e5adb5df1f",
+    "size": 401358843
+   },
+   "cell": "terramind_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r3",
+   "delta": 0.044764,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 195.8,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 20,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.340793,
+      "old_miou": 0.313919
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.406229,
+      "old_miou": 0.372143
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.433304,
+      "old_miou": 0.398328
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.445619,
+      "old_miou": 0.408107
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.452812,
+      "old_miou": 0.414673
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.462386,
+      "old_miou": 0.422802
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.477296,
+      "old_miou": 0.436473
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.480648,
+      "old_miou": 0.440322
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.4898,
+      "old_miou": 0.447415
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.491432,
+      "old_miou": 0.450587
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.495487,
+      "old_miou": 0.454816
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.501151,
+      "old_miou": 0.458395
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.503755,
+      "old_miou": 0.460274
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.507145,
+      "old_miou": 0.463567
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.507678,
+      "old_miou": 0.464246
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.508129,
+      "old_miou": 0.464644
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.510017,
+      "old_miou": 0.467256
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.511793,
+      "old_miou": 0.467904
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.511807,
+      "old_miou": 0.468652
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.513835,
+      "old_miou": 0.469071
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 29,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4691
+    },
+    "started_at": "2026-09-08T10:27:12.926112+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-08T15:52:52.363235+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.513835,
+   "new_per_class_iou": {
+    "1": 0.656612,
+    "10": 0.941191,
+    "11": 0.728852,
+    "12": 0.638379,
+    "13": 0.443989,
+    "14": 0.792179,
+    "15": 0.639395,
+    "16": 0.360213,
+    "17": 0.771988,
+    "18": 0.863618,
+    "19": 0.566249,
+    "2": 0.622294,
+    "20": 0.506117,
+    "21": 0.72088,
+    "22": 0.525929,
+    "23": 0.67147,
+    "24": 0.09676,
+    "25": 0.134885,
+    "26": 0.23463,
+    "27": 0.186687,
+    "3": 0.455328,
+    "4": 0.418082,
+    "5": 0.475024,
+    "6": 0.392677,
+    "7": 0.599152,
+    "8": 0.222746,
+    "9": 0.208229
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.469071,
+   "old_per_class_iou": {
+    "1": 0.643522,
+    "10": 0.876193,
+    "11": 0.674413,
+    "12": 0.605388,
+    "13": 0.406407,
+    "14": 0.729718,
+    "15": 0.578855,
+    "16": 0.352166,
+    "17": 0.608094,
+    "18": 0.767778,
+    "19": 0.480797,
+    "2": 0.562693,
+    "20": 0.481479,
+    "21": 0.626109,
+    "22": 0.515442,
+    "23": 0.667153,
+    "24": 0.086713,
+    "25": 0.09024,
+    "26": 0.213074,
+    "27": 0.135749,
+    "3": 0.424381,
+    "4": 0.379209,
+    "5": 0.44478,
+    "6": 0.382899,
+    "7": 0.526726,
+    "8": 0.197318,
+    "9": 0.207617
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4691,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 3,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4691,
+   "training_log_json": {
+    "sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+    "size": 303378
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 201487104,
+    "confusion_matrix_sha256": "bd40089ef36553dc9eee84c6440d0ded14aaa3bc94036fe49352877ba4e210dc",
+    "target0_share": 0.10387,
+    "target_row_sums": [
+     20928476,
+     35111804,
+     21228484,
+     13936025,
+     8905218,
+     11788882,
+     10334588,
+     8327168,
+     1083056,
+     8304317,
+     18764271,
+     6131024,
+     4573111,
+     1428493,
+     1826859,
+     8006730,
+     2277401,
+     979437,
+     957420,
+     643587,
+     600316,
+     332569,
+     4259012,
+     93833,
+     1653226,
+     3022320,
+     5557256,
+     432221
+    ],
+    "target_row_sums_sha256": "62cd2663938516126b28cea887705132d59c232d2269bc2d599868495176d588"
+   }
+  },
+  {
+   "backbone": "terramind",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "a8cece4a785df3d0b754df3ad63b85c4305f8bac163ff7a1137d2bb3e0926542",
+    "size": 401358843
+   },
+   "cell": "terramind_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/terramind_r4",
+   "delta": 0.043627,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 195.8,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 22,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.338499,
+      "old_miou": 0.311474
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.405378,
+      "old_miou": 0.371215
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.431371,
+      "old_miou": 0.396473
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.443944,
+      "old_miou": 0.406805
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.451857,
+      "old_miou": 0.413686
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.461182,
+      "old_miou": 0.422006
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.475197,
+      "old_miou": 0.434442
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.479375,
+      "old_miou": 0.438898
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.480335,
+      "old_miou": 0.439911
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.487945,
+      "old_miou": 0.445911
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.490887,
+      "old_miou": 0.450341
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.494764,
+      "old_miou": 0.453605
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.49945,
+      "old_miou": 0.45661
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.502211,
+      "old_miou": 0.459411
+     },
+     {
+      "epoch": 20,
+      "new_miou": 0.504908,
+      "old_miou": 0.462067
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.506532,
+      "old_miou": 0.46351
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.506847,
+      "old_miou": 0.463641
+     },
+     {
+      "epoch": 23,
+      "new_miou": 0.508618,
+      "old_miou": 0.466447
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.508972,
+      "old_miou": 0.466697
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.50999,
+      "old_miou": 0.467044
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.509434,
+      "old_miou": 0.467287
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.512026,
+      "old_miou": 0.468399
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 29,
+     "has_confusion_matrix": false,
+     "old_val_miou": 0.4682
+    },
+    "started_at": "2026-09-08T10:27:12.020741+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-08T15:52:52.022494+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.512026,
+   "new_per_class_iou": {
+    "1": 0.653782,
+    "10": 0.940323,
+    "11": 0.72682,
+    "12": 0.639771,
+    "13": 0.445766,
+    "14": 0.790006,
+    "15": 0.638832,
+    "16": 0.359532,
+    "17": 0.772456,
+    "18": 0.863581,
+    "19": 0.564186,
+    "2": 0.619032,
+    "20": 0.507103,
+    "21": 0.710519,
+    "22": 0.525833,
+    "23": 0.658207,
+    "24": 0.097973,
+    "25": 0.133052,
+    "26": 0.233635,
+    "27": 0.184574,
+    "3": 0.454092,
+    "4": 0.413572,
+    "5": 0.474497,
+    "6": 0.391884,
+    "7": 0.599948,
+    "8": 0.218236,
+    "9": 0.207489
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.468399,
+   "old_per_class_iou": {
+    "1": 0.641367,
+    "10": 0.875179,
+    "11": 0.673318,
+    "12": 0.603393,
+    "13": 0.408861,
+    "14": 0.724513,
+    "15": 0.580676,
+    "16": 0.351572,
+    "17": 0.612795,
+    "18": 0.769392,
+    "19": 0.490508,
+    "2": 0.559841,
+    "20": 0.487288,
+    "21": 0.621849,
+    "22": 0.514479,
+    "23": 0.654445,
+    "24": 0.088213,
+    "25": 0.088344,
+    "26": 0.212459,
+    "27": 0.137647,
+    "3": 0.42063,
+    "4": 0.376602,
+    "5": 0.444964,
+    "6": 0.382031,
+    "7": 0.527407,
+    "8": 0.192239,
+    "9": 0.206765
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4684,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 4,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4684,
+   "training_log_json": {
+    "sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+    "size": 330811
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 201487104,
+    "confusion_matrix_sha256": "3f982f260774abca60d66c4706909483c6ef814b41a4770086ae8df4f467e558",
+    "target0_share": 0.10387,
+    "target_row_sums": [
+     20928476,
+     35111804,
+     21228484,
+     13936025,
+     8905218,
+     11788882,
+     10334588,
+     8327168,
+     1083056,
+     8304317,
+     18764271,
+     6131024,
+     4573111,
+     1428493,
+     1826859,
+     8006730,
+     2277401,
+     979437,
+     957420,
+     643587,
+     600316,
+     332569,
+     4259012,
+     93833,
+     1653226,
+     3022320,
+     5557256,
+     432221
+    ],
+    "target_row_sums_sha256": "62cd2663938516126b28cea887705132d59c232d2269bc2d599868495176d588"
+   }
+  },
+  {
+   "backbone": "tessera",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "1f31188c851f52b003e7669c962841a94d50e739800e545657e54afe6f3fc235",
+    "size": 1593570
+   },
+   "cell": "tessera_r1",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r1",
+   "delta": 0.050904,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 448.6,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.496603,
+      "old_miou": 0.456555
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.552128,
+      "old_miou": 0.507842
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.565975,
+      "old_miou": 0.520072
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.578593,
+      "old_miou": 0.531763
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.583049,
+      "old_miou": 0.53709
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.584898,
+      "old_miou": 0.539882
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.596119,
+      "old_miou": 0.548381
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.598439,
+      "old_miou": 0.549435
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.600905,
+      "old_miou": 0.551993
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.601363,
+      "old_miou": 0.552257
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.603185,
+      "old_miou": 0.553556
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.605881,
+      "old_miou": 0.555992
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.607058,
+      "old_miou": 0.557389
+     },
+     {
+      "epoch": 15,
+      "new_miou": 0.609194,
+      "old_miou": 0.558892
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.610088,
+      "old_miou": 0.559785
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.611339,
+      "old_miou": 0.561474
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.615082,
+      "old_miou": 0.564364
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.61621,
+      "old_miou": 0.565257
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.616268,
+      "old_miou": 0.565364
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 25,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.5653
+    },
+    "started_at": "2026-08-29T20:59:27.598715+00:00",
+    "status": "stopped",
+    "updated_at": "2026-08-30T04:12:29.945310+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.616268,
+   "new_per_class_iou": {
+    "1": 0.465146,
+    "10": 0.956051,
+    "11": 0.824024,
+    "12": 0.715692,
+    "13": 0.563112,
+    "14": 0.858959,
+    "15": 0.667047,
+    "16": 0.371101,
+    "17": 0.802631,
+    "18": 0.891377,
+    "19": 0.706595,
+    "2": 0.487247,
+    "20": 0.674643,
+    "21": 0.812949,
+    "22": 0.537598,
+    "3": 0.345648,
+    "4": 0.293535,
+    "5": 0.436226,
+    "6": 0.575826,
+    "7": 0.687858,
+    "8": 0.466127,
+    "9": 0.418501
+   },
+   "num_classes": 23,
+   "old_miou_recomputed": 0.565364,
+   "old_per_class_iou": {
+    "1": 0.464054,
+    "10": 0.951817,
+    "11": 0.74481,
+    "12": 0.646295,
+    "13": 0.495254,
+    "14": 0.752192,
+    "15": 0.565797,
+    "16": 0.352157,
+    "17": 0.580292,
+    "18": 0.750926,
+    "19": 0.578119,
+    "2": 0.48639,
+    "20": 0.620775,
+    "21": 0.724424,
+    "22": 0.534969,
+    "3": 0.344726,
+    "4": 0.293,
+    "5": 0.430949,
+    "6": 0.573202,
+    "7": 0.68022,
+    "8": 0.454552,
+    "9": 0.41308
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5654,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 1,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5654,
+   "training_log_json": {
+    "sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+    "size": 205944
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "0ab10cfac809ab8327cd54b1048d0fccd3a6cb15a2e8947b5e38485a42f26fb9",
+    "target0_share": 0.031121,
+    "target_row_sums": [
+     6521790,
+     26547515,
+     17239915,
+     24645973,
+     12754341,
+     8135205,
+     17250575,
+     13184904,
+     22409090,
+     8301594,
+     20322144,
+     6069356,
+     4464637,
+     1372638,
+     1899136,
+     7812160,
+     2349632,
+     1004233,
+     1026278,
+     633063,
+     606698,
+     342603,
+     4669720
+    ],
+    "target_row_sums_sha256": "f76803da5270b81a1b3c02f57109da22064d0742e9c86ed9fc6319bc7510745e"
+   }
+  },
+  {
+   "backbone": "tessera",
+   "best_epoch": 28,
+   "best_model_pt": {
+    "sha256": "9dd7cfcad09b26576d23c846c29c3fd540d463b97a72df0b7557f6558dbced04",
+    "size": 1596322
+   },
+   "cell": "tessera_r2",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r2",
+   "delta": 0.049031,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 445.5,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.388742,
+      "old_miou": 0.350871
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.475744,
+      "old_miou": 0.433726
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.495138,
+      "old_miou": 0.450714
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.507446,
+      "old_miou": 0.463021
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.512458,
+      "old_miou": 0.468759
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.515502,
+      "old_miou": 0.471187
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.52556,
+      "old_miou": 0.478852
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.530015,
+      "old_miou": 0.482896
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.529992,
+      "old_miou": 0.483364
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.532828,
+      "old_miou": 0.485505
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.537249,
+      "old_miou": 0.48916
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.538917,
+      "old_miou": 0.489855
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.541533,
+      "old_miou": 0.492759
+     },
+     {
+      "epoch": 18,
+      "new_miou": 0.543096,
+      "old_miou": 0.494318
+     },
+     {
+      "epoch": 21,
+      "new_miou": 0.544465,
+      "old_miou": 0.495787
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.546417,
+      "old_miou": 0.497725
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.546904,
+      "old_miou": 0.497891
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.547215,
+      "old_miou": 0.49819
+     },
+     {
+      "epoch": 28,
+      "new_miou": 0.547756,
+      "old_miou": 0.498724
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 27,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.4982
+    },
+    "started_at": "2026-08-31T01:39:32.015643+00:00",
+    "status": "completed",
+    "updated_at": "2026-08-31T08:48:52.108576+00:00",
+    "v2_best_recorded_epoch": 28
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.547756,
+   "new_per_class_iou": {
+    "1": 0.552868,
+    "10": 0.955423,
+    "11": 0.819275,
+    "12": 0.716379,
+    "13": 0.559125,
+    "14": 0.854169,
+    "15": 0.685555,
+    "16": 0.416049,
+    "17": 0.807396,
+    "18": 0.888673,
+    "19": 0.691547,
+    "2": 0.533234,
+    "20": 0.657367,
+    "21": 0.810115,
+    "22": 0.536114,
+    "23": 0.628071,
+    "24": 0.158128,
+    "25": 0.167135,
+    "26": 0.304326,
+    "27": 0.196708,
+    "3": 0.373082,
+    "4": 0.293269,
+    "5": 0.503852,
+    "6": 0.407596,
+    "7": 0.700838,
+    "8": 0.250669,
+    "9": 0.322447
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.498724,
+   "old_per_class_iou": {
+    "1": 0.546654,
+    "10": 0.884956,
+    "11": 0.776187,
+    "12": 0.687694,
+    "13": 0.529013,
+    "14": 0.76011,
+    "15": 0.626121,
+    "16": 0.40728,
+    "17": 0.595648,
+    "18": 0.755335,
+    "19": 0.598674,
+    "2": 0.48553,
+    "20": 0.621959,
+    "21": 0.730198,
+    "22": 0.527927,
+    "23": 0.623976,
+    "24": 0.146734,
+    "25": 0.107468,
+    "26": 0.272182,
+    "27": 0.127768,
+    "3": 0.347503,
+    "4": 0.271498,
+    "5": 0.472002,
+    "6": 0.397165,
+    "7": 0.620069,
+    "8": 0.2247,
+    "9": 0.321209
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 28,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.4987,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 2,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.4987,
+   "training_log_json": {
+    "sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+    "size": 288304
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 209563200,
+    "confusion_matrix_sha256": "19c0cf9e3845fb02d197ab5fbf787fb017fe1b3b77d5826a8efc3e589767a308",
+    "target0_share": 0.105907,
+    "target_row_sums": [
+     22194201,
+     25016877,
+     16228029,
+     29613401,
+     11435208,
+     12237048,
+     10707112,
+     8689224,
+     1123245,
+     8874527,
+     18811936,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8311282,
+     2357181,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4424781,
+     98293,
+     1736583,
+     3165576,
+     5836219,
+     447186
+    ],
+    "target_row_sums_sha256": "b554e965a0fbbf79ce33c1b5543df23a475baabbd2c4794285bdeb6e6052f8ff"
+   }
+  },
+  {
+   "backbone": "tessera",
+   "best_epoch": 27,
+   "best_model_pt": {
+    "sha256": "2d673c191a380da00725ad90638980afbc5f7bdaa7fe655770d701a37e583f4f",
+    "size": 1596322
+   },
+   "cell": "tessera_r3",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r3",
+   "delta": 0.053258,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 456.2,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.408977,
+      "old_miou": 0.371844
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.499819,
+      "old_miou": 0.455436
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.528319,
+      "old_miou": 0.481343
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.536692,
+      "old_miou": 0.489055
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.545765,
+      "old_miou": 0.496829
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.554073,
+      "old_miou": 0.504164
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.559972,
+      "old_miou": 0.50984
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.563548,
+      "old_miou": 0.511749
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.564008,
+      "old_miou": 0.512273
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.564206,
+      "old_miou": 0.512857
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.568637,
+      "old_miou": 0.516449
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.570423,
+      "old_miou": 0.518186
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.573439,
+      "old_miou": 0.521465
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.576534,
+      "old_miou": 0.523456
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.580167,
+      "old_miou": 0.527677
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.582053,
+      "old_miou": 0.529142
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.582391,
+      "old_miou": 0.529407
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.583232,
+      "old_miou": 0.530191
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.583956,
+      "old_miou": 0.530698
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 26,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.5302
+    },
+    "started_at": "2026-09-01T15:00:27.395390+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-01T22:07:09.473087+00:00",
+    "v2_best_recorded_epoch": 27
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.583956,
+   "new_per_class_iou": {
+    "1": 0.734565,
+    "10": 0.955336,
+    "11": 0.819267,
+    "12": 0.715012,
+    "13": 0.55799,
+    "14": 0.852582,
+    "15": 0.684161,
+    "16": 0.417362,
+    "17": 0.807487,
+    "18": 0.888876,
+    "19": 0.682051,
+    "2": 0.728636,
+    "20": 0.65396,
+    "21": 0.80666,
+    "22": 0.535496,
+    "23": 0.636565,
+    "24": 0.16058,
+    "25": 0.166595,
+    "26": 0.305246,
+    "27": 0.19741,
+    "3": 0.656445,
+    "4": 0.627408,
+    "5": 0.518425,
+    "6": 0.391611,
+    "7": 0.70281,
+    "8": 0.261483,
+    "9": 0.302803
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.530698,
+   "old_per_class_iou": {
+    "1": 0.71127,
+    "10": 0.884376,
+    "11": 0.776491,
+    "12": 0.686216,
+    "13": 0.528891,
+    "14": 0.758026,
+    "15": 0.62621,
+    "16": 0.40857,
+    "17": 0.598771,
+    "18": 0.755933,
+    "19": 0.587799,
+    "2": 0.649557,
+    "20": 0.620109,
+    "21": 0.725257,
+    "22": 0.527638,
+    "23": 0.631424,
+    "24": 0.144128,
+    "25": 0.106195,
+    "26": 0.27441,
+    "27": 0.126427,
+    "3": 0.603934,
+    "4": 0.577082,
+    "5": 0.486193,
+    "6": 0.382164,
+    "7": 0.619062,
+    "8": 0.23099,
+    "9": 0.301732
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 27,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5307,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 3,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5307,
+   "training_log_json": {
+    "sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+    "size": 288178
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 208801152,
+    "confusion_matrix_sha256": "82ef2a9bad332f47ecf5cd3cf303c7af56ac6d06e8f121c87abb220fbc1acd50",
+    "target0_share": 0.106274,
+    "target_row_sums": [
+     22190151,
+     38133061,
+     20430842,
+     13606861,
+     9858154,
+     12208149,
+     10685226,
+     8673223,
+     1123245,
+     8666897,
+     18687542,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723477,
+     3146846,
+     5785917,
+     442047
+    ],
+    "target_row_sums_sha256": "02bc2228e30ff4e503fafc9199ca528f12f67255d2aba4dd46b7db8dbbed27ef"
+   }
+  },
+  {
+   "backbone": "tessera",
+   "best_epoch": 27,
+   "best_model_pt": {
+    "sha256": "1270bb2af88074840020f3b481ed5e98a72f0b7ceb51befac2b8fa4675385668",
+    "size": 1596322
+   },
+   "cell": "tessera_r4",
+   "cell_path": "/cephfs/checkpoints/ladder/tessera_r4",
+   "delta": 0.053136,
+   "git_commit": "52a0c90a9b5789df43df59158478bc85dff64d01",
+   "gpu_seconds": 0,
+   "ignore_index": 0,
+   "log_context": {
+    "last_epoch_elapsed_s": 509.7,
+    "n_epochs": 30,
+    "n_epochs_with_confusion_matrix": 19,
+    "recorded_epochs": [
+     {
+      "epoch": 1,
+      "new_miou": 0.405729,
+      "old_miou": 0.368601
+     },
+     {
+      "epoch": 2,
+      "new_miou": 0.49886,
+      "old_miou": 0.454566
+     },
+     {
+      "epoch": 3,
+      "new_miou": 0.528249,
+      "old_miou": 0.481238
+     },
+     {
+      "epoch": 4,
+      "new_miou": 0.536498,
+      "old_miou": 0.488659
+     },
+     {
+      "epoch": 5,
+      "new_miou": 0.54451,
+      "old_miou": 0.495528
+     },
+     {
+      "epoch": 6,
+      "new_miou": 0.552629,
+      "old_miou": 0.502821
+     },
+     {
+      "epoch": 7,
+      "new_miou": 0.55888,
+      "old_miou": 0.508821
+     },
+     {
+      "epoch": 8,
+      "new_miou": 0.562699,
+      "old_miou": 0.511047
+     },
+     {
+      "epoch": 9,
+      "new_miou": 0.563334,
+      "old_miou": 0.511681
+     },
+     {
+      "epoch": 10,
+      "new_miou": 0.563193,
+      "old_miou": 0.511888
+     },
+     {
+      "epoch": 11,
+      "new_miou": 0.567262,
+      "old_miou": 0.515212
+     },
+     {
+      "epoch": 12,
+      "new_miou": 0.568697,
+      "old_miou": 0.51666
+     },
+     {
+      "epoch": 13,
+      "new_miou": 0.571901,
+      "old_miou": 0.520063
+     },
+     {
+      "epoch": 16,
+      "new_miou": 0.575375,
+      "old_miou": 0.522353
+     },
+     {
+      "epoch": 17,
+      "new_miou": 0.579023,
+      "old_miou": 0.526506
+     },
+     {
+      "epoch": 22,
+      "new_miou": 0.580187,
+      "old_miou": 0.52729
+     },
+     {
+      "epoch": 25,
+      "new_miou": 0.580776,
+      "old_miou": 0.527883
+     },
+     {
+      "epoch": 26,
+      "new_miou": 0.581673,
+      "old_miou": 0.528625
+     },
+     {
+      "epoch": 27,
+      "new_miou": 0.58235,
+      "old_miou": 0.529214
+     }
+    ],
+    "runner_up_by_old_val_miou": {
+     "epoch": 26,
+     "has_confusion_matrix": true,
+     "old_val_miou": 0.5286
+    },
+    "started_at": "2026-09-01T22:10:30.347022+00:00",
+    "status": "completed",
+    "updated_at": "2026-09-02T05:31:05.828907+00:00",
+    "v2_best_recorded_epoch": 27
+   },
+   "method": "stored-confusion-matrix",
+   "metric_version_new": "miou-ignore-target-v2",
+   "metric_version_old": "miou-unversioned-v1",
+   "new_miou": 0.58235,
+   "new_per_class_iou": {
+    "1": 0.733003,
+    "10": 0.954814,
+    "11": 0.818305,
+    "12": 0.714658,
+    "13": 0.557197,
+    "14": 0.851372,
+    "15": 0.683049,
+    "16": 0.416526,
+    "17": 0.805704,
+    "18": 0.888785,
+    "19": 0.67846,
+    "2": 0.72616,
+    "20": 0.650819,
+    "21": 0.806219,
+    "22": 0.533723,
+    "23": 0.63066,
+    "24": 0.159253,
+    "25": 0.165964,
+    "26": 0.303768,
+    "27": 0.194869,
+    "3": 0.656244,
+    "4": 0.623888,
+    "5": 0.519438,
+    "6": 0.38928,
+    "7": 0.702305,
+    "8": 0.258426,
+    "9": 0.300562
+   },
+   "num_classes": 28,
+   "old_miou_recomputed": 0.529214,
+   "old_per_class_iou": {
+    "1": 0.709644,
+    "10": 0.884359,
+    "11": 0.7758,
+    "12": 0.686187,
+    "13": 0.527913,
+    "14": 0.757136,
+    "15": 0.62526,
+    "16": 0.407648,
+    "17": 0.598399,
+    "18": 0.757092,
+    "19": 0.583481,
+    "2": 0.646852,
+    "20": 0.61646,
+    "21": 0.725076,
+    "22": 0.525932,
+    "23": 0.625439,
+    "24": 0.143895,
+    "25": 0.106256,
+    "26": 0.272814,
+    "27": 0.124851,
+    "3": 0.602728,
+    "4": 0.574292,
+    "5": 0.487486,
+    "6": 0.379928,
+    "7": 0.616068,
+    "8": 0.228283,
+    "9": 0.299495
+   },
+   "produced_at": "2026-10-13T20:36:37.237572+00:00",
+   "reverse_check": {
+    "checkpoint_epoch": 27,
+    "checkpoint_metric_version": null,
+    "checkpoint_metrics_miou": 0.5292,
+    "old_reproduces_stored_4dp": true
+   },
+   "rung": 4,
+   "script": "scripts/ladder_miou_v2_rescore.py",
+   "script_sha256": "ee1e875a6929a1426b8eb00f044d7438f3215bdf867ae47e79847fd8fa091d74",
+   "split_hash": null,
+   "split_note": "/cephfs/unified_v2_512/split_val.txt does not exist, so the trainer used the hash rule; the val set is pinned by the rule plus the per-cell target row-sum fingerprint (tile filters differ per backbone).",
+   "split_rule": "int(md5(tile_file_name_with_.npz).hexdigest(), 16) % 100 < 10",
+   "stored_best_miou": 0.5292,
+   "training_log_json": {
+    "sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+    "size": 289201
+   },
+   "val_fingerprint": {
+    "cm_total_pixels": 208801152,
+    "confusion_matrix_sha256": "d5ab306a4fd91de7398af9768150e906151ab4830701649fa445c9de46020d59",
+    "target0_share": 0.106274,
+    "target_row_sums": [
+     22190151,
+     38133061,
+     20430842,
+     13606861,
+     9858154,
+     12208149,
+     10685226,
+     8673223,
+     1123245,
+     8666897,
+     18687542,
+     6395851,
+     4767665,
+     1480779,
+     1922691,
+     8310078,
+     2357081,
+     1013173,
+     1027159,
+     681288,
+     623370,
+     343315,
+     4418771,
+     98293,
+     1723477,
+     3146846,
+     5785917,
+     442047
+    ],
+    "target_row_sums_sha256": "02bc2228e30ff4e503fafc9199ca528f12f67255d2aba4dd46b7db8dbbed27ef"
+   }
+  }
+ ]
+}
