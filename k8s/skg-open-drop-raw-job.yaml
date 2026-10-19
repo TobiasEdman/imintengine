@@ -1,0 +1,83 @@
+---
+# Delete the grunddata and markfukt raw zips of the open-data mirror and
+# keep every derived COG and VRT (Tobias 2026-10-19: "ja, radera råzip nu,
+# behåll rastren"). Frees about 97 GiB for the Trädhöjd run (#85).
+#
+# Runs scripts/drop_skg_open_raw.py, first as --dry-run (plan + refusals),
+# then for real. A zip goes only when its record holds sha256, bytes, url and
+# downloaded_at, its size on disk matches, and the one derived raster that
+# names it as its source still matches its recorded sha256; raw_deleted_at
+# is then recorded, so stage_skg_open.is_done skips the item later. Derived
+# rasters, VRTs and every Trädhöjd file are never touched. Exit 2 = some zips
+# kept (listed).
+#
+# MANIFEST.json is rewritten whole: apply this ONLY while no skg-open-stage
+# Job is active (`kubectl get jobs -l purpose=skg-open-stage`). The script
+# also refuses to save if the manifest changes under it.
+#
+# Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256; the pod refuses
+# to run if either check fails.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skg-open-drop-raw
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: skg-open-stage}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: drop
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== skg-open-drop-raw — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              export IMINT_GIT_SHA="$(git rev-parse HEAD)"
+              test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
+              echo "${IMINT_SCRIPT_SHA256}  scripts/drop_skg_open_raw.py" | sha256sum -c -
+              echo "HEAD: ${IMINT_GIT_SHA}"
+              df -h /data | tail -1
+              du -sh /data/skg_open/raw 2>/dev/null || true
+              echo "=== dry run ==="
+              python scripts/drop_skg_open_raw.py --dest /data/skg_open --dry-run || true
+              echo "=== delete ==="
+              RC=0
+              python scripts/drop_skg_open_raw.py --dest /data/skg_open || RC=$?
+              du -sh /data/skg_open/raw /data/skg_open/grunddata /data/skg_open/markfukt 2>/dev/null || true
+              df -h /data | tail -1
+              echo "=== done (exit ${RC}): $(date -u) ==="
+              exit ${RC}
+          env:
+            - {name: IMINT_COMMIT, value: "beb0bba67a5873ba0239f2885b68c30d91657acf"}
+            - {name: IMINT_SCRIPT_SHA256, value: "f2fc4a18a9c1a89ef12635b2521d797ea3e35b460f987e9e8c2f4adf7600353d"}
+          resources:
+            requests: {cpu: "2", memory: "4Gi"}
+            limits: {cpu: "2", memory: "4Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
