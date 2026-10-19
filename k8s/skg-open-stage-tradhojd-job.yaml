@@ -1,0 +1,115 @@
+---
+# Stage Skogsstyrelsen's Trädhöjd (tree height) for the open-data mirror,
+# one county at a time, deleting each raw zip after its derived raster is
+# verified (backlog IM-022; Tobias 2026-10-19: "Hämta ett län i taget och
+# radera efteråt").
+#
+# Why: the 230 NFI top-up tiles need the height aux channel. The tiles touch
+# all 21 counties (read-only probe 2026-10-19), the 21 sksTradhojd<län>.zip
+# files are 329.2 GiB raw and the PVC had 234 GiB free, so the raw zips
+# cannot all be kept. Height is the 10 m p90 of the 1 m product: a
+# documented version difference from the retired proxy channel (MAE about
+# 1 m, docs/data/skg_open_mirror.md), like markfukt.
+#
+# Per county, scripts/stage_skg_open.py downloads the zip and records its
+# sha256, bytes, URL and download date in MANIFEST.json. It inflates the zip
+# if it is Deflate64 (a work file about the zip's size), derives
+# tradhojd/tradhojd_10m_<län>.tif and verifies it: EPSG:3006, int16,
+# nodata -1, 10 m, the source's extent, readable, valid cells, 0..1000 dm.
+# Only then does it save the record, delete the raw zip, record
+# raw_deleted_at and rebuild tradhojd_10m.vrt from the staged counties. Two
+# counties' raw zips are never on disk together; peak use is about the
+# largest zip twice (county 25: 55.3 GiB, plus its inflation).
+# --min-free-gib 50 stops cleanly (exit 3) before a download or inflation
+# that would leave less than 50 GiB free. Re-apply under a new name to
+# resume: finished counties are skipped.
+#
+# Grunddata and markfukt are not touched, and their raw zips stay. The
+# reader (imint/training/skg_open.read_tradhojd) refuses any window whose
+# county is not yet staged. Writes ONLY under /data/skg_open. No tile is
+# touched.
+#
+# Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256 (`git show
+# <sha>:scripts/stage_skg_open.py | sha256sum`); the pod refuses to run if
+# either check fails.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: skg-open-stage-tradhojd
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: skg-open-stage}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 518400        # 6 d cap; 329 GiB download + inflate + derive, resumable
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: stage
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              T0=$(date -u +%s)
+              echo "=== skg-open-stage-tradhojd — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio inflate64
+              gdalinfo --version
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              export IMINT_GIT_SHA="$(git rev-parse HEAD)"
+              test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
+              echo "${IMINT_SCRIPT_SHA256}  scripts/stage_skg_open.py" | sha256sum -c -
+              echo "HEAD: ${IMINT_GIT_SHA}"
+              df -h /data | tail -1
+              RC=0
+              python scripts/stage_skg_open.py --dest /data/skg_open \
+                --products tradhojd --counties ${COUNTIES} \
+                --drop-raw --min-free-gib "${MIN_FREE_GIB}" || RC=$?
+              echo "=== manifest summary (stage exit ${RC}) ==="
+              python - <<'PY'
+              import json
+              m = json.load(open("/data/skg_open/MANIFEST.json"))
+              th = {k: v for k, v in m["derived"].items() if k.startswith("tradhojd/tradhojd_10m_")}
+              dropped = sorted(n for n, r in m["files"].items() if n.startswith("sksTradhojd") and r.get("raw_deleted_at"))
+              kept = sorted(n for n, r in m["files"].items() if n.startswith("sksTradhojd") and not r.get("raw_deleted_at"))
+              print(f"tradhojd counties derived {len(th)}: {sorted(k[-6:-4] for k in th)}")
+              print(f"tradhojd derived {sum(r['bytes'] for r in th.values()) / 2**30:.2f} GiB; raw deleted {len(dropped)}, raw still on disk {kept}")
+              print(f"tradhojd vrt sources: {len(m['vrt'].get('tradhojd/tradhojd_10m.vrt', {}).get('sources', []))}")
+              PY
+              du -sh /data/skg_open/tradhojd /data/skg_open/raw 2>/dev/null || true
+              df -h /data | tail -1
+              echo "runtime: $(( ($(date -u +%s) - T0) / 60 )) min"
+              echo "=== done: $(date -u) ==="
+              exit ${RC}
+          env:
+            - {name: IMINT_COMMIT, value: "8e82c149fc2b8cb63e2ebc498cef97439fec8b80"}
+            - {name: IMINT_SCRIPT_SHA256, value: "072e73d167a7019d40ca4e3c631bce6f9bccca7c96d9972673f065d0029da386"}
+            - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
+            - {name: MIN_FREE_GIB, value: "50"}
+            - {name: GDAL_CACHEMAX, value: "512"}
+          resources:
+            requests: {cpu: "4", memory: "24Gi"}
+            limits: {cpu: "4", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
