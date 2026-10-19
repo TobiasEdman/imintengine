@@ -418,16 +418,62 @@ def derive_tradhojd_10m(src: str, out: Path, stat: str) -> dict:
                 "crs": "EPSG:3006", "transform": from_origin(west, north, 10, 10), "nodata": -1,
                 "tiled": True, "blockxsize": 512, "blockysize": 512, "compress": "DEFLATE",
                 "predictor": 2, "BIGTIFF": "IF_SAFER"}
+        src_bounds = [float(v) for v in ds.bounds]
         rows_per_chunk = 10 * 64
+        vmin, vmax, n_valid = None, None, 0
         with rasterio.open(out, "w", **prof) as dst:
             for r in range(0, ds.height, rows_per_chunk):
                 n = min(rows_per_chunk, ds.height - r)
                 block = ds.read(1, window=Window(0, r, ds.width, n))
-                dst.write(block_stat(block, stat, nod), 1, window=Window(0, r // 10, ow, n // 10))
+                reduced = block_stat(block, stat, nod)
+                dst.write(reduced, 1, window=Window(0, r // 10, ow, n // 10))
+                valid = reduced[reduced != -1]
+                if valid.size:
+                    n_valid += int(valid.size)
+                    lo, hi = int(valid.min()), int(valid.max())
+                    vmin = lo if vmin is None else min(vmin, lo)
+                    vmax = hi if vmax is None else max(vmax, hi)
+    rec = {"width": ow, "height": oh, "res_m": 10.0, "nodata": -1, "dtype": "int16",
+           "bounds": src_bounds, "statistic": stat,
+           "value_min_dm": vmin, "value_max_dm": vmax, "valid_cells": n_valid}
+    return {**rec, **verify_tradhojd_10m(out, rec)}
+
+
+#: Plausible range of a 10 m tree-height statistic, dm. Swedish trees stay
+#: below ~50 m; the bound only catches decoding garbage, not tall trees.
+TRADHOJD_RANGE_DM = (0, 1000)
+
+
+def verify_tradhojd_10m(out: Path, expected: dict) -> dict:
+    """Re-open the derived raster and check it against what the derivation
+    expected before the raw zip may be deleted: readable, EPSG:3006, int16,
+    nodata -1, 10 m, the source's exact extent, at least one valid cell and
+    a plausible value range. Raises on any mismatch."""
+    import numpy as np
+    import rasterio
+    from rasterio.windows import Window
+
     with rasterio.open(out) as b:
-        return {"width": b.width, "height": b.height, "res_m": 10.0, "nodata": b.nodata,
-                "dtype": b.dtypes[0], "bounds": [float(v) for v in b.bounds],
-                "blocks": list(b.block_shapes[0]), "statistic": stat}
+        if b.crs is None or b.crs.to_epsg() != 3006:
+            raise ValueError(f"{out}: CRS {b.crs} is not EPSG:3006")
+        if b.dtypes[0] != "int16" or b.nodata != -1 or b.res != (10.0, 10.0):
+            raise ValueError(f"{out}: expected int16, nodata -1, 10 m; got {b.dtypes[0]}, {b.nodata}, {b.res}")
+        if (b.width, b.height) != (expected["width"], expected["height"]):
+            raise ValueError(f"{out}: size {b.width}x{b.height}, expected {expected['width']}x{expected['height']}")
+        bounds = [float(v) for v in b.bounds]
+        if bounds != expected["bounds"]:
+            raise ValueError(f"{out}: extent {bounds} differs from the source {expected['bounds']}")
+        n = 512
+        for r, c in [(0, 0), (max(0, b.height - n), max(0, b.width - n)),
+                     (max(0, b.height // 2 - n // 2), max(0, b.width // 2 - n // 2))]:
+            b.read(1, window=Window(c, r, min(n, b.width - c), min(n, b.height - r)))   # readable
+    if not expected["valid_cells"]:
+        raise ValueError(f"{out}: no valid cell")
+    lo, hi = TRADHOJD_RANGE_DM
+    if not (lo <= expected["value_min_dm"] <= expected["value_max_dm"] <= hi):
+        raise ValueError(f"{out}: values {expected['value_min_dm']}..{expected['value_max_dm']} dm "
+                         f"outside the plausible {lo}..{hi} dm")
+    return {"verified": True, "verified_windows": 3}
 
 
 def verify_cog(src: str, cog: Path, *, lossless: bool) -> dict:
@@ -524,6 +570,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="when a re-downloaded zip no longer matches its recorded sha256, record the "
                         "new digest (old kept under superseded_sha256) and re-derive instead of stopping")
     p.add_argument("--work-dir", type=Path, default=None, help="scratch for Deflate64 inflation (default <dest>/_work)")
+    p.add_argument("--min-free-gib", type=float, default=0.0,
+                   help="stop cleanly, before a download, if free space after it would fall below this")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
 
@@ -546,6 +594,7 @@ def main(argv: list[str] | None = None) -> int:
     save_manifest(dest, manifest)
 
     done = skipped = 0
+    stopped = None
     for it in items:
         if is_done(it, manifest, dest):
             skipped += 1
@@ -553,7 +602,18 @@ def main(argv: list[str] | None = None) -> int:
         t0 = time.time()
         raw = dest / "raw" / it.name
         rec = manifest["files"].get(it.name) or {}
+        if args.drop_raw and it.product == "tradhojd":
+            others = sorted(q.name for q in (dest / "raw").glob("sksTradhojd*.zip") if q.name != it.name)
+            if others:
+                raise RuntimeError(f"refusing {it.name}: raw Trädhöjd zips still on disk {others}; "
+                                   "one county at a time")
         if not rec.get("sha256") or not raw.exists():
+            free = shutil.disk_usage(dest).free
+            if (free - index[it.name]["bytes"]) / 2**30 < args.min_free_gib:
+                stopped = (f"STOP before {it.name}: {free / 2**30:.1f} GiB free, the download needs "
+                           f"{index[it.name]['bytes'] / 2**30:.1f} GiB, floor {args.min_free_gib:.0f} GiB")
+                print(stopped, flush=True)
+                break
             print(f"[{done + skipped + 1}/{len(items)}] download {it.name} ({index[it.name]['bytes'] / 2**20:.0f} MiB)", flush=True)
             dl = download(args.source_url + urllib.parse.quote(it.name), raw, index[it.name]["bytes"])
             new_sha = sha256_of(raw)
@@ -569,14 +629,28 @@ def main(argv: list[str] | None = None) -> int:
                 manifest["derived"].pop(it.derived, None)      # must be re-derived from the new bytes
             manifest["files"][it.name] = rec
             save_manifest(dest, manifest)
+        info = zip_tif_entry(raw)
+        if info.compress_type == ZIP_DEFLATE64:            # inflated to a work file of this size first
+            free = shutil.disk_usage(dest).free
+            if (free - info.file_size) / 2**30 < args.min_free_gib:
+                stopped = (f"STOP before inflating {it.name}: {free / 2**30:.1f} GiB free, inflation needs "
+                           f"{info.file_size / 2**30:.1f} GiB, floor {args.min_free_gib:.0f} GiB "
+                           "(the raw zip stays recorded; a re-run resumes here)")
+                print(stopped, flush=True)
+                break
         print(f"    convert -> {it.derived}", flush=True)
         manifest["derived"][it.derived] = convert(it, raw, dest / it.derived, work, args.tradhojd_method)
+        save_manifest(dest, manifest)              # the verified derivation is on record first
         if args.drop_raw and it.product == "tradhojd":
             raw.unlink()
             manifest["files"][it.name]["raw_deleted_at"] = _now()
-        save_manifest(dest, manifest)
+            save_manifest(dest, manifest)
+            # the mosaic always matches what is staged, even if a later county stops the run
+            vrt = "tradhojd/tradhojd_10m.vrt"
+            manifest["vrt"][vrt] = build_vrt(dest, vrt, staged_vrt_sources(manifest, dest, vrt), *vrt_nodata(vrt))
+            save_manifest(dest, manifest)
         done += 1
-        print(f"    done in {time.time() - t0:.0f}s", flush=True)
+        print(f"    done in {time.time() - t0:.0f}s; free {shutil.disk_usage(dest).free / 2**30:.1f} GiB", flush=True)
 
     for vrt in vrt_targets(items):
         rasters = staged_vrt_sources(manifest, dest, vrt)
@@ -586,6 +660,9 @@ def main(argv: list[str] | None = None) -> int:
     staged = sum(r["bytes"] for r in manifest["files"].values() if not r.get("raw_deleted_at"))
     derived = sum(r["bytes"] for r in manifest["derived"].values())
     print(f"converted {done}, skipped {skipped}; raw {staged / 2**30:.1f} GiB, derived {derived / 2**30:.1f} GiB", flush=True)
+    if stopped:
+        print(stopped, flush=True)
+        return 3
     return 0
 
 

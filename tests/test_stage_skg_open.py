@@ -326,3 +326,129 @@ def test_manifest_archives_never_overwrite_each_other(tmp_path, monkeypatch):
     archived = sorted(tmp_path.glob("MANIFEST.superseded-*.json"))
     assert len(archived) == 5
     assert {json.loads(p.read_text())["files"]["a.zip"]["sha256"][0] for p in archived} >= {"a", "b"}
+
+
+# ---- Trädhöjd one county at a time, verify before delete (decision 2026-10-19) ----
+
+def _tradhojd_src(tmp_path, value=50):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    src = tmp_path / "t.tif"
+    data = np.full((200, 300), value, dtype=np.int16)
+    with rasterio.open(src, "w", driver="GTiff", width=300, height=200, count=1, dtype="int16",
+                       crs="EPSG:3006", transform=from_origin(460000, 6270000, 1, 1), nodata=-1) as d:
+        d.write(data, 1)
+    return src
+
+
+def test_derivation_records_its_value_range_and_verifies_against_the_source(tmp_path):
+    rec = st.derive_tradhojd_10m(str(_tradhojd_src(tmp_path)), tmp_path / "out.tif", "p90")
+    assert rec["verified"] and (rec["value_min_dm"], rec["value_max_dm"], rec["valid_cells"]) == (50, 50, 600)
+    assert rec["bounds"] == [460000.0, 6269800.0, 460300.0, 6270000.0]
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"bounds": [0.0, 0.0, 1.0, 1.0]}, "differs from the source"),
+    ({"width": 31}, "size"),
+    ({"value_max_dm": 5000}, "outside the plausible"),
+    ({"value_min_dm": -5}, "outside the plausible"),
+    ({"valid_cells": 0}, "no valid cell"),
+])
+def test_verification_refuses_a_derived_raster_that_does_not_match(tmp_path, change, message):
+    rec = st.derive_tradhojd_10m(str(_tradhojd_src(tmp_path)), tmp_path / "out.tif", "p90")
+    expected = {k: rec[k] for k in ("width", "height", "bounds", "value_min_dm", "value_max_dm", "valid_cells")}
+    with pytest.raises(ValueError, match=message):
+        st.verify_tradhojd_10m(tmp_path / "out.tif", {**expected, **change})
+
+
+def test_garbage_values_fail_the_derivation_before_any_delete(tmp_path):
+    with pytest.raises(ValueError, match="outside the plausible"):
+        st.derive_tradhojd_10m(str(_tradhojd_src(tmp_path, value=20000)), tmp_path / "out.tif", "p90")
+
+
+class _Index:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return INDEX.encode()
+
+
+def _staging(monkeypatch, tmp_path, free_gib=1000.0):
+    """main() offline: the index page, a fake download writing the zip, a fake verified conversion."""
+    monkeypatch.setenv("IMINT_GIT_SHA", "abc")
+    monkeypatch.setattr(st, "_request", lambda *a, **k: _Index())
+    monkeypatch.setattr(st.shutil, "disk_usage", lambda p: shutil._ntuple_diskusage(0, 0, int(free_gib * 2**30)))
+    calls = []
+
+    def download(url, target, expected, **kw):
+        calls.append(("download", target.name))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"zip")
+        return {}
+
+    def convert(item, zpath, out, work, method):
+        calls.append(("convert", item.name))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"tif")
+        return {"sha256": "d" * 64, "bytes": 3, "verified": True}
+
+    snapshots = []
+    real_save = st.save_manifest
+
+    def save(dest, manifest):
+        snapshots.append(json.loads(json.dumps(manifest)))
+        real_save(dest, manifest)
+
+    monkeypatch.setattr(st, "download", download)
+    monkeypatch.setattr(st, "convert", convert)
+    monkeypatch.setattr(st, "save_manifest", save)
+    monkeypatch.setattr(st, "build_vrt", lambda dest, vrt, rasters, *a: {"sources": rasters})
+    small = zipfile.ZipInfo("Tradhojd01.tif")
+    small.compress_type, small.file_size = st.ZIP_DEFLATE, 3
+    monkeypatch.setattr(st, "zip_tif_entry", lambda z: small)
+    return calls, snapshots
+
+
+def test_the_derivation_is_on_record_before_the_raw_zip_is_deleted(monkeypatch, tmp_path):
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    code = st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01",
+                    "--drop-raw", "--min-free-gib", "50"])
+    assert code == 0 and calls == [("download", "sksTradhojd01.zip"), ("convert", "sksTradhojd01.zip")]
+    assert not (tmp_path / "m/raw/sksTradhojd01.zip").exists()
+    first_deleted = next(i for i, m in enumerate(snaps) if m["files"].get("sksTradhojd01.zip", {}).get("raw_deleted_at"))
+    assert "tradhojd/tradhojd_10m_01.tif" in snaps[first_deleted - 1]["derived"]
+    rec = snaps[-1]["files"]["sksTradhojd01.zip"]
+    assert rec["sha256"] and rec["bytes"] == 3 and rec["url"].endswith("sksTradhojd01.zip") and rec["downloaded_at"]
+    assert snaps[-1]["vrt"]["tradhojd/tradhojd_10m.vrt"]["sources"] == ["tradhojd/tradhojd_10m_01.tif"]
+
+
+def test_a_free_space_floor_stops_before_the_download(monkeypatch, tmp_path):
+    calls, _ = _staging(monkeypatch, tmp_path, free_gib=55.0)        # 6.1 GiB zip would leave < 50
+    code = st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01",
+                    "--drop-raw", "--min-free-gib", "50"])
+    assert code == 3 and calls == []
+
+
+def test_another_countys_raw_zip_on_disk_refuses_the_next_county(monkeypatch, tmp_path):
+    calls, _ = _staging(monkeypatch, tmp_path)
+    (tmp_path / "m/raw").mkdir(parents=True)
+    (tmp_path / "m/raw/sksTradhojd03.zip").write_bytes(b"left over")
+    with pytest.raises(RuntimeError, match="one county at a time"):
+        st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
+    assert calls == []
+
+
+def test_the_floor_also_covers_inflating_a_deflate64_zip(monkeypatch, tmp_path):
+    calls, _ = _staging(monkeypatch, tmp_path, free_gib=60.0)       # the zip itself fits above 50
+    big = zipfile.ZipInfo("Tradhojd01.tif")
+    big.compress_type, big.file_size = st.ZIP_DEFLATE64, 20 * 2**30   # but inflating it would not
+    monkeypatch.setattr(st, "zip_tif_entry", lambda z: big)
+    code = st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01",
+                    "--drop-raw", "--min-free-gib", "50"])
+    assert code == 3 and calls == [("download", "sksTradhojd01.zip")]
+    assert (tmp_path / "m/raw/sksTradhojd01.zip").exists()           # kept for the resumed run
