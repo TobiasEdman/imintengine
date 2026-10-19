@@ -42,7 +42,9 @@ import html
 import json
 import os
 import re
+import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -568,23 +570,43 @@ def manifest_lock(dest: Path, owner: str):
     The manifest is loaded once and rewritten whole, so two writers would
     erase each other's records (review N6 on #85, B2 on #86; Tobias chose
     this lock on 2026-10-19). It is taken before the first read and held
-    past the last save; the file is created with O_CREAT | O_EXCL and
-    removed when the writer returns or raises. A writer killed by a signal
-    leaves it behind: clear it by hand, only after confirming that no Job
-    is ACTIVE."""
+    past the last save; the file is created with O_CREAT | O_EXCL.
+
+    SIGTERM (Kubernetes' deadline, eviction or delete) is turned into
+    ``SystemExit(143)`` while the lock is held, so the lock is released on
+    every stop except SIGKILL or the OOM killer. The file carries a random
+    token and is removed only if it still holds this writer's token, so a
+    writer never removes a lock another writer took after this one's was
+    cleared by hand. A stale lock is cleared by hand, only after confirming
+    that no Job is ACTIVE."""
     dest.mkdir(parents=True, exist_ok=True)
     path = dest / LOCK_NAME
+    record = json.dumps({"owner": owner, "since": _now(), "host": os.uname().nodename,
+                         "pid": os.getpid(), "token": secrets.token_hex(16)})
+    previous = signal.signal(signal.SIGTERM, _exit_on_sigterm)
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    except FileExistsError:
-        raise ManifestLocked(f"REFUSING: {path} exists ({path.read_text().strip()}); another writer holds the "
-                             "mirror manifest. Remove it by hand only if no stage or drop Job is running.") from None
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps({"owner": owner, "since": _now(), "host": os.uname().nodename}))
-    try:
-        yield
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            raise ManifestLocked(f"REFUSING: {path} exists ({path.read_text().strip()}); another writer holds "
+                                 "the mirror manifest. Remove it by hand only if no stage or drop Job is "
+                                 "running.") from None
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(record)
+            yield
+        finally:
+            try:
+                if path.read_text() == record:
+                    path.unlink()
+            except FileNotFoundError:
+                pass
     finally:
-        path.unlink(missing_ok=True)
+        signal.signal(signal.SIGTERM, previous)
+
+
+def _exit_on_sigterm(signum, frame):
+    raise SystemExit(128 + signum)
 
 
 def main(argv: list[str] | None = None) -> int:

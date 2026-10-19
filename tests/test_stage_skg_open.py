@@ -6,8 +6,13 @@ from __future__ import annotations
 import hashlib
 import http.server
 import json
+import os
 import shutil
+import signal
+import subprocess
+import sys
 import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -542,3 +547,35 @@ def test_a_dry_run_takes_no_lock(monkeypatch, tmp_path):
     dest.mkdir()
     (dest / st.LOCK_NAME).write_text('{"owner": "other"}')
     assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--dry-run"]) == 0
+
+
+def test_sigterm_releases_the_lock_and_restores_the_handler(tmp_path):
+    previous = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(SystemExit) as exc:
+        with st.manifest_lock(tmp_path, "stage_skg_open"):
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(1)                                               # the handler raises before this ends
+    assert exc.value.code == 143
+    assert not (tmp_path / st.LOCK_NAME).exists()
+    assert signal.getsignal(signal.SIGTERM) is previous
+
+
+def test_a_pod_stopped_with_sigterm_leaves_no_lock(tmp_path):
+    code = ("import sys, time; from pathlib import Path; from scripts import stage_skg_open as st\n"
+            "with st.manifest_lock(Path(sys.argv[1]), 'stage_skg_open'):\n    time.sleep(60)\n")
+    proc = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], cwd=Path(st.__file__).parents[1])
+    deadline = time.monotonic() + 30
+    while not (tmp_path / st.LOCK_NAME).exists():
+        assert time.monotonic() < deadline and proc.poll() is None
+        time.sleep(0.05)
+    proc.send_signal(signal.SIGTERM)
+    assert proc.wait(timeout=30) == 143
+    assert not (tmp_path / st.LOCK_NAME).exists()
+
+
+def test_a_writer_never_removes_a_lock_that_is_no_longer_its_own(tmp_path):
+    lock = tmp_path / st.LOCK_NAME
+    with st.manifest_lock(tmp_path, "stage_skg_open"):
+        lock.unlink()                                                   # cleared by hand as stale ...
+        lock.write_text('{"owner": "drop_skg_open_raw", "token": "other"}')   # ... and taken by another writer
+    assert lock.read_text() == '{"owner": "drop_skg_open_raw", "token": "other"}'
