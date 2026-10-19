@@ -100,8 +100,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "8e82c149fc2b8cb63e2ebc498cef97439fec8b80"}
-            - {name: IMINT_SCRIPT_SHA256, value: "072e73d167a7019d40ca4e3c631bce6f9bccca7c96d9972673f065d0029da386"}
+            - {name: IMINT_COMMIT, value: "3575efaa3dfe95b1cf0899509e2dc5590c0acdfe"}
+            - {name: IMINT_SCRIPT_SHA256, value: "96f0f20701919381bd3cbe113bb7e38ae3c02350dd7961ffea315cee10ec9d0c"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
             - {name: GDAL_CACHEMAX, value: "512"}
