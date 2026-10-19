@@ -36,6 +36,7 @@ Dry run (plan + sizes only, no writes)::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import html
 import json
@@ -553,7 +554,51 @@ def build_vrt(dest: Path, vrt: str, rasters: list[str], srcnodata: int, vrtnodat
 
 # ── main ────────────────────────────────────────────────────────────────────
 
+LOCK_NAME = "MANIFEST.lock"
+
+
+class ManifestLocked(RuntimeError):
+    """Another writer holds the mirror's MANIFEST.json."""
+
+
+@contextlib.contextmanager
+def manifest_lock(dest: Path, owner: str):
+    """Exclusive lock for every writer of ``<dest>/MANIFEST.json``.
+
+    The manifest is loaded once and rewritten whole, so two writers would
+    erase each other's records (review N6 on #85, B2 on #86; Tobias chose
+    this lock on 2026-10-19). It is taken before the first read and held
+    past the last save; the file is created with O_CREAT | O_EXCL and
+    removed when the writer returns or raises. A writer killed by a signal
+    leaves it behind: clear it by hand, only after confirming that no Job
+    is ACTIVE."""
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / LOCK_NAME
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        raise ManifestLocked(f"REFUSING: {path} exists ({path.read_text().strip()}); another writer holds the "
+                             "mirror manifest. Remove it by hand only if no stage or drop Job is running.") from None
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({"owner": owner, "since": _now(), "host": os.uname().nodename}))
+    try:
+        yield
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--dest", type=Path)
+    pre.add_argument("--dry-run", action="store_true")
+    known, _ = pre.parse_known_args(argv)
+    if known.dest is None or known.dry_run:
+        return _main(argv)
+    with manifest_lock(known.dest, "stage_skg_open"):
+        return _main(argv)
+
+
+def _main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dest", type=Path, required=True)
     p.add_argument("--products", nargs="+", default=["grunddata", "markfukt"],

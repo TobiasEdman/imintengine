@@ -498,3 +498,47 @@ def test_the_one_county_guard_also_sees_partial_and_superseded_files(monkeypatch
     with pytest.raises(RuntimeError, match="one county at a time"):
         st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
     assert calls == []
+
+
+def test_a_held_manifest_lock_refuses_before_any_download(monkeypatch, tmp_path):
+    calls, _ = _staging(monkeypatch, tmp_path)
+    dest = tmp_path / "m"
+    dest.mkdir()
+    (dest / st.LOCK_NAME).write_text('{"owner": "drop_skg_open_raw"}')
+    with pytest.raises(st.ManifestLocked, match="drop_skg_open_raw"):
+        st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
+    assert calls == [] and not (dest / "MANIFEST.json").exists()
+    assert (dest / st.LOCK_NAME).exists()                               # another writer's lock is left alone
+
+
+def test_the_lock_is_held_from_the_first_read_to_the_last_save_then_released(monkeypatch, tmp_path):
+    _staging(monkeypatch, tmp_path)
+    dest = tmp_path / "m"
+    held = []
+    real_load, real_save = st.load_manifest, st.save_manifest
+    monkeypatch.setattr(st, "load_manifest", lambda d: held.append((d / st.LOCK_NAME).exists()) or real_load(d))
+    monkeypatch.setattr(st, "save_manifest", lambda d, m: held.append((d / st.LOCK_NAME).exists()) or real_save(d, m))
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert len(held) > 2 and all(held)
+    assert not (dest / st.LOCK_NAME).exists()
+
+
+def test_a_floor_stop_and_a_crash_both_release_the_lock(monkeypatch, tmp_path):
+    _staging(monkeypatch, tmp_path, free_gib=55.0)
+    dest = tmp_path / "m"
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01",
+                    "--drop-raw", "--min-free-gib", "50"]) == 3
+    assert not (dest / st.LOCK_NAME).exists()
+    monkeypatch.setattr(st, "download", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt))
+    monkeypatch.setattr(st.shutil, "disk_usage", lambda p: shutil._ntuple_diskusage(0, 0, 1000 * 2**30))
+    with pytest.raises(KeyboardInterrupt):
+        st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
+    assert not (dest / st.LOCK_NAME).exists()
+
+
+def test_a_dry_run_takes_no_lock(monkeypatch, tmp_path):
+    _staging(monkeypatch, tmp_path)
+    dest = tmp_path / "m"
+    dest.mkdir()
+    (dest / st.LOCK_NAME).write_text('{"owner": "other"}')
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--dry-run"]) == 0
