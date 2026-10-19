@@ -47,7 +47,9 @@ markfukt ``65535 → 0``) so stored tiles and new tiles agree.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -187,15 +189,91 @@ def read_markfukt(west: float, south: float, east: float, north: float,
     return arr.astype(np.uint8)
 
 
+def _manifest() -> dict:
+    return json.loads(_require(mirror_dir() / "MANIFEST.json", "mirror manifest").read_text())
+
+
+def _county_rasters(manifest: dict, prefix: str) -> dict[str, Path]:
+    """``{county: path}`` of the derived rasters recorded under ``prefix`` and on disk."""
+    pat = re.compile(re.escape(prefix) + r"(\d{2})\.tif")
+    out = {}
+    for rel in manifest.get("derived", {}):
+        m = pat.fullmatch(rel)
+        if m and (mirror_dir() / rel).exists():
+            out[m.group(1)] = mirror_dir() / rel
+    return out
+
+
+#: Per-county rasters whose valid pixels mark the county polygon, with the
+#: values that are not inside it. Neither alone is a complete mask: measured
+#: 2026-10-19 on the 230 NFI top-up tiles, markfukt misses four tiles that
+#: grunddata places in counties 01 and 03, and grunddata misses one that
+#: markfukt places in 25. Their union gave every tile a county.
+COUNTY_MASKS = (("grunddata/omdrev2/volym_", (GRUNDDATA_NODATA,)),
+                ("markfukt/markfukt_", (255, MARKFUKT_NODATA)))
+TRADHOJD_VRT = "tradhojd/tradhojd_10m.vrt"
+TRADHOJD_PREFIX = "tradhojd/tradhojd_10m_"
+
+
+def staged_tradhojd_counties(manifest: dict) -> set[str]:
+    """Counties in the recorded Trädhöjd mosaic. The manifest records the
+    VRT's sources only after the VRT is written, so a county counts as staged
+    only once the mosaic the reader opens actually contains it."""
+    pat = re.compile(re.escape(TRADHOJD_PREFIX) + r"(\d{2})\.tif")
+    sources = manifest.get("vrt", {}).get(TRADHOJD_VRT, {}).get("sources", [])
+    return {m.group(1) for s in sources if (m := pat.fullmatch(s)) and (mirror_dir() / s).exists()}
+
+
+def counties_in_window(west: float, south: float, east: float, north: float,
+                       manifest: dict | None = None) -> set[str]:
+    """Counties with a valid pixel inside the bbox in any county mask."""
+    import rasterio
+    from rasterio.windows import from_bounds
+
+    manifest = manifest or _manifest()
+    found = set()
+    for prefix, invalid in COUNTY_MASKS:
+        for county, path in _county_rasters(manifest, prefix).items():
+            if county in found:
+                continue
+            with rasterio.open(path) as ds:
+                b = ds.bounds
+                if east <= b.left or west >= b.right or north <= b.bottom or south >= b.top:
+                    continue
+                win = from_bounds(max(west, b.left), max(south, b.bottom), min(east, b.right),
+                                  min(north, b.top), ds.transform)
+                a = ds.read(1, window=win)
+                if a.size and bool((~np.isin(a, invalid)).any()):
+                    found.add(county)
+    return found
+
+
 def read_tradhojd(west: float, south: float, east: float, north: float,
                   *, size_px: int | tuple[int, int]) -> np.ndarray:
     """Tree height in decimetres at 10 m (the staged ``tradhojd_10m`` product),
-    float32, nodata → 0, negatives clipped to 0."""
+    float32, nodata → 0, negatives clipped to 0.
+
+    Trädhöjd is staged county by county, so its mosaic can lack counties. A
+    window is read only when every county it lies in (by the grunddata county
+    mask) is staged; otherwise, or when no county covers it, this raises
+    :class:`SkgMirrorMissingError` instead of returning the mosaic's nodata
+    as zeros."""
     from rasterio.enums import Resampling
 
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
     check_bbox(west, south, east, north, h_px, w_px)
     path = _require(tradhojd_path(), "Skogsstyrelsen trädhöjd")
+    manifest = _manifest()
+    need = counties_in_window(west, south, east, north, manifest)
+    if not need:
+        raise SkgMirrorMissingError(
+            f"trädhöjd: no county's grunddata covers bbox ({west}, {south}, {east}, {north}); "
+            "its coverage cannot be confirmed")
+    missing = need - staged_tradhojd_counties(manifest)
+    if missing:
+        raise SkgMirrorMissingError(
+            f"trädhöjd: county {sorted(missing)} is not staged for bbox ({west}, {south}, {east}, {north}); "
+            "stage it with scripts/stage_skg_open.py --products tradhojd")
     arr = _read_window(path, west, south, east, north, (h_px, w_px),
                        resampling=Resampling.nearest, fill=TRADHOJD_NODATA)
     data = arr.astype(np.float32)

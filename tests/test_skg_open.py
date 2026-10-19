@@ -42,7 +42,19 @@ def mirror(monkeypatch, tmp_path: Path):
     th[:4, :] = -1
     th[10, 10] = -3                   # negative garbage is clipped like before
     write_raster(tmp_path / "tradhojd" / "tradhojd_10m.vrt", th, W, N, 10.0, nodata=-1)
+    # the real mirror's per-county rasters and manifest: county 01 holds the tile
+    write_raster(g / "omdrev2" / "volym_01.tif", om2, W - 100, N + 100, 10.0, nodata=-1)
+    write_raster(tmp_path / "tradhojd" / "tradhojd_10m_01.tif", th, W, N, 10.0, nodata=-1)
+    _write_manifest(tmp_path, ["grunddata/omdrev2/volym_01.tif", "tradhojd/tradhojd_10m_01.tif"])
     return om2, om3
+
+
+def _write_manifest(root: Path, derived: list[str]) -> None:
+    import json
+    th = [d for d in derived if d.startswith("tradhojd/tradhojd_10m_")]
+    (root / "MANIFEST.json").write_text(json.dumps({
+        "files": {}, "derived": {d: {"sha256": "x"} for d in derived},
+        "vrt": {"tradhojd/tradhojd_10m.vrt": {"sources": th}} if th else {}}))
 
 
 def test_newest_omdrev_wins_per_pixel(mirror):
@@ -99,7 +111,7 @@ def test_public_fetchers_share_the_cache_contract(mirror, tmp_path):
     cache = tmp_path / "cache"
     a = skg_grunddata.fetch_volume_tile(W, S, E, N, size_px=PX, cache_dir=cache)
     assert sorted(p.name for p in cache.iterdir()) == [f"volume_{W}_{S}_{E}_{N}.npy"]
-    for p in (tmp_path / "grunddata").iterdir():
+    for p in (tmp_path / "grunddata").glob("*.vrt"):     # the mosaics the reader uses
         p.unlink()
     b = skg_grunddata.fetch_volume_tile(W, S, E, N, size_px=PX, cache_dir=cache)
     np.testing.assert_array_equal(a, b)
@@ -159,3 +171,70 @@ def test_wetland_demo_box_matches_its_pixel_count():
     assert ns["E"] - ns["W"] == ns["N"] - ns["S"] == ns["SIZE_PX"] * 10 == 10_000
     assert is_on_grid(ns["W"], ns["S"], ns["E"], ns["N"])
     assert 500_000 < ns["W"] < 600_000 and 7_100_000 < ns["S"] < 7_200_000
+
+
+# ---- Trädhöjd is staged county by county: the reader must never return an unstaged county as zeros ----
+
+def test_tree_height_in_an_unstaged_county_fails_loud(mirror, tmp_path):
+    _write_manifest(tmp_path, ["grunddata/omdrev2/volym_01.tif"])          # 01 not staged for height
+    with pytest.raises(skg_open.SkgMirrorMissingError, match=r"county \['01'\] is not staged"):
+        skg_open.read_tradhojd(W, S, E, N, size_px=PX)
+
+
+def test_tree_height_outside_every_county_fails_loud(mirror):
+    with pytest.raises(skg_open.SkgMirrorMissingError, match="no county's grunddata covers"):
+        skg_open.read_tradhojd(W + 50_000, S, E + 50_000, N, size_px=PX)
+
+
+def test_a_tile_on_a_county_border_needs_both_counties_staged(mirror, tmp_path):
+    other = np.full((PX, PX), 900, dtype=np.int16)
+    write_raster(tmp_path / "grunddata" / "omdrev2" / "volym_03.tif", other, W + 320, N, 10.0, nodata=-1)
+    _write_manifest(tmp_path, ["grunddata/omdrev2/volym_01.tif", "grunddata/omdrev2/volym_03.tif",
+                               "tradhojd/tradhojd_10m_01.tif"])
+    assert skg_open.counties_in_window(W, S, E, N) == {"01", "03"}
+    with pytest.raises(skg_open.SkgMirrorMissingError, match=r"\['03'\]"):
+        skg_open.read_tradhojd(W, S, E, N, size_px=PX)
+
+
+def test_county_padding_outside_its_polygon_does_not_count(mirror, tmp_path):
+    pad = np.full((PX, PX), -1, dtype=np.int16)                            # all nodata over the tile
+    write_raster(tmp_path / "grunddata" / "omdrev2" / "volym_03.tif", pad, W, N, 10.0, nodata=-1)
+    _write_manifest(tmp_path, ["grunddata/omdrev2/volym_01.tif", "grunddata/omdrev2/volym_03.tif",
+                               "tradhojd/tradhojd_10m_01.tif"])
+    assert skg_open.counties_in_window(W, S, E, N) == {"01"}
+    assert skg_open.read_tradhojd(W, S, E, N, size_px=PX)[20, 20] == 125
+
+
+def test_a_recorded_but_absent_raster_is_not_staged(mirror, tmp_path):
+    (tmp_path / "tradhojd" / "tradhojd_10m_01.tif").unlink()
+    with pytest.raises(skg_open.SkgMirrorMissingError, match="not staged"):
+        skg_open.read_tradhojd(W, S, E, N, size_px=PX)
+
+
+def test_a_county_recorded_as_derived_but_not_yet_in_the_mosaic_is_not_staged(mirror, tmp_path):
+    """Between saving the derivation and rebuilding the VRT the county must still refuse (review B2)."""
+    import json
+    m = json.loads((tmp_path / "MANIFEST.json").read_text())
+    m["vrt"] = {}                                                      # derived recorded, mosaic not yet
+    (tmp_path / "MANIFEST.json").write_text(json.dumps(m))
+    with pytest.raises(skg_open.SkgMirrorMissingError, match="not staged"):
+        skg_open.read_tradhojd(W, S, E, N, size_px=PX)
+
+
+def test_markfukt_completes_the_county_mask_where_grunddata_is_empty(mirror, tmp_path):
+    """Measured 2026-10-19: one top-up tile has no grunddata county but markfukt places it (review Q1)."""
+    mf = np.full((PX * 5, PX * 5), 40, dtype=np.uint16)              # 2 m, all land in county 25
+    write_raster(tmp_path / "markfukt" / "markfukt_25.tif", mf, W + 50_000, N, 2.0, nodata=65535)
+    _write_manifest(tmp_path, ["grunddata/omdrev2/volym_01.tif", "markfukt/markfukt_25.tif",
+                               "tradhojd/tradhojd_10m_01.tif"])
+    assert skg_open.counties_in_window(W + 50_000, S, E + 50_000, N) == {"25"}
+    with pytest.raises(skg_open.SkgMirrorMissingError, match=r"\['25'\] is not staged"):
+        skg_open.read_tradhojd(W + 50_000, S, E + 50_000, N, size_px=PX)
+
+
+def test_markfukt_fill_255_outside_its_county_does_not_count(mirror, tmp_path):
+    mf = np.full((PX * 5, PX * 5), 255, dtype=np.uint16)
+    write_raster(tmp_path / "markfukt" / "markfukt_03.tif", mf, W, N, 2.0, nodata=65535)
+    _write_manifest(tmp_path, ["grunddata/omdrev2/volym_01.tif", "markfukt/markfukt_03.tif",
+                               "tradhojd/tradhojd_10m_01.tif"])
+    assert skg_open.counties_in_window(W, S, E, N) == {"01"}

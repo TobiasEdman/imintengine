@@ -22,6 +22,18 @@
 # IMINT_SCRIPT_SHA256 (sha256 of scripts/stage_skg_open.py at that commit,
 # `git show <sha>:scripts/stage_skg_open.py | sha256sum`); the pod refuses
 # to run if either check fails. Bump both when the script changes.
+#
+# The 2026-10-12 staging run used ce466af (no manifest lock). The pin now
+# points at a commit whose script holds /data/skg_open/MANIFEST.lock from its
+# first manifest read to its last save, so a re-apply can no longer erase the
+# records of a Trädhöjd or raw-drop run (review 5571030640, L1). Items whose
+# raw zip was deleted after verification (raw_deleted_at) are skipped. Apply
+# only when no skg-open-stage Job shows ACTIVE > 0 in
+# `kubectl get jobs -l purpose=skg-open-stage`. The original Job object
+# skg-open-stage (failed run 1, 2026-10-12) still exists and a Job's spec is
+# immutable: apply under a new metadata.name (e.g. skg-open-stage-r4).
+# bash forwards SIGTERM to the script (forward_term), so a deadline,
+# eviction or delete releases the lock within terminationGracePeriodSeconds.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -37,6 +49,7 @@ spec:
       labels: {app: fieldtruth-prep}
     spec:
       restartPolicy: Never
+      terminationGracePeriodSeconds: 120   # time for the script to unwind and release MANIFEST.lock
       automountServiceAccountToken: false
       affinity:
         nodeAffinity:
@@ -69,9 +82,25 @@ spec:
               test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
               echo "${IMINT_SCRIPT_SHA256}  scripts/stage_skg_open.py" | sha256sum -c -
               echo "HEAD: ${IMINT_GIT_SHA}"
+              # Kubernetes sends SIGTERM only to PID 1, this bash, which neither
+              # dies from it nor passes it on; the pod would be SIGKILLed after
+              # the grace period with MANIFEST.lock left behind. forward_term
+              # runs the script in the background, forwards TERM to it, waits
+              # for its real exit code (RC) and exits with it if TERM came.
+              forward_term() {
+                "$@" &
+                CHILD=$!
+                trap 'kill -TERM "${CHILD}" 2>/dev/null || true; TERMINATED=1' TERM
+                RC=0
+                wait "${CHILD}" || RC=$?
+                while kill -0 "${CHILD}" 2>/dev/null; do RC=0; wait "${CHILD}" || RC=$?; done
+                trap - TERM
+                if [ "${TERMINATED:-0}" = 1 ]; then exit "${RC}"; fi
+              }
               df -h /data | tail -1
-              python scripts/stage_skg_open.py --dest /data/skg_open \
+              forward_term python scripts/stage_skg_open.py --dest /data/skg_open \
                 --products ${STAGE_PRODUCTS} --omdrev 1 2 3
+              if [ "${RC}" != 0 ]; then exit "${RC}"; fi
               echo "=== manifest summary ==="
               python - <<'PY'
               import json
@@ -85,8 +114,8 @@ spec:
               df -h /data | tail -1
               echo "=== done: $(date -u) ==="
           env:
-            - {name: IMINT_COMMIT, value: "ce466af26516fdaf73d1049c0a7d2877ef3e0ac1"}
-            - {name: IMINT_SCRIPT_SHA256, value: "ae380c177eec3131793ae8777f7cfeb3c928611b9ffd5b824fc5ee90c720ceeb"}
+            - {name: IMINT_COMMIT, value: "1ef10d1b6abb7e2296b13225537734b8e7c30ee9"}
+            - {name: IMINT_SCRIPT_SHA256, value: "5071b098b453add5d3ab93e34ca15d378fa676cb6667fd3ab04f9de0c2c22169"}
             - {name: STAGE_PRODUCTS, value: "grunddata markfukt"}
             # 2026-10-12 run 1 (8Gi, cache 2048 MB) was OOM-killed on the
             # 10.6 GiB markfukt county 23 after 171/174 files: the page cache

@@ -324,3 +324,70 @@ def test_no_nfi_plot_coordinates_tracked() -> None:
         f"(Easting/Northing + plot ids): {offenders}. These are protected "
         f"under SLU terms and the repo is public."
     )
+
+
+# ── manifest-writing skg Jobs forward SIGTERM to their script ──────────────
+# scripts/stage_skg_open.py and scripts/drop_skg_open_raw.py hold
+# /data/skg_open/MANIFEST.lock and release it on SIGTERM. Under
+# `command: [bash, -c]` bash is PID 1: Kubernetes signals only PID 1, and
+# bash as PID 1 neither dies from SIGTERM nor forwards it, so the pod is
+# SIGKILLed after the grace period and the lock stays (review 5571119554).
+
+_LOCKED_SCRIPT = re.compile(r"\bpython3?\s+scripts/(stage_skg_open|drop_skg_open_raw)\.py\b")
+
+
+def _lock_writing_jobs():
+    import yaml
+
+    for path in sorted((REPO / "k8s").glob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not doc or doc.get("kind") != "Job":
+                continue
+            pod = doc["spec"]["template"]["spec"]
+            for c in pod["containers"]:
+                script = "\n".join(c.get("args", []) + c.get("command", []))
+                if _LOCKED_SCRIPT.search(script):
+                    yield path.name, pod, script
+
+
+def _forward_term_body(script: str) -> str:
+    start = script.index("forward_term() {")
+    return script[start:script.index("\n}", start) + 2]
+
+
+def test_every_lock_writing_job_forwards_sigterm_to_its_script() -> None:
+    jobs = list(_lock_writing_jobs())
+    assert {n for n, _, _ in jobs} >= {"skg-open-stage-job.yaml", "skg-open-stage-tradhojd-job.yaml"}
+    for name, pod, script in jobs:
+        assert pod.get("terminationGracePeriodSeconds", 0) >= 60, name
+        body = _forward_term_body(script)
+        assert "trap 'kill -TERM" in body and 'wait "${CHILD}"' in body, name
+        for line in script.splitlines():
+            if _LOCKED_SCRIPT.search(line):
+                assert line.strip().startswith("forward_term python"), (name, line.strip())
+
+
+def test_forward_term_releases_the_lock_when_bash_gets_sigterm(tmp_path) -> None:
+    """Run each Job's forward_term bytes in bash around a lock holder, SIGTERM bash."""
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    holder = ("import sys, time; from pathlib import Path; from scripts import stage_skg_open as st\n"
+              "with st.manifest_lock(Path(sys.argv[1]), 'stage_skg_open'):\n    time.sleep(60)\n")
+    for name, _, script in _lock_writing_jobs():
+        dest = tmp_path / name
+        program = ("set -euo pipefail\n" + _forward_term_body(script) + "\n"
+                   f'forward_term "{sys.executable}" -c "$HOLDER" "{dest}"\necho "survived TERM"\n')
+        proc = subprocess.Popen(["bash", "-c", program], cwd=REPO, env={"HOLDER": holder, "PATH": "/usr/bin:/bin"},
+                                stdout=subprocess.PIPE, text=True)
+        deadline = time.monotonic() + 30
+        while not (dest / "MANIFEST.lock").exists():
+            assert time.monotonic() < deadline and proc.poll() is None, name
+            time.sleep(0.05)
+        proc.send_signal(signal.SIGTERM)
+        out, _ = proc.communicate(timeout=30)
+        assert proc.returncode == 143, (name, proc.returncode)
+        assert "survived TERM" not in out, name
+        assert not (dest / "MANIFEST.lock").exists(), name
