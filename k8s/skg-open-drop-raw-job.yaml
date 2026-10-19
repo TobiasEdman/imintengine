@@ -17,7 +17,9 @@
 # it also refuses to save if the manifest changes under it. Apply only when
 # no skg-open-stage Job is ACTIVE: `kubectl get jobs -l purpose=skg-open-stage`
 # must show no Job with ACTIVE > 0. A lock left by a killed pod is removed by
-# hand after that check.
+# hand after that check. bash forwards SIGTERM to the script (forward_term),
+# so the deadline, an eviction or a delete releases the lock within
+# terminationGracePeriodSeconds.
 #
 # Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256; the pod refuses
 # to run if either check fails.
@@ -36,6 +38,7 @@ spec:
       labels: {app: fieldtruth-prep}
     spec:
       restartPolicy: Never
+      terminationGracePeriodSeconds: 120   # time for the script to unwind and release MANIFEST.lock
       automountServiceAccountToken: false
       affinity:
         nodeAffinity:
@@ -65,17 +68,31 @@ spec:
               echo "HEAD: ${IMINT_GIT_SHA}"
               df -h /data | tail -1
               du -sh /data/skg_open/raw 2>/dev/null || true
+              # Kubernetes sends SIGTERM only to PID 1, this bash, which neither
+              # dies from it nor passes it on; the pod would be SIGKILLed after
+              # the grace period with MANIFEST.lock left behind. forward_term
+              # runs the script in the background, forwards TERM to it, waits
+              # for its real exit code (RC) and exits with it if TERM came.
+              forward_term() {
+                "$@" &
+                CHILD=$!
+                trap 'kill -TERM "${CHILD}" 2>/dev/null || true; TERMINATED=1' TERM
+                RC=0
+                wait "${CHILD}" || RC=$?
+                while kill -0 "${CHILD}" 2>/dev/null; do RC=0; wait "${CHILD}" || RC=$?; done
+                trap - TERM
+                if [ "${TERMINATED:-0}" = 1 ]; then exit "${RC}"; fi
+              }
               echo "=== dry run ==="
-              python scripts/drop_skg_open_raw.py --dest /data/skg_open --dry-run || true
+              forward_term python scripts/drop_skg_open_raw.py --dest /data/skg_open --dry-run
               echo "=== delete ==="
-              RC=0
-              python scripts/drop_skg_open_raw.py --dest /data/skg_open || RC=$?
+              forward_term python scripts/drop_skg_open_raw.py --dest /data/skg_open
               du -sh /data/skg_open/raw /data/skg_open/grunddata /data/skg_open/markfukt 2>/dev/null || true
               df -h /data | tail -1
               echo "=== done (exit ${RC}): $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "ec6bf59810a0d0f9b0808549a88f9567e31b4f8d"}
+            - {name: IMINT_COMMIT, value: "ccc45d8bf43e9f101f384d99136d2cdf28762b23"}
             - {name: IMINT_SCRIPT_SHA256, value: "5d58f3cc8c2266b00e87847478e5ff22ad0486cc3ca539545b426fe037eaaa7c"}
           resources:
             requests: {cpu: "2", memory: "4Gi"}

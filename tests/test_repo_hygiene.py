@@ -357,7 +357,8 @@ def _forward_term_body(script: str) -> str:
 
 def test_every_lock_writing_job_forwards_sigterm_to_its_script() -> None:
     jobs = list(_lock_writing_jobs())
-    assert {n for n, _, _ in jobs} >= {"skg-open-stage-job.yaml", "skg-open-stage-tradhojd-job.yaml"}
+    assert {n for n, _, _ in jobs} >= {"skg-open-stage-job.yaml", "skg-open-stage-tradhojd-job.yaml",
+                                       "skg-open-drop-raw-job.yaml"}
     for name, pod, script in jobs:
         assert pod.get("terminationGracePeriodSeconds", 0) >= 60, name
         body = _forward_term_body(script)
