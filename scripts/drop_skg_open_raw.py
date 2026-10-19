@@ -71,13 +71,6 @@ def plan(manifest: dict, dest: Path) -> tuple[list[tuple[str, str]], list[str], 
         if rec.get("product") not in PRODUCTS or rec.get("raw_deleted_at"):
             continue
         raw = dest / "raw" / name
-        if not raw.exists():
-            derived = by_source.get(name, [])
-            if len(derived) == 1:
-                unmarked.append((name, derived[0]))
-            else:
-                refused.append(f"{name}: raw zip absent without a marker and {len(derived)} derived rasters")
-            continue
         if name.startswith("sksTradhojd") or raw.parent != dest / "raw":
             refused.append(f"{name}: not a grunddata/markfukt raw zip")
             continue
@@ -85,10 +78,16 @@ def plan(manifest: dict, dest: Path) -> tuple[list[tuple[str, str]], list[str], 
         if missing:
             refused.append(f"{name}: record lacks {missing}")
             continue
+        derived = by_source.get(name, [])
+        if not raw.exists():
+            if len(derived) == 1:
+                unmarked.append((name, derived[0]))
+            else:
+                refused.append(f"{name}: raw zip absent without a marker and {len(derived)} derived rasters")
+            continue
         if raw.stat().st_size != rec["bytes"]:
             refused.append(f"{name}: {raw.stat().st_size} bytes on disk, {rec['bytes']} recorded")
             continue
-        derived = by_source.get(name, [])
         if len(derived) != 1:
             refused.append(f"{name}: {len(derived)} derived rasters record it as their source")
             continue

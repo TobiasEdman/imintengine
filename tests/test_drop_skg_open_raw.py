@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
+import time
 
 import pytest
 
@@ -158,3 +161,21 @@ def test_a_real_run_records_a_history_entry(tmp_path, monkeypatch):
     dr.main(["--dest", str(d)])
     (h,) = _m(d)["history"]
     assert h["argv"][0] == "drop_skg_open_raw" and h["git_sha"] == "abc" and h["at"]
+
+
+@pytest.mark.parametrize("field", ["sha256", "url", "downloaded_at", "bytes"])
+def test_a_vanished_zip_with_an_incomplete_record_is_refused_not_marked(tmp_path, monkeypatch, field):
+    d = _mirror(tmp_path, monkeypatch)
+    (d / "raw/sksSLUMarkfuktighet01.zip").unlink()
+    m = _m(d); m["files"]["sksSLUMarkfuktighet01.zip"].pop(field); st.save_manifest(d, m)
+    assert dr.main(["--dest", str(d)]) == 2
+    assert not _m(d)["files"]["sksSLUMarkfuktighet01.zip"].get("raw_deleted_at")
+
+
+def test_sigterm_during_the_drop_releases_the_lock(tmp_path, monkeypatch):
+    d = _mirror(tmp_path, monkeypatch)
+    monkeypatch.setattr(dr, "sha256_of", lambda p: os.kill(os.getpid(), signal.SIGTERM) or time.sleep(1))
+    with pytest.raises(SystemExit) as exc:
+        dr.main(["--dest", str(d)])
+    assert exc.value.code == 143 and not (d / st.LOCK_NAME).exists()
+    assert len(list((d / "raw").iterdir())) == 3
