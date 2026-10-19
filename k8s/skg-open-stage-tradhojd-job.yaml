@@ -32,7 +32,9 @@
 # to its last save and refuses to start while another writer holds it (the
 # raw-drop Job takes the same lock). Apply only when no skg-open-stage Job
 # shows ACTIVE > 0 in `kubectl get jobs -l purpose=skg-open-stage`; a lock
-# left by a killed pod is removed by hand after that check.
+# left by a killed pod is removed by hand after that check. bash forwards
+# SIGTERM to the script (forward_term), so the 6-day deadline, an eviction
+# or a delete releases the lock within terminationGracePeriodSeconds.
 #
 # Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256 (`git show
 # <sha>:scripts/stage_skg_open.py | sha256sum`); the pod refuses to run if
@@ -52,6 +54,7 @@ spec:
       labels: {app: fieldtruth-prep}
     spec:
       restartPolicy: Never
+      terminationGracePeriodSeconds: 120   # time for the script to unwind and release MANIFEST.lock
       automountServiceAccountToken: false
       affinity:
         nodeAffinity:
@@ -83,11 +86,25 @@ spec:
               test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
               echo "${IMINT_SCRIPT_SHA256}  scripts/stage_skg_open.py" | sha256sum -c -
               echo "HEAD: ${IMINT_GIT_SHA}"
+              # Kubernetes sends SIGTERM only to PID 1, this bash, which neither
+              # dies from it nor passes it on; the pod would be SIGKILLed after
+              # the grace period with MANIFEST.lock left behind. forward_term
+              # runs the script in the background, forwards TERM to it, waits
+              # for its real exit code (RC) and exits with it if TERM came.
+              forward_term() {
+                "$@" &
+                CHILD=$!
+                trap 'kill -TERM "${CHILD}" 2>/dev/null || true; TERMINATED=1' TERM
+                RC=0
+                wait "${CHILD}" || RC=$?
+                while kill -0 "${CHILD}" 2>/dev/null; do RC=0; wait "${CHILD}" || RC=$?; done
+                trap - TERM
+                if [ "${TERMINATED:-0}" = 1 ]; then exit "${RC}"; fi
+              }
               df -h /data | tail -1
-              RC=0
-              python scripts/stage_skg_open.py --dest /data/skg_open \
+              forward_term python scripts/stage_skg_open.py --dest /data/skg_open \
                 --products tradhojd --counties ${COUNTIES} \
-                --drop-raw --min-free-gib "${MIN_FREE_GIB}" || RC=$?
+                --drop-raw --min-free-gib "${MIN_FREE_GIB}"
               echo "=== manifest summary (stage exit ${RC}) ==="
               python - <<'PY'
               import json
