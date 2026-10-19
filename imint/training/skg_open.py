@@ -47,6 +47,7 @@ markfukt ``65535 → 0``) so stored tiles and new tiles agree.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -141,11 +142,22 @@ def read_grunddata(variable: str, west: float, south: float, east: float,
                    north: float, *, size_px: int | tuple[int, int]) -> np.ndarray:
     """Newest-omdrev-per-pixel mosaic of one grunddata variable, float32,
     nodata (no scanning round has the pixel) → 0, negatives clipped to 0."""
+    out, rounds = _grunddata_mosaic(variable, west, south, east, north, size_px=size_px)
+    data = out.astype(np.float32)
+    data[rounds == 0] = 0.0
+    return np.clip(data, 0.0, None)
+
+
+def _grunddata_mosaic(variable: str, west: float, south: float, east: float,
+                      north: float, *, size_px: int | tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """``(values int16, round int8)``: the newest-omdrev value per pixel and
+    the omdrev it came from (0 where no round has the pixel)."""
     from rasterio.enums import Resampling
 
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
     check_bbox(west, south, east, north, h_px, w_px)
     out = np.full((h_px, w_px), GRUNDDATA_NODATA, dtype=np.int16)
+    rounds = np.zeros((h_px, w_px), dtype=np.int8)
     missing = np.ones((h_px, w_px), dtype=bool)
     found_any = False
     for omdrev in OMDREV_PRIORITY:
@@ -163,12 +175,11 @@ def read_grunddata(variable: str, west: float, south: float, east: float,
                            resampling=resampling, fill=GRUNDDATA_NODATA)
         take = missing & (arr != GRUNDDATA_NODATA)
         out[take] = arr[take]
+        rounds[take] = omdrev
         missing &= ~take
     if not found_any:
         _require(grunddata_path(variable, OMDREV_PRIORITY[1]), f"grunddata {variable}")
-    data = out.astype(np.float32)
-    data[missing] = 0.0
-    return np.clip(data, 0.0, None)
+    return out, rounds
 
 
 def read_markfukt(west: float, south: float, east: float, north: float,
@@ -279,6 +290,42 @@ def read_tradhojd(west: float, south: float, east: float, north: float,
     data = arr.astype(np.float32)
     data[arr == TRADHOJD_NODATA] = 0.0
     return np.clip(data, 0.0, None)
+
+
+def window_provenance(west: float, south: float, east: float, north: float,
+                      *, size_px: int | tuple[int, int]) -> dict:
+    """Which mirror rasters a tile window is read from, for the tile's record.
+
+    The open products are versions of their own (markfukt and height differ
+    from the retired proxies; docs/data/skg_open_mirror.md), so every tile
+    names the county rasters behind its channels: each raster's sha256 and
+    its source zip's name, sha256 and publication date as recorded in
+    MANIFEST.json, the omdrev each grunddata pixel came from, the statistic
+    the 10 m height was derived with, and the manifest's own sha256."""
+    h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
+    manifest_path = _require(mirror_dir() / "MANIFEST.json", "mirror manifest")
+    manifest = json.loads(manifest_path.read_text())
+    counties = sorted(counties_in_window(west, south, east, north, manifest))
+    omdrev_pixels = {}
+    for variable in GRUNDDATA_VARIABLES:
+        _, rounds = _grunddata_mosaic(variable, west, south, east, north, size_px=(h_px, w_px))
+        omdrev_pixels[variable] = {str(r): int((rounds == r).sum()) for r in (*OMDREV_PRIORITY, 0)}
+    wanted = [f"grunddata/omdrev{r}/{v}_{c}.tif" for c in counties for v in GRUNDDATA_VARIABLES
+              for r in OMDREV_PRIORITY if omdrev_pixels[v][str(r)]]
+    wanted += [f"markfukt/markfukt_{c}.tif" for c in counties]
+    wanted += [f"{TRADHOJD_PREFIX}{c}.tif" for c in counties]
+    rasters = {}
+    for rel in wanted:
+        rec = manifest.get("derived", {}).get(rel)
+        if rec is None:
+            continue                        # e.g. omdrev 3 is published for nine counties only
+        src = manifest.get("files", {}).get(rec.get("from", ""), {})
+        rasters[rel] = {"sha256": rec.get("sha256"), "source": rec.get("from"),
+                        "source_sha256": src.get("sha256"), "published": src.get("index_modified"),
+                        **({"statistic": rec["statistic"]} if "statistic" in rec else {})}
+    return {"mirror_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "counties": counties, "grunddata_omdrev_pixels": omdrev_pixels,
+            "rasters": rasters}
 
 
 def _raster_res(path: Path) -> float:
