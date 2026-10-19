@@ -22,6 +22,14 @@
 # IMINT_SCRIPT_SHA256 (sha256 of scripts/stage_skg_open.py at that commit,
 # `git show <sha>:scripts/stage_skg_open.py | sha256sum`); the pod refuses
 # to run if either check fails. Bump both when the script changes.
+#
+# The 2026-10-12 staging run used ce466af (no manifest lock). The pin now
+# points at a commit whose script holds /data/skg_open/MANIFEST.lock from its
+# first manifest read to its last save, so a re-apply can no longer erase the
+# records of a Trädhöjd or raw-drop run (review 5571030640, L1). Items whose
+# raw zip was deleted after verification (raw_deleted_at) are skipped. Apply
+# only when no skg-open-stage Job shows ACTIVE > 0 in
+# `kubectl get jobs -l purpose=skg-open-stage`.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -85,8 +93,8 @@ spec:
               df -h /data | tail -1
               echo "=== done: $(date -u) ==="
           env:
-            - {name: IMINT_COMMIT, value: "ce466af26516fdaf73d1049c0a7d2877ef3e0ac1"}
-            - {name: IMINT_SCRIPT_SHA256, value: "ae380c177eec3131793ae8777f7cfeb3c928611b9ffd5b824fc5ee90c720ceeb"}
+            - {name: IMINT_COMMIT, value: "1ef10d1b6abb7e2296b13225537734b8e7c30ee9"}
+            - {name: IMINT_SCRIPT_SHA256, value: "5071b098b453add5d3ab93e34ca15d378fa676cb6667fd3ab04f9de0c2c22169"}
             - {name: STAGE_PRODUCTS, value: "grunddata markfukt"}
             # 2026-10-12 run 1 (8Gi, cache 2048 MB) was OOM-killed on the
             # 10.6 GiB markfukt county 23 after 171/174 files: the page cache
