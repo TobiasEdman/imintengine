@@ -22,10 +22,16 @@ already honours, so a later staging run skips the item instead of
 downloading it again. Only files directly under ``<dest>/raw`` are ever
 deleted; derived rasters, VRTs and Trädhöjd files are never touched.
 
-The manifest is rewritten whole, so a concurrent writer would be
-overwritten. The script records the manifest's sha256 at the start and
-refuses to save if the file on disk changed under it: run it only while
-no ``skg-open-stage`` Job is active.
+A run that dies between deleting a zip and saving its marker leaves the
+zip gone without ``raw_deleted_at``. The next run does not skip such an
+entry: if its one derived raster still matches its recorded sha256 it
+records ``raw_deleted_at`` with ``raw_absent_at_drop: true``, otherwise it
+reports it and exits 2.
+
+The manifest is rewritten whole, so a concurrent writer would erase the
+other's records. A real run takes ``<dest>/MANIFEST.lock``, which
+``stage_skg_open`` also takes, and refuses to start while it exists. It
+also refuses to save if the file on disk changed under it.
 """
 from __future__ import annotations
 
@@ -38,7 +44,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from scripts.stage_skg_open import _now, load_manifest, save_manifest, sha256_of  # noqa: E402
+from scripts.stage_skg_open import (  # noqa: E402
+    _git_sha, _now, load_manifest, manifest_lock, save_manifest, sha256_of)
 
 PRODUCTS = ("grunddata", "markfukt")
 REQUIRED = ("sha256", "bytes", "url", "downloaded_at")
@@ -52,17 +59,24 @@ def _file_sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def plan(manifest: dict, dest: Path) -> tuple[list[tuple[str, str]], list[str]]:
-    """``([(zip name, derived path)], [refusals])`` for every deletable raw zip."""
+def plan(manifest: dict, dest: Path) -> tuple[list[tuple[str, str]], list[str], list[tuple[str, str]]]:
+    """``(deletable, refusals, unmarked)``: ``[(zip, derived)]`` to delete, the
+    refusals, and ``[(zip, derived)]`` already gone from disk without a marker
+    (a run that died between the delete and the save)."""
     by_source: dict[str, list[str]] = {}
     for derived, rec in manifest.get("derived", {}).items():
         by_source.setdefault(rec.get("from", ""), []).append(derived)
-    todo, refused = [], []
+    todo, refused, unmarked = [], [], []
     for name, rec in sorted(manifest.get("files", {}).items()):
         if rec.get("product") not in PRODUCTS or rec.get("raw_deleted_at"):
             continue
         raw = dest / "raw" / name
         if not raw.exists():
+            derived = by_source.get(name, [])
+            if len(derived) == 1:
+                unmarked.append((name, derived[0]))
+            else:
+                refused.append(f"{name}: raw zip absent without a marker and {len(derived)} derived rasters")
             continue
         if name.startswith("sksTradhojd") or raw.parent != dest / "raw":
             refused.append(f"{name}: not a grunddata/markfukt raw zip")
@@ -79,7 +93,7 @@ def plan(manifest: dict, dest: Path) -> tuple[list[tuple[str, str]], list[str]]:
             refused.append(f"{name}: {len(derived)} derived rasters record it as their source")
             continue
         todo.append((name, derived[0]))
-    return todo, refused
+    return todo, refused, unmarked
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -91,19 +105,46 @@ def main(argv: list[str] | None = None) -> int:
     manifest_path = dest / "MANIFEST.json"
     if not manifest_path.exists():
         sys.exit(f"REFUSING: {manifest_path} is missing")
+    if args.dry_run:
+        return _run(args, dest, manifest_path)
+    with manifest_lock(dest, "drop_skg_open_raw"):
+        return _run(args, dest, manifest_path)
+
+
+def _run(args, dest: Path, manifest_path: Path) -> int:
     held = _file_sha(manifest_path)
     manifest = load_manifest(dest)
     free0 = shutil.disk_usage(dest).free
     print(f"free before: {free0 / 2**30:.1f} GiB", flush=True)
-    todo, refused = plan(manifest, dest)
+    todo, refused, unmarked = plan(manifest, dest)
     planned = sum(manifest["files"][n]["bytes"] for n, _ in todo)
-    print(f"plan: {len(todo)} raw zips, {planned / 2**30:.1f} GiB; refused {len(refused)}", flush=True)
+    print(f"plan: {len(todo)} raw zips, {planned / 2**30:.1f} GiB; refused {len(refused)}; "
+          f"already gone without a marker {len(unmarked)}", flush=True)
     for r in refused:
         print(f"  REFUSED {r}", flush=True)
+    for name, _ in unmarked:
+        print(f"  UNMARKED {name}: zip gone, no raw_deleted_at", flush=True)
     if args.dry_run:
         return 0 if not refused else 2
 
+    manifest["history"].append({"at": _now(), "argv": ["drop_skg_open_raw", *sys.argv[1:]],
+                                "git_sha": _git_sha()})
     deleted = mismatched = 0
+    for name, derived in unmarked:
+        # an earlier run deleted the zip and died before saving its marker
+        out = dest / derived
+        if not out.exists() or sha256_of(out) != manifest["derived"][derived].get("sha256"):
+            print(f"  UNMARKED {name}: zip gone but {derived} missing or not its recorded sha256", flush=True)
+            mismatched += 1
+            continue
+        manifest["files"][name]["raw_deleted_at"] = _now()
+        manifest["files"][name]["raw_absent_at_drop"] = True
+        print(f"  marked {name}: zip already gone, {derived} verified", flush=True)
+    if unmarked:
+        if _file_sha(manifest_path) != held:
+            raise ConcurrentWriter(f"{manifest_path} changed during the run; another writer is active")
+        save_manifest(dest, manifest)
+        held = _file_sha(manifest_path)
     for i, (name, derived) in enumerate(todo, 1):
         out = dest / derived
         if not out.exists() or sha256_of(out) != manifest["derived"][derived].get("sha256"):

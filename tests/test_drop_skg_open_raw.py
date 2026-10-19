@@ -104,3 +104,57 @@ def test_a_concurrent_manifest_writer_stops_the_run(tmp_path, monkeypatch):
 def test_a_missing_manifest_refuses(tmp_path):
     with pytest.raises(SystemExit, match="REFUSING"):
         dr.main(["--dest", str(tmp_path)])
+
+
+def test_a_crash_between_delete_and_save_is_marked_on_the_next_run(tmp_path, monkeypatch):
+    d = _mirror(tmp_path, monkeypatch)
+    real_save = dr.save_manifest
+
+    def die(*a, **k):
+        raise KeyboardInterrupt                   # the pod is killed after the first unlink
+    monkeypatch.setattr(dr, "save_manifest", die)
+    with pytest.raises(KeyboardInterrupt):
+        dr.main(["--dest", str(d)])
+    assert not (d / "raw/sksSLUMarkfuktighet01.zip").exists()           # first in sorted order
+    assert not _m(d)["files"]["sksSLUMarkfuktighet01.zip"].get("raw_deleted_at")
+    assert not (d / st.LOCK_NAME).exists()                             # lock released on the way out
+
+    monkeypatch.setattr(dr, "save_manifest", real_save)
+    assert dr.main(["--dest", str(d)]) == 0
+    rec = _m(d)["files"]["sksSLUMarkfuktighet01.zip"]
+    assert rec["raw_deleted_at"] and rec["raw_absent_at_drop"] is True
+    assert _m(d)["files"]["sks_Volym_omdrev2_01.zip"]["raw_deleted_at"]
+    assert "raw_absent_at_drop" not in _m(d)["files"]["sks_Volym_omdrev2_01.zip"]
+
+
+def test_a_vanished_zip_whose_raster_does_not_verify_is_reported(tmp_path, monkeypatch, capsys):
+    d = _mirror(tmp_path, monkeypatch)
+    (d / "raw/sksSLUMarkfuktighet01.zip").unlink()
+    (d / "markfukt/markfukt_01.tif").write_bytes(b"changed")
+    assert dr.main(["--dest", str(d)]) == 2
+    assert not _m(d)["files"]["sksSLUMarkfuktighet01.zip"].get("raw_deleted_at")
+    assert "UNMARKED sksSLUMarkfuktighet01.zip" in capsys.readouterr().out
+
+
+def test_a_held_lock_refuses_before_any_delete(tmp_path, monkeypatch):
+    d = _mirror(tmp_path, monkeypatch)
+    (d / st.LOCK_NAME).write_text('{"owner": "stage_skg_open"}')
+    with pytest.raises(st.ManifestLocked, match="stage_skg_open"):
+        dr.main(["--dest", str(d)])
+    assert len(list((d / "raw").iterdir())) == 3
+    assert (d / st.LOCK_NAME).exists()                                 # someone else's lock is left alone
+
+
+def test_the_staging_script_refuses_while_the_drop_holds_the_lock(tmp_path, monkeypatch):
+    d = _mirror(tmp_path, monkeypatch)
+    with st.manifest_lock(d, "drop_skg_open_raw"):
+        with pytest.raises(st.ManifestLocked, match="drop_skg_open_raw"):
+            st.main(["--dest", str(d), "--products", "grunddata"])
+    assert not (d / st.LOCK_NAME).exists()
+
+
+def test_a_real_run_records_a_history_entry(tmp_path, monkeypatch):
+    d = _mirror(tmp_path, monkeypatch)
+    dr.main(["--dest", str(d)])
+    (h,) = _m(d)["history"]
+    assert h["argv"][0] == "drop_skg_open_raw" and h["git_sha"] == "abc" and h["at"]
