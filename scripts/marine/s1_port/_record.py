@@ -76,14 +76,30 @@ def reference_properties(record: Path) -> list[dict]:
     return [f["properties"] for f in json.loads(path.read_text())["features"]]
 
 
-def read_port_input(tif: Path) -> tuple[np.ndarray, tuple[int, int], dict]:
-    """A cached port model input: (4, H, W) uint16, its absolute pixel origin, its record."""
+# AI2's materialised rasters and detections come from rslearn's warp of the
+# ellipsoid-height GCPs, i.e. the port's pixel chain 1. Chain 2 moves the GCPs
+# onto the sea surface (41-56 m), so a chain-2 input differs from AI2's pixels by
+# design and a pixel comparison with it would report that move as a mismatch.
+AI2_PIXEL_CHAIN = 1
+
+
+def read_port_input(tif: Path, *, chain: int) -> tuple[np.ndarray, tuple[int, int], dict]:
+    """A cached port model input: (4, H, W) uint16, its absolute pixel origin, its record.
+
+    ``chain`` is the pixel chain the caller's comparison needs (``AI2_PIXEL_CHAIN``
+    for any comparison with AI2's pixels); a record of another chain is refused.
+    """
     import rasterio
 
+    meta = json.loads(tif.with_suffix(".json").read_text())
+    got = meta.get("provenance", {}).get("chain_version")
+    if got != chain:
+        raise SystemExit(f"{tif}: pixel chain {got}; this check needs chain {chain} "
+                         f"(AI2's pixels are chain {AI2_PIXEL_CHAIN})")
     with rasterio.open(tif) as src:
         stack = src.read()
         origin = (round(src.transform.c / 10), round(src.transform.f / -10))
-    return stack, origin, json.loads(tif.with_suffix(".json").read_text())
+    return stack, origin, meta
 
 
 def write_json(path: Path | None, obj) -> None:

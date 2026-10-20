@@ -8,6 +8,13 @@ result must equal both the non-sparse chain and AI2's materialised raster bit
 for bit. ``target`` is warped once (first GCP in zone 32); ``historical1``
 33 -> 32.
 
+Chain 1 only: AI2's raster is rslearn's warp of the ellipsoid-height GCPs, and
+the crop's GCPs carry no incidence angles. Under chain 2 (sea-surface GCPs) the
+script refuses to run; reproduce its results on a chain-1 checkout (e.g.
+864e75e). The chain-independent claim, sparse VRT = full-scene chain, is
+checked under chain 2 by ``full_scene_check.py`` and
+``tests/test_ai2_vessels_s1.py::test_sparse_scene_vrt_equals_full_scene_chain``.
+
     python scripts/marine/s1_port/sparse_vrt_on_reference_crop.py --record <record> \\
         --scene historical1 --pol vh --work-dir /tmp/sparse --out sparse_historical1_vh.json
 """
@@ -35,8 +42,13 @@ def main() -> None:
     import rasterio
     from rasterio.windows import Window
 
-    from imint.fetch import (_ai2_utm_epsg, _s1_grd_to_window_grid, _s1_radar_window,
-                             _s1_sparse_vrt_xml)
+    from imint.fetch import (S1_VESSEL_CHAIN_VERSION, _ai2_utm_epsg, _s1_grd_to_window_grid,
+                             _s1_radar_window, _s1_sparse_vrt_xml)
+
+    if S1_VESSEL_CHAIN_VERSION != rec.AI2_PIXEL_CHAIN:
+        raise SystemExit(f"chain-{rec.AI2_PIXEL_CHAIN} check, this code is chain "
+                         f"{S1_VESSEL_CHAIN_VERSION}: run it on a chain-1 checkout (see the "
+                         f"docstring); full_scene_check.py covers chain 2")
 
     crop = a.record / "inputs" / f"{a.scene}_{a.pol}.tif"
     with rasterio.open(crop) as src:

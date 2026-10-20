@@ -38,7 +38,7 @@ def main() -> None:
     from imint.analyzers import ai2_vessels_s1 as s1
     from imint.analyzers.ai2_rslearn_blocks import crop_centered
 
-    port, (pc0, pr0), meta = rec.read_port_input(a.port_input)
+    port, (pc0, pr0), meta = rec.read_port_input(a.port_input, chain=rec.AI2_PIXEL_CHAIN)
     prov, tid = meta["provenance"], meta["target_scene"]["scene_id"]
     target = port[:2]
     h, w = target.shape[1:]

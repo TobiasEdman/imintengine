@@ -658,13 +658,20 @@ are nodata, and they reach no AOI pixel through either cubic kernel.
   1. On the reference crop as a stand-in scene, with the production functions: 0 of
      1.54 M AOI pixels differ from the non-sparse chain and from AI2's materialised
      raster, for a single warp (target VV) and a 33 → 32 double warp (historical VH)
-     (`sparse_vrt_target_vv.json`, `sparse_vrt_historical1_vh.json`).
+     (`sparse_vrt_target_vv.json`, `sparse_vrt_historical1_vh.json`). Chain 1 only:
+     AI2's raster is chain 1, so `sparse_vrt_on_reference_crop.py` refuses chain 2.
   2. On the real scene, which is the ground truth: the whole target VV GRD was
      downloaded (26483 × 16666 px, `record:s1port/full_target_vv.tif`) and run through
      the same warps without any sparsity. Inside the Skagen AOI, 0 of 42.3 M pixels
-     differ from the fetch output (`full_scene_check.json`).
+     differ from the fetch output (`full_scene_check.json`, chain 1). Under chain 2 the
+     full scene carries the fetch's sea-surface GCPs (a VRT by `_s1_sparse_vrt_xml` over
+     the whole raster); again 0 of 42 268 248 pixels differ
+     (`full_scene_check_chain2.json`).
   3. A synthetic GCP raster in the unit tests. The test fails, with 194 pixels off, if
      the radar window is cut 8 px short.
+- The port scripts that compare with AI2's pixels or detections (`compare_inputs.py`,
+  `run_analyzer_on.py`, `diag_unmatched.py`, `attr_window_check.py`) need a chain-1 port
+  input and refuse any other (`_record.read_port_input`); tables (a)–(e) are chain 1.
 
 **Cache.** The model input is cached as one uint16 GeoTIFF plus a JSON record (scenes,
 slices, grid, AOI time, provenance); the key hashes the pixel-chain version (2), the

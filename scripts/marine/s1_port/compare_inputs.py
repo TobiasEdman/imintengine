@@ -47,7 +47,7 @@ def main() -> None:
                                            "seconds": round(time.time() - t, 1),
                                            "step1_epsg": step1_epsg}
             print(f"part1_{scene}_{pol}", out[f"part1_{scene}_{pol}"], flush=True)
-    port, (pc0, pr0), _ = rec.read_port_input(a.port_input)
+    port, (pc0, pr0), _ = rec.read_port_input(a.port_input, chain=rec.AI2_PIXEL_CHAIN)
     for i, (scene, pol) in enumerate(names):
         p = port[i].astype(np.float64)
         ref = ai2[i, pr0 - r0:pr0 - r0 + p.shape[0], pc0 - c0:pc0 - c0 + p.shape[1]].astype(np.float64)

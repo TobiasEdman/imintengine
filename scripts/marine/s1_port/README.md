@@ -42,9 +42,9 @@ can be verified with `cd <record> && shasum -a 256 -c <repo>/docs/marine/s1_port
 | `port_feasibility_attr.py` | plain-torchvision attribute model vs AI2's attributes |
 | `analyze_reference.py` | counts, scores, attributes, infra distances of AI2's run |
 | `warp_window_dependence.py` | GDAL warp output depends on the request window |
-| `sparse_vrt_on_reference_crop.py` | the fetch's sparse VRT on real data, bit-exact |
-| `full_scene_check.py` | the fetch against the whole downloaded scene, bit-exact |
-| `compare_inputs.py` | port model input vs AI2's (table a) |
+| `sparse_vrt_on_reference_crop.py` | the fetch's sparse VRT on real data, bit-exact (chain 1 only; refuses chain 2) |
+| `full_scene_check.py` | the fetch against the whole downloaded scene, bit-exact (the port input's own chain and geocoding) |
+| `compare_inputs.py` | port model input vs AI2's (table a; chain-1 input) |
 | `run_analyzer_on.py` | runs A (AI2 inputs) and B (port inputs, AI2 tiling) |
 | `compare_to_reference.py` | detections of a run vs AI2's reference (tables b-e) |
 | `diag_unmatched.py` | best score of every unmatched detection in both tilings |
