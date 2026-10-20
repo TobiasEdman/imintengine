@@ -547,7 +547,8 @@ rasterio 1.4.4 / GDAL 3.10.3) plus `pystac-client` 0.9.0 and `planetary-computer
 
 | File | Role |
 |---|---|
-| `imint/fetch.py` `fetch_s1_vessel_scenes` | Target + historical GRD DN (uint16) on AI2's grid for a WGS84 bbox, with the AOI's acquisition time; cached. Chooses the pass (`orbit_state` / `pass_time_utc`) and mosaics its slices; `s1_vessel_passes` lists a date's passes. Owns the band keys and source string |
+| `imint/fetch.py` `fetch_s1_vessel_scenes` | Target + historical GRD DN (uint16) on AI2's grid for a WGS84 bbox, with the AOI's acquisition time; cached. Chooses the pass (`orbit_state` / `pass_time_utc`) and mosaics its slices; `s1_vessel_passes` lists a date's passes. Puts the tie points on the sea surface (§ Geocoding). Owns the band keys and source string |
+| `imint/geoid/` | EGM96 15' grid (package data) and `egm96_undulation` |
 | `imint/data/mpc_s1.py` | `search_grd_items` / `sign_item` factored out of `fetch_s1_scene` (σ⁰ path unchanged, pinned by a test) |
 | `imint/data/s1_shared.py` | `footprint_intersection_area` (footprint, not bbox, overlap) |
 | `imint/analyzers/ai2_rslearn_blocks.py` | torchvision blocks shared by the S2 and S1 analyzers |
@@ -556,6 +557,7 @@ rasterio 1.4.4 / GDAL 3.10.3) plus `pystac-client` 0.9.0 and `planetary-computer
 | `scripts/detect_vessels_s1.py` | CLI: fetch → analyzer → GeoJSON (`--orbit-state`, `--pass-time`) |
 | `scripts/generate_marine_radar_showcase.py` | Radar sub-tab of the Öresund showcase |
 | `tests/test_ai2_vessels_s1.py` + `tests/fixtures/ai2_s1_vessel_crop.npz` | Tests (§ Tests) |
+| `tests/test_s1_geocoding.py` + `tests/fixtures/s1_geocoding/` | Geocoding against independent truth (§ Geocoding) |
 | `scripts/marine/s1_port/`, `docs/marine/s1_port_results/` | This dossier's checks and their results |
 
 The detector and attribute model are built from `ai2_rslearn_blocks.py`, the same blocks
@@ -644,7 +646,7 @@ lines). It then wraps that window in a VRT (built with ElementTree, so the GCP C
 XML-escaped) that has the full scene's size, all 210 GCPs and nodata 0. Both of rslearn's
 warps run as whole-dataset reads over that VRT:
 
-1. TPS, cubic, into the first-GCP zone (33).
+1. TPS over the sea-surface GCPs (§ Geocoding), cubic, into the first-GCP zone (33).
 2. Cubic onto the full scene window (32).
 
 GDAL therefore chunks exactly as in the full-scene run. Pixels outside the radar window
@@ -665,11 +667,14 @@ are nodata, and they reach no AOI pixel through either cubic kernel.
      the radar window is cut 8 px short.
 
 **Cache.** The model input is cached as one uint16 GeoTIFF plus a JSON record (scenes,
-slices, grid, AOI time, provenance); the key hashes the pixel-chain version, the
+slices, grid, AOI time, provenance); the key hashes the pixel-chain version (2), the
+geocoding model (tie points, geoid grid sha256), the
 record-format version (3), the date, the bbox and the chosen pass's slice ids, so another
 pass on the same date and bbox never meets the entry. Format-2 entries (keyed by date and
-bbox only, so either pass of a two-pass date) are not reused; the raw radar windows are,
-so a format-2 request recomputes the warps without downloading. Every cache file is written to a temp file and moved into
+bbox only, so either pass of a two-pass date) are not reused. The radar-window files are
+named by the geocoding id (`vv_c…_r…_W×H_g<id>.tif`) because they embed their GCPs, and
+scene headers without incidence angles are rebuilt, so a chain-1 cache downloads its
+windows again (one header read and one 1.8 MB annotation per scene and polarisation). Every cache file is written to a temp file and moved into
 place (`os.replace`), the record last, so a cache hit never reads a partial file.
 
 **Cost (Skagen bbox, cold cache).** 346 s wall clock and 1.9 GB peak RSS for both scenes
@@ -804,6 +809,10 @@ historical-image chain and the tiling are enough to move them across it.
 - **Pass mosaic:** slices of one pass are joined on one lattice (Fetch design); AI2 would
   run each slice on its own window. A date with several passes is refused unless the
   caller names one.
+- **Geocoding (chain 2):** the GCPs are moved onto the sea surface before the warp
+  (§ Geocoding). AI2/rslearn warp with the ellipsoid-height GCPs and place every ship
+  41–56 m toward the satellite; the port's pixels are therefore no longer bit-identical
+  to AI2's, and AI2 parity holds in radar coordinates.
 - **Infrastructure filter:** 200 m, AI2's code default.
   - The Satlas `latest.geojson` is downloaded once, cached in
     `~/.cache/imint/satlas_marine_infrastructure/` and recorded by sha256. It is only
@@ -876,6 +885,103 @@ caches and layers stayed outside git.
   70 because one patch-seam duplicate (score 0.9202) was removed by hand.
 - marine-awareness `load_detections` reads 62 and 71.
 
+### Geocoding (chain 2, 2026-10-20)
+
+**The error.** Chain 1, like AI2/rslearn, placed every ship 41–56 m toward the satellite.
+Measured against AIS hull centres (antenna position + true heading + A/B/C/D) on slow
+anchored ships, the range residual was +55.1 m (2026-06-27 05:39 S1C descending), +56.7 m
+(06-27 16:53 S1C ascending) and +44.9 m (06-28 05:31 S1D descending). The cause: ESA's GRD
+GCPs (the annotation's geolocation grid) are zero-Doppler solutions at the GCP's own
+ellipsoidal height, z ≈ 0 over the sea, but the sea lies on the geoid, N = 36–38 m higher
+off Skagen. A target that is h higher appears h / tan θ closer to the satellite, and GDAL's
+GCP thin-plate spline is 2-D (it drops Z), so no height reaches the warp. Diagnosis:
+`2026-10-20_s1_offset_diagnosis/offset_diagnosis.md` (marine-awareness research).
+
+**The fix: tie points on the sea surface.** One code path, before every GCP consumer
+(radar window, AOI dating, the window TIFF, the sparse VRT and so the warp), target and
+historical scenes alike (`_s1_sea_surface_gcps`):
+
+- N is the EGM96 undulation at the GCP (`imint/geoid/us_nga_egm96_15.tif`, PROJ's grid,
+  2.7 MB package data, bilinear; it matches PROJ `vgridshift` to < 1e-9 m and EGM2008 to
+  0.22 m over the AOI). A missing grid raises; N is never silently 0.
+- The GCP moves (N − z) / tan θ along the ground direction of increasing pixel on its GCP
+  row, which is away from the right-looking satellite. The direction is the central
+  difference of the row's neighbouring GCPs in the GCP's tangent plane (geodesic). Then
+  z = N. θ is the annotation's `incidenceAngle` of that grid point.
+
+Land GCPs above the geoid move toward the satellite (up to ~800 m in the Norwegian
+mountains), so the TPS describes sea-level targets everywhere; land in the backdrop is
+not terrain-corrected (it never was). The sign of the shift flips with the pass, so no
+constant per-layer correction can replace this.
+
+**Incidence angles.** `_s1_scene_header` reads the product annotation and stores
+`gcp_incidence_deg` in the cached header; headers without it are rebuilt. The annotation
+grid must equal the TIFF GCPs in count, order, pixel/line and lon/lat/height (to 1e-9° /
+1e-6 m), or the fetch raises; the four 2026-06-27/28 products pass (measured on two:
+1e-14°). MPC's `schema-product-{pol}` asset is not the product annotation for these products: it
+points at `annotation/rfi/rfi-iw-{pol}.xml` (the RFI report, 41 KB, no geolocation grid).
+The fetch takes the measurement's sibling `annotation/iw-{pol}.xml` (1.8 MB) with the
+same SAS token and validates it.
+
+**Accuracy of the first-order shift.** Against an independent range-Doppler solver
+(orbit state vectors + slant-range time of each grid point, re-solved at h = N): sea GCPs
+≤ 0.14 m, land GCPs ≤ 1.5 m, on the four products.
+
+**Provenance and cache.** `S1_VESSEL_CHAIN_VERSION` = 2. `provenance["geocoding"]`
+records the tie-point model and the geoid grid and its sha256;
+each `radar_windows` entry records `gcp_shift_m` (min / median / max over the sea GCPs,
+|z| < 1 m, and over all GCPs; + = away from the satellite). The cache key and the
+radar-window file names include the geocoding model.
+
+**AI2 parity is now in radar coordinates.** The port's model input is no longer
+bit-identical to rslearn's: the raster itself moves, by the sea-surface shift. The
+detector sees the same
+radar data, so AI2 parity is checked by mapping our detections through the sea-surface
+TPS⁻¹ and AI2's through the TPS⁻¹ of its own 40-GCP crop, and comparing radar
+coordinates. The earlier parity checks in this dossier (tables (a)–(e), run C) are chain 1
+and remain valid as pixel-chain checks; they never were geolocation truth, because the
+reference carries the same error.
+
+**The lesson.** No test compared S1 positions with independent truth. The checks were TPS
+round trips, AI2 parity on identical (equally wrong) pixels and self-consistency, so a
+41–56 m error that flips with the pass passed all of them. `tests/test_s1_geocoding.py`
+now does:
+
+1. sea-surface GCPs vs the range-Doppler oracle at h = N (≤ 0.5 m), each shift = (N − z) /
+   tan θ pointing away from the satellite (E < 0 descending, > 0 ascending), and a guard
+   that the raw sea GCPs are at |z| < 1 m (catches a change of ESA's convention);
+2. frozen radar positions of 29/30/30 slow anchored ships, geocoded through the
+   pipeline's own TPS, vs their AIS hull centres: |median| ≤ 10 m in range and along track
+   per layer, asc − dsc within 15 m; the same fixture gives +45 to +57 m on chain 1's GCPs
+   (asserted, so the check has teeth);
+3. `@pytest.mark.slow`, with `IMINT_S1_E2E_CACHE` set to a local S1 cache (the MPC
+   catalogue search still needs network): fetch + detector for 2026-06-28 against the same
+   ships, and with `IMINT_S1_AI2_REFERENCE_DIR` the AI2 parity in radar coordinates.
+
+**On real data (2026-10-20).** The three Skagen–Marstrand layers re-run through chain 2
+(cold cache, `scripts/detect_vessels_s1.py`, bbox 10.5–11.7 E, 57.55–58.05 N), against the
+AIS hull centres of the same slow anchored ships (mutual nearest ≤ 150 m; range + = toward
+the satellite):
+
+| layer | n | range median | along-track median | chain 1 range | layer moved (median dE, dN) |
+|---|---|---|---|---|---|
+| 06-27 05:39 S1C dsc (2 slices) | 29 | +3.0 m | −4.1 m | +55.1 m | (−47.5, +15.0) m |
+| 06-27 16:53 S1C asc | 30 | +6.2 m | −4.3 m | +56.7 m | (+47.7, +4.8) m |
+| 06-28 05:31 S1D dsc | 30 | +5.1 m | +0.6 m | +44.9 m | (−35.5, +10.0) m |
+
+- All pass (|median| ≤ 10 m, n ≥ 20). Same-day asc − dsc range medians: +3.3 m; the same
+  ship's E-W residual, asc − dsc: −10.6 m (n 21; chain 1 −111.8 m).
+- The layers move west on descending and east on ascending passes: the sea-surface shift
+  (41–57 m at the ships).
+- AI2 parity in radar coordinates, 06-28: 76 pairs, median |Δ| 0.76 px, mean vector
+  0.13 m. In map coordinates the same pairs are 40.6 m apart, by design.
+- Detection sets change only at the margins: 62 → 64, 70 → 65 and 77 → 77 detections in
+  the bbox; every changed one scores 0.70–0.83 or lies at the bbox's east edge, matched
+  pairs differ by a median 0.001–0.002 in score, and all AIS-matched slow ships are still
+  detected.
+- Details, per-ship residuals and the layers: marine-awareness research
+  `2026-10-20_s1_offset_diagnosis/fix_verification.md` and `fix_runs/`.
+
 ### Review fixes
 
 A review of the port (verdict approve-with-fixes) led to these changes, each verified:
@@ -903,12 +1009,21 @@ A review of the port (verdict approve-with-fixes) led to these changes, each ver
 
 ### Tests
 
-`tests/test_ai2_vessels_s1.py` (66 tests) and `tests/test_mpc_s1.py` (2), with the
-synthetic GRD writer shared in `tests/s1_synthetic.py`; run with the repo `.venv`:
+`tests/test_ai2_vessels_s1.py`, `tests/test_s1_geocoding.py`, `tests/test_geoid.py` and
+`tests/test_mpc_s1.py`, with the synthetic GRD writer shared in `tests/s1_synthetic.py`
+and the range-Doppler oracle in `tests/s1_rd_oracle.py`; run with the repo `.venv`:
 
 ```bash
-.venv/bin/python -m pytest tests/test_ai2_vessels_s1.py tests/test_mpc_s1.py -q
+.venv/bin/python -m pytest tests/test_ai2_vessels_s1.py tests/test_s1_geocoding.py \
+    tests/test_geoid.py tests/test_mpc_s1.py -q
 ```
+
+**Geocoding** (`tests/test_s1_geocoding.py`, `tests/test_geoid.py`; § Geocoding): the
+sea-surface GCPs against the range-Doppler oracle, anchored ships against AIS hull
+centres (and failing on chain 1's GCPs), the annotation checks and header rebuild, the
+EGM96 helper against PROJ `vgridshift`, and the slow opt-in end-to-end run. The synthetic
+chain tests compare the sparse VRT with the full raster carrying the same sea-surface
+GCPs (`sea_surface_copy`).
 
 **Pure logic:**
 
@@ -947,7 +1062,9 @@ synthetic GRD writer shared in `tests/s1_synthetic.py`; run with the repo `.venv
   2 ms, the slices and joined ids recorded; and a second slice that is never searched or
   downloaded once the first covers the AOI;
 - the CLI passing `--orbit-state` / `--pass-time` to the fetch and reporting a refusal;
-- the cache write → read round trip (arrays, dtype, Affine, scene records, provenance).
+- the cache write → read round trip (arrays, dtype, Affine, scene records, provenance);
+- chain 2: the provenance's geocoding model and per-window GCP shifts, and a cache key and
+  window file names that change with the geocoding model.
 
 **σ⁰ path** (`tests/test_mpc_s1.py`): `mpc_s1.fetch_s1_scene` offline after the
 STAC-helper refactor: the search
@@ -971,3 +1088,7 @@ It skips if the checkpoints are absent.
 - The full suite: 2597 passed, 12 skipped, and 4 failed, all in `test_slu_markfukt.py`.
   Those are live calls to the SLU ImageServer, which answers with an HTML page today; the
   same 4 failed before this change.
+- Chain 2 (2026-10-20): the full suite 3743 passed, 15 skipped (environment: no DES login,
+  gdal CLI, pydensecrf, local NFI data; the slow geocoding run without its env var), 0
+  failed. The slow `test_s1_pipeline_end_to_end_06_28` passed separately on a real cache
+  (449 s).
