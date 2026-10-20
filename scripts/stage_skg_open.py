@@ -320,8 +320,12 @@ def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str,
 
     Deflate (method 8) is read in place through ``/vsizip/``. Deflate64
     (method 9, used by the whole-country and most Trädhöjd zips) is not
-    supported by GDAL or ``zipfile``; it is inflated with ``inflate64`` to a
-    temporary file that the caller removes. ``extract`` writes a Deflate
+    supported by GDAL or ``zipfile``; Info-ZIP ``unzip -p`` streams it to a
+    temporary file that the caller removes, with a few MB of memory and the
+    entry's CRC checked (exit status 2 on a mismatch). ``inflate64`` 1.0.4,
+    used before, kept ~0.7-1 GB per GiB inflated and never returned it
+    (measured 2026-10-20): the 40-55 GiB counties would OOM-kill the Job.
+    ``extract`` writes a Deflate
     entry to such a file too: a fresh ``/vsizip/`` handle that seeks to a
     late row inflates the stream from its start, so parallel readers each
     opening the zip would pay that again and again.
@@ -339,23 +343,13 @@ def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str,
         return str(tmp), tmp
     if info.compress_type != ZIP_DEFLATE64:
         raise ValueError(f"{zpath.name}: unsupported zip method {info.compress_type}")
-    import inflate64
-
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / info.filename
-    inflater = inflate64.Inflater()
-    with open(zpath, "rb") as raw, open(tmp, "wb") as out:
-        # local file header: 30 fixed bytes + name + extra, then the deflate64 stream
-        raw.seek(info.header_offset + 26)
-        fnlen, exlen = int.from_bytes(raw.read(2), "little"), int.from_bytes(raw.read(2), "little")
-        raw.seek(info.header_offset + 30 + fnlen + exlen)
-        remaining = info.compress_size
-        while remaining > 0:
-            chunk = raw.read(min(16 << 20, remaining))
-            if not chunk:
-                raise OSError(f"{zpath.name}: truncated zip entry")
-            remaining -= len(chunk)
-            out.write(inflater.inflate(chunk))
+    with open(tmp, "wb") as out:
+        done = subprocess.run(["unzip", "-p", str(zpath), info.filename], stdout=out,
+                              stderr=subprocess.PIPE, text=True)
+    if done.returncode != 0:
+        raise OSError(f"{zpath.name}: unzip exit {done.returncode}: {done.stderr.strip()[:300]}")
     if tmp.stat().st_size != info.file_size:
         raise OSError(f"{zpath.name}: inflated {tmp.stat().st_size} bytes, expected {info.file_size}")
     return str(tmp), tmp
@@ -695,7 +689,7 @@ def _main(argv: list[str] | None = None) -> int:
     p.add_argument("--accept-upstream-change", action="store_true",
                    help="when a re-downloaded zip no longer matches its recorded sha256, record the "
                         "new digest (old kept under superseded_sha256) and re-derive instead of stopping")
-    p.add_argument("--work-dir", type=Path, default=None, help="scratch for Deflate64 inflation (default <dest>/_work)")
+    p.add_argument("--work-dir", type=Path, default=None, help="scratch for the extracted 1 m raster (default <dest>/_work)")
     p.add_argument("--min-free-gib", type=float, default=0.0,
                    help="stop cleanly, before a download, if free space after it would fall below this")
     p.add_argument("--dry-run", action="store_true")

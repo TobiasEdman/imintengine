@@ -634,3 +634,42 @@ def test_workers_reach_the_conversion_and_the_floor_covers_their_extraction(monk
     code = st.main(["--dest", str(tmp_path / "b/m"), "--products", "tradhojd", "--counties", "01",
                     "--drop-raw", "--min-free-gib", "50", "--tradhojd-workers", "8"])
     assert code == 3 and calls == [("download", "sksTradhojd01.zip")]
+
+
+_DEFLATE64_ZIP = Path(__file__).parent / "fixtures" / "tradhojd_deflate64.zip"     # 40x40 int16 GeoTIFF, 7z -mm=Deflate64
+
+
+def _unzip_has_deflate64() -> bool:
+    import subprocess
+
+    try:
+        return "DEFLATE64" in subprocess.run(["unzip", "-v"], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _unzip_has_deflate64(), reason="unzip without Deflate64 support")
+def test_a_deflate64_entry_is_streamed_out_by_unzip(tmp_path):
+    import zlib
+
+    import rasterio
+
+    info = st.zip_tif_entry(_DEFLATE64_ZIP)
+    assert info.compress_type == st.ZIP_DEFLATE64
+    src, tmp = st.gdal_source(_DEFLATE64_ZIP, tmp_path / "work")
+    assert src == str(tmp) and tmp.stat().st_size == info.file_size
+    assert zlib.crc32(tmp.read_bytes()) == info.CRC
+    with rasterio.open(src) as ds:
+        arr = ds.read(1)
+    assert arr[0, 0] == -1 and arr[0, 5] == 5 and arr[39, 39] == (39 * 40 + 39) % 300
+    assert "inflate64" not in sys.modules
+
+
+@pytest.mark.skipif(not _unzip_has_deflate64(), reason="unzip without Deflate64 support")
+def test_a_corrupt_deflate64_entry_fails_loudly(tmp_path):
+    bad = tmp_path / "bad.zip"
+    data = bytearray(_DEFLATE64_ZIP.read_bytes())
+    data[200:220] = b"\xff" * 20                       # inside the compressed stream
+    bad.write_bytes(bytes(data))
+    with pytest.raises(OSError, match="unzip exit"):
+        st.gdal_source(bad, tmp_path / "work")
