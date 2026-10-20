@@ -22,13 +22,13 @@ import numpy as np
 import pytest
 from rasterio.transform import Affine
 
-from imint import fetch
+from imint import fetch, geoid
 from imint.analyzers import ai2_vessels_s1 as s1
 from imint.analyzers.base import AnalysisResult
 from imint.fetch import S1_HISTORICAL_BAND_KEYS, S1_TARGET_BAND_KEYS
 from imint.job import GeoContext
 from imint.data import mpc_s1
-from tests.s1_synthetic import synthetic_grd
+from tests.s1_synthetic import sea_surface_copy, synthetic_grd
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ai2_s1_vessel_crop.npz"
 # Skagen target scene footprint (MPC item == CDSE OData GeoFootprint).
@@ -835,13 +835,27 @@ def test_aoi_lies_on_the_window_lattice_and_is_clipped():
 def test_cache_key_is_deterministic_and_pinned():
     key = fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-28", [_TARGET_ID])
     # Pinned: a change of the key derivation (or of a version constant) must be deliberate.
-    # (Format 2 keyed date + bbox only: "76b7613d2936b018" for this request.)
-    assert key == "f531577c8b5af38c"
+    # (Format 2 keyed date + bbox only: "76b7613d2936b018" for this request; chain 1,
+    # GCPs on the ellipsoid: "f531577c8b5af38c".)
+    assert key == "1b0c720a3cc179a3"
     assert key == fetch._s1_vessel_cache_key(dict(reversed(list(SKAGEN_BBOX.items()))),
                                              "2026-06-28", [_TARGET_ID])
     assert key != fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-29", [_TARGET_ID])
     assert key != fetch._s1_vessel_cache_key({**SKAGEN_BBOX, "west": 10.51}, "2026-06-28",
                                              [_TARGET_ID])
+
+
+def test_cache_key_and_window_files_follow_the_geocoding_model(monkeypatch):
+    """Other tie points = other pixels: neither the model input nor a cached radar
+    window written under another geocoding may be reused."""
+    key = fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-28", [_TARGET_ID])
+    stem = fetch._s1_window_stem("vv", {"col_off": 1, "row_off": 2, "width": 3, "height": 4})
+    model = fetch._s1_geocoding_model()
+    assert model["grid_sha256"] == geoid.egm96_grid_sha256()
+    monkeypatch.setattr(fetch, "_s1_geocoding_model", lambda: {**model, "grid_sha256": "x"})
+    assert fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-28", [_TARGET_ID]) != key
+    assert fetch._s1_window_stem("vv", {"col_off": 1, "row_off": 2, "width": 3,
+                                        "height": 4}) != stem
 
 
 def test_cache_key_differs_per_pass_and_ignores_slice_order():
@@ -896,7 +910,7 @@ def _cache_radar_window(full: Path, header: dict, pol: str, epsg: int, aoi_px: t
     scene_dir.mkdir(parents=True, exist_ok=True)
     (scene_dir / f"{pol}_header.json").write_text(json.dumps(header))
     rwin = fetch._s1_radar_window(header, epsg, aoi_px)
-    stem = f"{pol}_c{rwin['col_off']}_r{rwin['row_off']}_{rwin['width']}x{rwin['height']}"
+    stem = fetch._s1_window_stem(pol, rwin)
     with rasterio.open(full) as src:
         crop = src.read(1, window=Window(rwin["col_off"], rwin["row_off"],
                                          rwin["width"], rwin["height"]))
@@ -909,9 +923,11 @@ def _cache_radar_window(full: Path, header: dict, pol: str, epsg: int, aoi_px: t
 @pytest.mark.filterwarnings("ignore::rasterio.errors.NotGeoreferencedWarning")
 def test_sparse_scene_vrt_equals_full_scene_chain(tmp_path):
     """The fetch's core claim: a full-size VRT holding real DN only in the radar
-    window gives, inside the AOI, exactly what the whole scene gives."""
+    window gives, inside the AOI, exactly what the whole scene gives (the whole
+    scene carrying the same sea-surface GCPs)."""
     full = tmp_path / "full.tif"
     header = synthetic_grd(full)
+    full_sea = sea_surface_copy(full, header, tmp_path / "full_sea.tif")
     epsg, window = fetch._ai2_scene_window(_synthetic_footprint(full))
     aoi_px = fetch._s1_aoi_pixel_bounds(_SYNTH_AOI, epsg, window)
     scene_dir = tmp_path / "s1_grd" / "SYNTH"
@@ -926,7 +942,7 @@ def test_sparse_scene_vrt_equals_full_scene_chain(tmp_path):
         SimpleNamespace(id="SYNTH"), "vv", epsg, aoi_px, scene_dir, None)
     assert signed is None and (step1_epsg, epsg) == (32633, 32632)
     sparse = fetch._s1_grd_to_window_grid(vrt, step1_epsg, epsg, window, aoi_px)
-    reference = fetch._s1_grd_to_window_grid(full, step1_epsg, epsg, window, aoi_px)
+    reference = fetch._s1_grd_to_window_grid(full_sea, step1_epsg, epsg, window, aoi_px)
     assert sparse.shape == (aoi_px[3] - aoi_px[1], aoi_px[2] - aoi_px[0])
     assert sparse.dtype == np.uint16
     assert (reference > 0).mean() > 0.99
@@ -945,7 +961,8 @@ def test_sparse_vrt_xml_escapes_wkt_and_rejects_unknown_dtype(tmp_path):
     header = {"scene_id": "S", "width": 40, "height": 30, "dtype": "uint16", "nodata": 0.0,
               "gcp_crs": wkt,
               "gcps": [[str(i), float(c), float(r), 12.0 + c * 1e-4, 57.0 - r * 1e-4, 0.0]
-                       for i, (c, r) in enumerate([(0, 0), (40, 0), (0, 30), (40, 30)])]}
+                       for i, (c, r) in enumerate([(0, 0), (40, 0), (0, 30), (40, 30)])],
+              "gcp_incidence_deg": [35.0] * 4}
     rwin = {"col_off": 10, "row_off": 5, "width": 20, "height": 10}
     with rasterio.open(tmp_path / "win.tif", "w", driver="GTiff", width=20, height=10, count=1,
                        dtype="uint16") as dst:
@@ -957,6 +974,11 @@ def test_sparse_vrt_xml_escapes_wkt_and_rejects_unknown_dtype(tmp_path):
         gcps, gcp_crs = src.gcps
         data = src.read(1)
     assert (len(gcps), gcp_crs.to_epsg(), data.shape) == (4, 4326, (30, 40))
+    # The VRT carries the sea-surface GCPs: z = N at the raw position, moved in lon/lat.
+    raw = header["gcps"]
+    np.testing.assert_allclose([g.z for g in gcps],
+                               geoid.egm96_undulation([g[3] for g in raw], [g[4] for g in raw]))
+    assert all(abs(g.x - r[3]) > 1e-5 for g, r in zip(gcps, raw, strict=True))
     np.testing.assert_array_equal(data[5:15, 10:30], np.arange(1, 201).reshape(10, 20))
     assert data[:5].sum() == 0
     with pytest.raises(fetch.FetchError, match="'float32' is not supported"):
@@ -981,6 +1003,7 @@ def test_fetch_offline_end_to_end_then_cache_round_trip(tmp_path, monkeypatch):
 
     full = tmp_path / "full.tif"
     header = synthetic_grd(full)
+    full_sea = sea_surface_copy(full, header, tmp_path / "full_sea.tif")
     footprint = _synthetic_footprint(full)
     target, hist = _synthetic_scene_items(footprint)
     epsg, window = fetch._ai2_scene_window(footprint)
@@ -997,13 +1020,24 @@ def test_fetch_offline_end_to_end_then_cache_round_trip(tmp_path, monkeypatch):
     shape = (aoi_px[3] - aoi_px[1], aoi_px[2] - aoi_px[0])
     assert scenes.target.dtype == scenes.historical.dtype == np.uint16
     assert scenes.target.shape == scenes.historical.shape == (2, *shape)
-    reference = fetch._s1_grd_to_window_grid(full, 32633, epsg, window, aoi_px)
+    reference = fetch._s1_grd_to_window_grid(full_sea, 32633, epsg, window, aoi_px)
     np.testing.assert_array_equal(scenes.target[0], reference)
     np.testing.assert_array_equal(scenes.historical[1], reference)
     assert scenes.geo.transform == Affine(10, 0, aoi_px[0] * 10, 0, -10, aoi_px[1] * -10)
     assert scenes.target_scene.scene_id == target.id
     assert scenes.historical_scene.scene_id == hist.id
     assert scenes.provenance["valid_frac_target"] > 0.99
+    # Chain 2: the tie-point model and each window's GCP shifts (z = 0 GCPs, all "sea":
+    # N / tan(incidence), 34-63 m away from the satellite).
+    assert scenes.provenance["chain_version"] == fetch.S1_VESSEL_CHAIN_VERSION == 2
+    assert scenes.provenance["geocoding"] == fetch._s1_geocoding_model()
+    n = geoid.egm96_undulation([g[3] for g in header["gcps"]], [g[4] for g in header["gcps"]])
+    want = n / np.tan(np.radians(header["gcp_incidence_deg"]))
+    for rw in scenes.provenance["radar_windows"].values():
+        sea = rw["gcp_shift_m"]["sea"]
+        assert sea["n"] == len(header["gcps"])
+        assert (sea["min"], sea["max"]) == pytest.approx((want.min(), want.max()), abs=0.01)
+        assert 30 < sea["min"] < sea["max"] < 65
     # One pass, one slice: the pass record says so and the slice API is the scene.
     assert (scenes.scene_id, scenes.historical_scene_id) == (target.id, hist.id)
     assert scenes.target_slices == [scenes.target_scene]
@@ -1023,8 +1057,9 @@ def test_fetch_offline_end_to_end_then_cache_round_trip(tmp_path, monkeypatch):
     assert set(bands) == set(ALL_BAND_KEYS)
     assert np.shares_memory(bands["VV_DN"], scenes.target)
 
-    # Scene time: the AOI centre's radar line, found here independently of the fetch.
-    with rasterio.open(full) as src:
+    # Scene time: the AOI centre's radar line, found here independently of the fetch
+    # (GDAL's TPS over the sea-surface GCPs, read back from the reference raster).
+    with rasterio.open(full_sea) as src:
         tps = GCPTransformer(src.gcps[0], tps=True)
     lon_c, lat_c = Transformer.from_crs(epsg, 4326, always_xy=True).transform(
         (aoi_px[0] + aoi_px[2]) * 5, (aoi_px[1] + aoi_px[3]) * -5)
@@ -1092,8 +1127,9 @@ def _cache_slice(cache: Path, sl: dict, epsg: int) -> tuple[tuple, tuple, np.nda
         for pol in ("vv", "vh"):
             _cache_radar_window(sl["path"], {**sl["header"], "scene_id": item.id}, pol, epsg,
                                 sub, cache / "s1_grd" / item.id)
-    first = sl["header"]["gcps"][0]
-    ref = fetch._s1_grd_to_window_grid(sl["path"], fetch._ai2_utm_epsg(first[3], first[4]),
+    sea = sea_surface_copy(sl["path"], sl["header"], sl["path"].with_suffix(".sea.tif"))
+    first = fetch._s1_sea_surface_gcps(sl["header"])[0]
+    ref = fetch._s1_grd_to_window_grid(sea, fetch._ai2_utm_epsg(first[3], first[4]),
                                        epsg, window, sub)
     return window, sub, ref
 
@@ -1166,8 +1202,8 @@ def test_fetch_mosaics_the_slices_of_one_pass(tmp_path, monkeypatch, split):
     # AOI time: line 607 of the datatake, wherever the cut is; found here with the
     # whole scene's TPS, independently of the slices.
     full = tmp_path / "full.tif"
-    synthetic_grd(full)
-    with rasterio.open(full) as src:
+    full_sea = sea_surface_copy(full, synthetic_grd(full), tmp_path / "full_sea.tif")
+    with rasterio.open(full_sea) as src:
         tps = GCPTransformer(src.gcps[0], tps=True)
     lon_c, lat_c = Transformer.from_crs(epsg, 4326, always_xy=True).transform(
         (c0 + c1) * 5, (r0 + r1) * -5)
