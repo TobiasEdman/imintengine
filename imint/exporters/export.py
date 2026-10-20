@@ -175,6 +175,7 @@ def s1_vessel_feature_collection(
     scene_start_utc: str,
     scene_end_utc: str,
     source: str,
+    s1_pass: dict | None = None,
 ) -> dict:
     """Sentinel-1 vessel detections as the GeoJSON marine-awareness reads.
 
@@ -201,7 +202,12 @@ def s1_vessel_feature_collection(
         scene_time_utc: when the target scene imaged the AOI centre
             (``S1VesselScenes.scene_time_utc``), ISO 8601 ending in ``Z``.
         scene_start_utc, scene_end_utc: the target slice's start and end, same format.
+            For a pass mosaicked from several slices: the first slice's start and
+            the last slice's end, with ``scene_id`` / ``historical_scene_id`` the
+            slices joined by ``" + "`` (``S1VesselScenes.scene_id`` etc.).
         source: data-source description.
+        s1_pass: optional pass record (``S1VesselScenes.provenance["pass"]``:
+            orbit, slices, how the pass was chosen), written as ``s1_pass``.
     """
     from pyproj import Transformer
 
@@ -274,6 +280,8 @@ def s1_vessel_feature_collection(
             "count": len(features),
         }},
     }
+    if s1_pass is not None:
+        summary["s1_pass"] = s1_pass
     return {"type": "FeatureCollection", "properties": summary, "features": features}
 
 

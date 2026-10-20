@@ -547,13 +547,13 @@ rasterio 1.4.4 / GDAL 3.10.3) plus `pystac-client` 0.9.0 and `planetary-computer
 
 | File | Role |
 |---|---|
-| `imint/fetch.py` `fetch_s1_vessel_scenes` | Target + historical GRD DN (uint16) on AI2's grid for a WGS84 bbox, with the AOI's acquisition time; cached. Owns the band keys and source string |
+| `imint/fetch.py` `fetch_s1_vessel_scenes` | Target + historical GRD DN (uint16) on AI2's grid for a WGS84 bbox, with the AOI's acquisition time; cached. Chooses the pass (`orbit_state` / `pass_time_utc`) and mosaics its slices; `s1_vessel_passes` lists a date's passes. Owns the band keys and source string |
 | `imint/data/mpc_s1.py` | `search_grd_items` / `sign_item` factored out of `fetch_s1_scene` (σ⁰ path unchanged, pinned by a test) |
 | `imint/data/s1_shared.py` | `footprint_intersection_area` (footprint, not bbox, overlap) |
 | `imint/analyzers/ai2_rslearn_blocks.py` | torchvision blocks shared by the S2 and S1 analyzers |
 | `imint/analyzers/ai2_vessels_s1.py` | `AI2S1VesselAnalyzer` (registered as `ai2_vessels_s1`) + pure helpers |
 | `imint/exporters/export.py` | `s1_vessel_feature_collection` / `save_s1_vessel_geojson` (marine-awareness seam) |
-| `scripts/detect_vessels_s1.py` | CLI: fetch → analyzer → GeoJSON |
+| `scripts/detect_vessels_s1.py` | CLI: fetch → analyzer → GeoJSON (`--orbit-state`, `--pass-time`) |
 | `scripts/generate_marine_radar_showcase.py` | Radar sub-tab of the Öresund showcase |
 | `tests/test_ai2_vessels_s1.py` + `tests/fixtures/ai2_s1_vessel_crop.npz` | Tests (§ Tests) |
 | `scripts/marine/s1_port/`, `docs/marine/s1_port_results/` | This dossier's checks and their results |
@@ -566,10 +566,20 @@ the Sentinel-2 analyzer uses, and load both checkpoints with `strict=True`,
 
 **Scenes.** MPC `sentinel-1-grd`, anonymous and SAS-signed; no CDSE, no requester-pays.
 
-- Target: IW GRDH VV+VH on the date whose footprint covers most of the AOI. Skagen:
-  S1D 2026-06-28 (`…_0060CF`, SAFE `…_71E0`), AOI cover 0.998.
-- Historical: AI2's rule, best footprint overlap among scenes starting in
-  `[t0 − 60 d, t0 − 30 d]`, restricted to the target's orbit direction (AI2 says the
+- Pass: the IW GRDH VV+VH slices of the date whose footprints intersect the AOI, grouped
+  by satellite and absolute orbit (one datatake, cut into ~25 s slices; MPC's duplicate
+  listings of one product are dropped). One pass on the date is used as is. With several,
+  `orbit_state` and/or `pass_time_utc` (within 2 min of the pass) must leave exactly one;
+  otherwise the fetch raises and lists the passes. Taking one silently would date the
+  detections to a pass the caller did not ask for. The Skagen bbox on 2026-06-28 has two:
+  S1A rel. 168 at 05:23:51 clips 6 % of it, so the reference run now needs
+  `--pass-time 05:31`.
+- Target: the pass's slices ranked by AOI footprint cover, earliest start on a tie (the
+  first is the former one-scene choice). Skagen: S1D 2026-06-28 (`…_0060CF`, SAFE
+  `…_71E0`), AOI cover 0.998; the pass's other slice (`…T053110…`, cover 0.002) is not
+  fetched because the first leaves no AOI pixel without data (Pass mosaic).
+- Historical: AI2's rule, per slice, best footprint overlap among scenes starting in
+  `[t0 − 60 d, t0 − 30 d]`, restricted to the slice's orbit direction (AI2 says the
   scenes must share it, but its query does not filter). Skagen: S1D 2026-05-23,
   descending, relative orbit 66, the same scene as the reference run.
 - The MPC item geometry equals the CDSE OData `GeoFootprint` that AI2 reads (checked on
@@ -583,12 +593,33 @@ the Sentinel-2 analyzer uses, and load both checkpoints with `strict=True`,
 that window's lattice clipped to the bbox, `[58853, −643747, 66157, −637960]`, i.e.
 7304 × 5787 px. Its pixels coincide with the reference window's.
 
+**Pass mosaic.** AI2 processes one scene per window and never joins slices. When the AOI
+spans a cut between slices of the chosen pass (2026-06-27 descending: 0.409 + 0.591), the
+fetch:
+
+- warps every slice onto its own AI2 scene window, in the first slice's UTM zone (its own
+  zone in the common case, so the window is AI2's), so all lie on one 10 m lattice;
+- builds the AOI grid on the union of those windows;
+- gives each pixel the first-ranked slice whose target VV is valid, with the target and
+  the historical both from that slice: a pixel's pair is the one AI2 would see for it;
+- pastes the first slice whole, nodata included, so a one-slice pass gives exactly the
+  one-scene input;
+- skips (does not search or download) a later slice once no AOI pixel is left without
+  data, and drops one that adds no pixel.
+
+`provenance["pass"]` records the pass, how it was chosen, the other passes of the date,
+each slice used (historical, window, AOI part, pixels supplied) and each slice skipped.
+The GeoJSON carries it as `s1_pass`, with `scene_id` / `historical_scene_id` the slices
+joined by `" + "`, `scene_start_utc` the first slice's start and `scene_end_utc` the last
+slice's end.
+
 **Acquisition time.** A slice spans ~25 s, so its start time can be up to ~155 m of travel
 at 12 kn away from when the AOI was imaged, more than marine-awareness's 150 m match
 radius. GRD lines are in azimuth-time order, so the fetch dates the AOI by the radar line
 of its centre (inverse TPS): `scene_time_utc = start + (row_c / lines) · (end − start)`.
 Skagen: line 3335 of 16666, 05:31:40.548 Z, 5.0 s after the slice start. The start and end
-stay available as separate fields.
+stay available as separate fields. In a mosaic the slice that supplied the AOI's centre
+pixel dates it (the first slice if the centre has no data).
 
 **Why a small warp is not enough.** GDAL's warp output depends on the request window,
 not only on the geometry. A read is split recursively until each chunk fits the 64 MB
@@ -634,15 +665,19 @@ are nodata, and they reach no AOI pixel through either cubic kernel.
      the radar window is cut 8 px short.
 
 **Cache.** The model input is cached as one uint16 GeoTIFF plus a JSON record (scenes,
-grid, AOI time, provenance); the key hashes the pixel-chain version, the record-format
-version, the date and the bbox. Every cache file is written to a temp file and moved into
+slices, grid, AOI time, provenance); the key hashes the pixel-chain version, the
+record-format version (3), the date, the bbox and the chosen pass's slice ids, so another
+pass on the same date and bbox never meets the entry. Format-2 entries (keyed by date and
+bbox only, so either pass of a two-pass date) are not reused; the raw radar windows are,
+so a format-2 request recomputes the warps without downloading. Every cache file is written to a temp file and moved into
 place (`os.replace`), the record last, so a cache hit never reads a partial file.
 
 **Cost (Skagen bbox, cold cache).** 346 s wall clock and 1.9 GB peak RSS for both scenes
 and both polarisations. The time is dominated by the four full-request warps (~1 min per
 raster, independent of AOI size); the download is 4 radar windows of 39–47 MB each (zstd),
-against ~420 MB per band for full scenes. Cached requests return in under a second,
-without network access.
+against ~420 MB per band for full scenes. Cached requests return in a few seconds: they
+run the target day's catalogue search (the pass is part of the key), no historical
+search, download or warp.
 
 ### (a) Model inputs
 
@@ -766,6 +801,9 @@ historical-image chain and the tiling are enough to move them across it.
   to 0.
 - **Historical scene:** candidates are restricted to the target's orbit direction. AI2
   states that requirement but does not filter on it; the pick for Skagen is unchanged.
+- **Pass mosaic:** slices of one pass are joined on one lattice (Fetch design); AI2 would
+  run each slice on its own window. A date with several passes is refused unless the
+  caller names one.
 - **Infrastructure filter:** 200 m, AI2's code default.
   - The Satlas `latest.geojson` is downloaded once, cached in
     `~/.cache/imint/satlas_marine_infrastructure/` and recorded by sha256. It is only
@@ -785,7 +823,8 @@ historical-image chain and the tiling are enough to move them across it.
   - Only detections whose AI2 point lies inside the requested bbox are written;
     `n_outside_bbox` counts the rest (the UTM grid overshoots a WGS84 bbox at its corners).
   - `scene_time_utc` is the AOI's acquisition time (Fetch design); `scene_start_utc` and
-    `scene_end_utc` are the slice's.
+    `scene_end_utc` are the slice's (first start and last end for a mosaic, which also
+    adds `s1_pass`).
 
 **Known residuals:**
 
@@ -797,8 +836,10 @@ historical-image chain and the tiling are enough to move them across it.
     borders, and possibly GDAL's chunking, since a validity mask costs warp memory.
   - The pipeline here is exactly AI2's chain on MPC data. It was not verified against
     the requester-pays AWS object.
-- **One scene per AOI.** An AOI split between two slices of a datatake gets the
-  better-covering slice only; the rest is nodata. `valid_frac_target` and
+- **Slice seam.** A mosaicked AOI has a thin line of nodata along the cut, where the
+  cubic kernels of neither slice reach, and its historical changes date across the cut
+  (each slice has its own). Patches across the seam therefore see two (target,
+  historical) pairs; AI2 would see one slice per run. `valid_frac_target` and
   `valid_frac_historical` (analyzer metadata and GeoJSON) show the coverage, and the
   analyzer logs a WARNING when the historical scene covers less of the AOI than the
   target. Skagen: 1.0 / 1.0.
@@ -860,16 +901,25 @@ synthetic GRD writer shared in `tests/s1_synthetic.py`; run with the repo `.venv
 
 **Fetch:**
 
-- scene selection with the catalogue faked: target (best cover, IW GRDH dual-pol only,
-  the requested day, earliest start on a tie) and historical (AI2's window, orbit
+- scene selection with the catalogue faked: the pass (the only one; two passes refused
+  with a listing; `orbit_state` and `pass_time_utc` forms, a selector matching none, two
+  passes in one direction, MPC duplicates, invalid selectors before any search), slice
+  ranking (cover, earliest start on a tie) and historical (AI2's window, orbit
   direction, overlap over relative orbit, tie), including the exact search requests;
+  the 2026-06-27 items are the real MPC ids, times and footprints;
 - the UTM-zone and window rules (literal values checked against rslearn), AOI clipping,
-  a pinned literal cache key, and the AOI acquisition time;
+  a pinned literal cache key that differs per pass, and the AOI acquisition time;
 - the sparse VRT against a full synthetic 33 → 32 scene, the VRT XML with a quoted WKT
   CRS and an unsupported dtype, and atomic writes;
 - `fetch_s1_vessel_scenes` end to end, offline: uint16 output equal to the full-scene
-  chain, the AOI time against an independent inverse TPS, the cache written without temp
-  files and answered without network;
+  chain, the AOI time against an independent inverse TPS, the pass record, the cache
+  written without temp files and answered without historical search, read or warp;
+- a pass of two synthetic slices cut from one scene (cut on either side of the AOI
+  centre): every mosaic pixel equal to its slice's own full-raster chain, each
+  historical from its target's slice, the AOI time equal to the whole scene's within
+  2 ms, the slices and joined ids recorded; and a second slice that is never searched or
+  downloaded once the first covers the AOI;
+- the CLI passing `--orbit-state` / `--pass-time` to the fetch and reporting a refusal;
 - the cache write → read round trip (arrays, dtype, Affine, scene records, provenance).
 
 **σ⁰ path** (`tests/test_mpc_s1.py`): `mpc_s1.fetch_s1_scene` offline after the

@@ -64,7 +64,7 @@ import math
 import os
 import tarfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -2468,7 +2468,10 @@ def _fetch_ai2_bands(
 # is bit-identical to the full-scene chain; only the radar window is downloaded.
 
 S1_VESSEL_CHAIN_VERSION = 1          # pixel chain; part of the cache key, bump when it changes
-_S1_VESSEL_CACHE_FORMAT = 2          # cached record layout; part of the cache key
+# Cached record layout; part of the cache key. 3: the key holds the pass's
+# slice ids and the record its slices (a format-2 entry is keyed by date + bbox
+# only and may hold either pass of a two-pass date, so it is never reused).
+_S1_VESSEL_CACHE_FORMAT = 3
 S1_VESSEL_GSD_M = 10                 # AI2 window resolution
 S1_VESSEL_SOURCE = "Microsoft Planetary Computer sentinel-1-grd (GRD DN, uncalibrated)"
 # Keys of the analyzer's ``bands`` dict: GRD DN, [vv, vh], target then historical.
@@ -2485,6 +2488,15 @@ _S1_RADAR_MARGIN_PX = 32
 # radar window is distrusted (a quarter of the margin).
 _S1_TPS_ROUNDTRIP_TOL_M = _S1_RADAR_MARGIN_PX * S1_VESSEL_GSD_M / 4
 _S1_POLARISATIONS = ("vv", "vh")
+_S1_ORBIT_STATES = ("ascending", "descending")
+# A pass time selects the pass whose [first slice start, last slice end] lies
+# within this of it. Passes over one AOI can be ~7 min apart (2026-06-28 Skagen:
+# S1A 05:23:51, S1D 05:31:10), so the tolerance must stay well below that.
+_S1_PASS_TIME_TOL = timedelta(minutes=2)
+_S1_MOSAIC_RULE = ("slices ranked by AOI footprint cover, then earliest start; each warped "
+                   "onto its own AI2 window in the first slice's UTM zone; a pixel takes "
+                   "the first-ranked slice whose target VV is valid, target and historical "
+                   "both from that slice; a slice is not fetched once the AOI is covered")
 # Without the timeouts a stalled blob read waits forever (seen on MPC
 # 2026-10-11: 0 bytes in curl poll, run hung) and the retries never fire;
 # with them a stall fails loud.
@@ -2519,18 +2531,28 @@ class S1SceneInfo:
 class S1VesselScenes:
     """Target + historical GRD DN on one grid, as AI2's S1 vessel detector expects.
 
+    The target is one satellite pass. When the AOI spans two slices of that
+    pass (one datatake cut into ~25 s products), the slices are mosaicked on
+    one AI2 window lattice, each with its own historical scene (AI2's rule).
+
     Attributes:
         target: (2, H, W) uint16 DN, bands [vv, vh]; 0 is nodata (outside the swath).
         historical: (2, H, W) uint16 DN on the same grid.
         geo: AI2's window grid: UTM, 10 m, origin on multiples of 10 m. This is
             NOT the NMD/EPSG:3006 grid; the detector's contract fixes the grid.
-        target_scene / historical_scene: scene provenance.
-        scene_time_utc: when the target scene imaged the AOI centre (ISO 8601,
-            "Z"): ``start + (row_c / lines) * (end - start)`` with ``row_c`` the
-            radar line of the AOI centre and ``lines`` the scene's line count.
-            A slice spans ~25 s, so ``target_scene.start_utc`` can be off by
-            that much (~155 m of travel at 12 kn).
-        provenance: chain version, grids, radar windows, coverage, library versions.
+        target_scene / historical_scene: the first-ranked slice (largest AOI
+            cover) and its historical scene; the whole target when the pass
+            needed one slice.
+        scene_time_utc: when the pass imaged the AOI centre (ISO 8601, "Z"):
+            ``start + (row_c / lines) * (end - start)`` with ``row_c`` the radar
+            line of the AOI centre in the slice that supplied the centre pixel
+            and ``lines`` that slice's line count. A slice spans ~25 s, so a
+            slice start can be off by that much (~155 m of travel at 12 kn).
+        provenance: chain version, grids, the pass and its slices, radar
+            windows, coverage, library versions.
+        target_slices / historical_slices: every slice in the mosaic, in
+            acquisition order, and the historical scene paired with each.
+            Default: ``[target_scene]`` / ``[historical_scene]``.
     """
     target: np.ndarray
     historical: np.ndarray
@@ -2539,6 +2561,35 @@ class S1VesselScenes:
     historical_scene: S1SceneInfo
     scene_time_utc: str
     provenance: dict
+    target_slices: list[S1SceneInfo] = field(default_factory=list)
+    historical_slices: list[S1SceneInfo] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.target_slices = list(self.target_slices) or [self.target_scene]
+        self.historical_slices = list(self.historical_slices) or [self.historical_scene]
+        if len(self.target_slices) != len(self.historical_slices):
+            raise ValueError(f"{len(self.target_slices)} target slices but "
+                             f"{len(self.historical_slices)} historical scenes")
+
+    @property
+    def scene_id(self) -> str:
+        """Target product id; several slices are joined with ``" + "`` (acquisition order)."""
+        return " + ".join(s.scene_id for s in self.target_slices)
+
+    @property
+    def historical_scene_id(self) -> str:
+        """Historical product id(s), in the order of ``target_slices``."""
+        return " + ".join(s.scene_id for s in self.historical_slices)
+
+    @property
+    def start_utc(self) -> str:
+        """Start of the first target slice."""
+        return self.target_slices[0].start_utc
+
+    @property
+    def end_utc(self) -> str:
+        """End of the last target slice."""
+        return self.target_slices[-1].end_utc
 
     def bands(self) -> dict[str, np.ndarray]:
         """Band dict in the layout ``AI2S1VesselAnalyzer`` reads (views, no copies)."""
@@ -2552,40 +2603,68 @@ def fetch_s1_vessel_scenes(
     date: str,
     *,
     cache_dir: str | Path,
+    orbit_state: str | None = None,
+    pass_time_utc: str | None = None,
 ) -> S1VesselScenes:
-    """Fetch the Sentinel-1 target scene and AI2's historical scene for an AOI.
+    """Fetch the Sentinel-1 target pass and AI2's historical scenes for an AOI.
 
     Data source: Microsoft Planetary Computer ``sentinel-1-grd`` (anonymous,
     SAS-signed COGs; no PU billing, no requester-pays). Only a radar-geometry
     window around the AOI is downloaded.
 
     Scene choice:
-        * target: the IW GRDH VV+VH scene acquired on ``date`` (UTC) whose
-          footprint covers most of the AOI (earliest start on a tie);
-        * historical: AI2's rule, the scene starting in ``[t0 - 60 d, t0 - 30 d]``
-          (t0 = target start) whose footprint overlaps the target footprint
-          most, restricted to the target's orbit direction (AI2 states the
-          scenes must share it; its catalogue query does not filter on it).
+        * pass: the IW GRDH VV+VH slices acquired on ``date`` (UTC) whose
+          footprints intersect the AOI, grouped by satellite and absolute
+          orbit (one pass = one datatake, cut into ~25 s slices). With one
+          pass on the date it is used; with several, ``orbit_state`` and/or
+          ``pass_time_utc`` must leave exactly one, otherwise FetchError lists
+          the passes. Silently taking one would date the detections to a pass
+          the caller did not ask for (hours apart for ascending/descending);
+        * target: the pass's slices ranked by AOI footprint cover (earliest
+          start on a tie); the first is what a one-slice fetch would take.
+          Further slices fill the AOI pixels it leaves without data, see
+          ``_S1_MOSAIC_RULE``; a slice is not fetched once the AOI is covered;
+        * historical: per slice, AI2's rule: the scene starting in
+          ``[t0 - 60 d, t0 - 30 d]`` (t0 = slice start) whose footprint overlaps
+          the slice footprint most, restricted to the slice's orbit direction
+          (AI2 states the scenes must share it; its catalogue query does not
+          filter on it). Per slice because AI2 pairs one historical scene with
+          each scene it processes; a pixel's (target, historical) pair is
+          therefore the one AI2 would see for that slice.
 
     Everything fetched or computed is cached under ``cache_dir``: the raw radar
     windows (``s1_grd/<scene>/``) and the final model input
-    (``s1_vessel_inputs/<date>_<key>.tif`` + ``.json``). A cached request is
-    answered without network access.
+    (``s1_vessel_inputs/<date>_<key>.tif`` + ``.json``). The key holds the
+    pass's slice ids, so the target-day catalogue search runs on every call;
+    a cached request downloads and warps nothing.
 
     Args:
         coords: WGS84 bbox ``{"west", "south", "east", "north"}``.
         date: target acquisition date, ``YYYY-MM-DD`` (UTC).
         cache_dir: cache root.
+        orbit_state: ``"ascending"`` or ``"descending"``: keep only passes in
+            that direction.
+        pass_time_utc: keep only the pass acquired within 2 min of this time:
+            ``HH:MM[:SS]`` on ``date``, or ISO 8601 (UTC if no offset).
 
     Returns:
         S1VesselScenes on the AOI subset of AI2's window grid.
 
     Raises:
-        FetchError: no suitable target/historical scene, or the AOI is outside
-            the target swath.
+        ValueError: an invalid ``orbit_state`` or ``pass_time_utc`` (before any search).
+        FetchError: no suitable pass/historical scene, several passes and no
+            selector that leaves one, or the AOI is outside the pass's swath.
     """
+    import rasterio
+    from rasterio.transform import Affine
+    from shapely.geometry import box
+
+    state = None if orbit_state is None else _s1_orbit_state(orbit_state)
+    when = None if pass_time_utc is None else _s1_pass_time(pass_time_utc, date)
     cache_dir = Path(cache_dir)
-    key = _s1_vessel_cache_key(coords, date)
+    aoi = box(coords["west"], coords["south"], coords["east"], coords["north"])
+    chosen, passes, selected_by = _select_s1_pass(aoi, date, orbit_state=state, pass_time=when)
+    key = _s1_vessel_cache_key(coords, date, [it.id for it in chosen.slices])
     out_dir = cache_dir / "s1_vessel_inputs"
     tif_path = out_dir / f"{date}_{key}.tif"
     meta_path = out_dir / f"{date}_{key}.json"
@@ -2593,19 +2672,150 @@ def fetch_s1_vessel_scenes(
         print(f"    [S1 vessels] cache hit {tif_path}")
         return _load_s1_vessel_cache(tif_path, meta_path)
 
-    import rasterio
-    from rasterio.transform import Affine
+    print(f"    [S1 vessels] pass {_s1_pass_line(chosen.describe())} ({selected_by})")
+    for other in passes:
+        if other is not chosen:
+            print(f"    [S1 vessels]   not used: {_s1_pass_line(other.describe())}")
+
+    primary = chosen.slices[0]
+    epsg, primary_window = _ai2_scene_window(primary.geometry)
+    windows = [primary_window] + [_ai2_scene_window(it.geometry, epsg)[1]
+                                  for it in chosen.slices[1:]]
+    aoi_px = _s1_aoi_pixel_bounds(coords, epsg, (
+        min(w[0] for w in windows), min(w[1] for w in windows),
+        max(w[2] for w in windows), max(w[3] for w in windows)))
+    c0, r0, c1, r1 = aoi_px
+    target_dn = np.zeros((len(_S1_POLARISATIONS), r1 - r0, c1 - c0), dtype=np.uint16)
+    hist_dn = np.zeros_like(target_dn)
+    source = np.full((r1 - r0, c1 - c0), -1, dtype=np.int8)   # rank of the supplying slice
+    radar_windows: dict = {}
+    used: list[dict] = []
+    skipped: list[dict] = []
+    for rank, (item, window) in enumerate(zip(chosen.slices, windows, strict=True)):
+        if rank and not (source < 0).any():
+            skipped.append({"scene_id": item.id, "reason": "AOI already covered"})
+            continue
+        try:
+            sub = _s1_aoi_pixel_bounds(coords, epsg, window)
+        except FetchError:
+            if rank == 0:
+                raise
+            skipped.append({"scene_id": item.id, "reason": "its window misses the AOI"})
+            continue
+        hist_item = _select_s1_historical(item)
+        print(f"    [S1 vessels] target {item.id} (AOI cover {chosen.covers[rank]:.3f}), "
+              f"historical {hist_item.id}")
+        t_k, h_k, rw_k = _s1_scene_pair(item, hist_item, epsg, window, sub, cache_dir)
+        rows, cols = slice(sub[1] - r0, sub[3] - r0), slice(sub[0] - c0, sub[2] - c0)
+        if rank == 0:
+            # The first slice is pasted whole (nodata included): with one slice
+            # the model input is exactly the single-scene fetch.
+            target_dn[:, rows, cols] = t_k
+            hist_dn[:, rows, cols] = h_k
+            source[rows, cols][t_k[0] != 0] = 0
+        else:
+            fill = (source[rows, cols] < 0) & (t_k[0] != 0)
+            if not fill.any():
+                skipped.append({"scene_id": item.id, "historical_scene_id": hist_item.id,
+                                "reason": "no valid pixel where the AOI lacked data"})
+                continue
+            target_dn[:, rows, cols][:, fill] = t_k[:, fill]
+            hist_dn[:, rows, cols][:, fill] = h_k[:, fill]
+            source[rows, cols][fill] = rank
+        for name, rw in rw_k.items():   # one historical may serve two slices
+            radar_windows[name if name not in radar_windows else f"{name}#{rank}"] = rw
+        used.append({"rank": rank, "item": item, "hist": hist_item, "window": window,
+                     "sub": sub})
+
+    valid_t = np.count_nonzero(target_dn[0]) / target_dn[0].size
+    valid_h = np.count_nonzero(hist_dn[0]) / hist_dn[0].size
+    if valid_t == 0.0:
+        raise FetchError(f"AOI {coords} lies outside the swath of "
+                         f"{' + '.join(u['item'].id for u in used)}")
+    # Date the AOI centre by the slice that supplied its pixel (the first
+    # slice if the centre has no data, as a one-slice fetch does).
+    centre_rank = int(source[(r1 - r0) // 2, (c1 - c0) // 2])
+    dating = next(u for u in used if u["rank"] == max(centre_rank, 0))
+    header, _ = _s1_scene_header(dating["item"], _S1_POLARISATIONS[0],
+                                 cache_dir / "s1_grd" / dating["item"].id, None)
+    scene_time_utc = _s1_line_time_utc(_s1_scene_info(dating["item"]),
+                                       _s1_aoi_centre_line(header, epsg, aoi_px)
+                                       / header["height"])
+
+    transform = Affine(
+        S1_VESSEL_GSD_M, 0, c0 * S1_VESSEL_GSD_M, 0, -S1_VESSEL_GSD_M, -r0 * S1_VESSEL_GSD_M)
+    geo = GeoContext(
+        crs=f"EPSG:{epsg}",
+        transform=transform,
+        bounds_projected={"west": c0 * S1_VESSEL_GSD_M, "south": -r1 * S1_VESSEL_GSD_M,
+                          "east": c1 * S1_VESSEL_GSD_M, "north": -r0 * S1_VESSEL_GSD_M},
+        bounds_wgs84=dict(coords),
+        shape=(r1 - r0, c1 - c0),
+    )
+    in_time_order = sorted(used, key=lambda u: _s1_start(u["item"]))
+    provenance = {
+        "chain_version": S1_VESSEL_CHAIN_VERSION,
+        "source": S1_VESSEL_SOURCE,
+        "request": {"coords": dict(coords), "date": date, "orbit_state": state,
+                    "pass_time_utc": pass_time_utc},
+        "window_epsg": epsg,
+        "ai2_window_px": list(primary_window),
+        "aoi_px": list(aoi_px),
+        "aoi_cover_target_footprint": round(chosen.covers[0], 6),
+        "valid_frac_target": round(valid_t, 6),
+        "valid_frac_historical": round(valid_h, 6),
+        "pass": {
+            **chosen.describe(),
+            "selected_by": selected_by,
+            "other_passes": [p.describe() for p in passes if p is not chosen],
+            "mosaic_rule": _S1_MOSAIC_RULE,
+            "scene_time_from": dating["item"].id,
+            "slices": [{
+                "scene_id": u["item"].id,
+                "historical_scene_id": u["hist"].id,
+                "rank": u["rank"],
+                "aoi_cover_footprint": round(chosen.covers[u["rank"]], 6),
+                "ai2_window_px": list(u["window"]),
+                "aoi_px": list(u["sub"]),
+                "mosaic_px": int(np.count_nonzero(source == u["rank"])),
+            } for u in in_time_order],
+            "skipped_slices": skipped,
+        },
+        "radar_windows": radar_windows,
+        "rasterio": rasterio.__version__,
+        "gdal": rasterio.__gdal_version__,
+    }
+    first = used[0]                    # rank 0: the first slice is always used
+    scenes = S1VesselScenes(
+        target=target_dn, historical=hist_dn, geo=geo,
+        target_scene=_s1_scene_info(first["item"]),
+        historical_scene=_s1_scene_info(first["hist"]),
+        scene_time_utc=scene_time_utc, provenance=provenance,
+        target_slices=[_s1_scene_info(u["item"]) for u in in_time_order],
+        historical_slices=[_s1_scene_info(u["hist"]) for u in in_time_order])
+    _write_s1_vessel_cache(tif_path, meta_path, scenes)
+    return scenes
+
+
+def s1_vessel_passes(coords: dict, date: str) -> list[dict]:
+    """The Sentinel-1 passes on ``date`` whose IW GRDH VV+VH slices touch the AOI.
+
+    One dict per pass (acquisition order) with the fields ``fetch_s1_vessel_scenes``
+    records under ``provenance["pass"]``: platform, orbits, orbit state, start/end,
+    the AOI fraction inside the union of the footprints, and the slice ids.
+    """
     from shapely.geometry import box
 
     aoi = box(coords["west"], coords["south"], coords["east"], coords["north"])
-    target_item, aoi_cover = _select_s1_target(aoi, date)
-    hist_item = _select_s1_historical(target_item)
-    target_scene, hist_scene = _s1_scene_info(target_item), _s1_scene_info(hist_item)
-    print(f"    [S1 vessels] target {target_scene.scene_id} (AOI cover {aoi_cover:.3f}), "
-          f"historical {hist_scene.scene_id}")
+    return [p.describe() for p in _s1_passes(aoi, date)]
 
-    epsg, window_px = _ai2_scene_window(target_item.geometry)
-    aoi_px = _s1_aoi_pixel_bounds(coords, epsg, window_px)
+
+def _s1_scene_pair(target_item, hist_item, epsg: int, window_px: tuple, aoi_px: tuple,
+                   cache_dir: Path) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Target and historical DN of one slice on its window grid, cut to ``aoi_px``.
+
+    Returns ``(target (2, h, w), historical (2, h, w), radar_windows)``, uint16.
+    """
     radar_windows: dict = {}
     stacks = []
     for item in (target_item, hist_item):
@@ -2617,54 +2827,21 @@ def fetch_s1_vessel_scenes(
             radar_windows[f"{item.id}/{pol}"] = {**rwin, "step1_epsg": step1_epsg}
             pols.append(_s1_grd_to_window_grid(vrt_path, step1_epsg, epsg, window_px, aoi_px))
         stacks.append(np.stack(pols))
-    target_dn, hist_dn = stacks
-
-    valid_t = np.count_nonzero(target_dn[0]) / target_dn[0].size
-    valid_h = np.count_nonzero(hist_dn[0]) / hist_dn[0].size
-    if valid_t == 0.0:
-        raise FetchError(f"AOI {coords} lies outside the swath of {target_scene.scene_id}")
-    centre = radar_windows[f"{target_item.id}/{_S1_POLARISATIONS[0]}"]
-    scene_time_utc = _s1_line_time_utc(target_scene, centre["aoi_center_row"] / centre["lines"])
-
-    c0, r0, c1, r1 = aoi_px
-    transform = Affine(
-        S1_VESSEL_GSD_M, 0, c0 * S1_VESSEL_GSD_M, 0, -S1_VESSEL_GSD_M, -r0 * S1_VESSEL_GSD_M)
-    geo = GeoContext(
-        crs=f"EPSG:{epsg}",
-        transform=transform,
-        bounds_projected={"west": c0 * S1_VESSEL_GSD_M, "south": -r1 * S1_VESSEL_GSD_M,
-                          "east": c1 * S1_VESSEL_GSD_M, "north": -r0 * S1_VESSEL_GSD_M},
-        bounds_wgs84=dict(coords),
-        shape=(r1 - r0, c1 - c0),
-    )
-    provenance = {
-        "chain_version": S1_VESSEL_CHAIN_VERSION,
-        "source": S1_VESSEL_SOURCE,
-        "request": {"coords": dict(coords), "date": date},
-        "window_epsg": epsg,
-        "ai2_window_px": list(window_px),
-        "aoi_px": list(aoi_px),
-        "aoi_cover_target_footprint": round(aoi_cover, 6),
-        "valid_frac_target": round(valid_t, 6),
-        "valid_frac_historical": round(valid_h, 6),
-        "radar_windows": radar_windows,
-        "rasterio": rasterio.__version__,
-        "gdal": rasterio.__gdal_version__,
-    }
-    scenes = S1VesselScenes(target=target_dn, historical=hist_dn, geo=geo,
-                            target_scene=target_scene, historical_scene=hist_scene,
-                            scene_time_utc=scene_time_utc, provenance=provenance)
-    _write_s1_vessel_cache(tif_path, meta_path, scenes)
-    return scenes
+    return stacks[0], stacks[1], radar_windows
 
 
-def _s1_vessel_cache_key(coords: dict, date: str) -> str:
-    """Deterministic cache key of a fetch request (chain + record versions, date, bbox)."""
+def _s1_vessel_cache_key(coords: dict, date: str, scene_ids: list[str]) -> str:
+    """Deterministic cache key of a fetch (chain + record versions, date, bbox, pass slices).
+
+    ``scene_ids`` are the chosen pass's slice ids (order-free): a request for
+    another pass on the same date and bbox never meets this entry.
+    """
     payload = {
         "chain": S1_VESSEL_CHAIN_VERSION,
         "format": _S1_VESSEL_CACHE_FORMAT,
         "date": date,
         "bbox": [round(float(coords[k]), 6) for k in ("west", "south", "east", "north")],
+        "scenes": sorted(scene_ids),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -2703,8 +2880,111 @@ def _s1_line_time_utc(scene: S1SceneInfo, line_frac: float) -> str:
     return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def _select_s1_target(aoi, date: str) -> tuple[Any, float]:
-    """Target scene on ``date``: largest footprint overlap with the AOI."""
+def _s1_orbit_state(value: str) -> str:
+    """Validated ``orbit_state`` selector, lower case."""
+    state = str(value).strip().lower()
+    if state not in _S1_ORBIT_STATES:
+        raise ValueError(f"orbit_state must be one of {_S1_ORBIT_STATES}, got {value!r}")
+    return state
+
+
+def _s1_pass_time(value: str, date: str) -> datetime:
+    """``pass_time_utc`` -> aware UTC datetime on ``date``.
+
+    Accepts ``HH:MM[:SS[.ffffff]]`` (optionally ending in "Z"), taken on
+    ``date``, or a full ISO 8601 datetime (UTC unless it carries an offset).
+    """
+    from datetime import time as clock
+
+    day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    text = str(value).strip()
+    try:
+        if "T" in text or " " in text:
+            t = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            t = t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
+        else:
+            tod = clock.fromisoformat(text.removesuffix("Z"))
+            t = datetime.combine(day.date(), tod, tzinfo=tod.tzinfo or timezone.utc)
+    except ValueError:
+        raise ValueError(f"pass_time_utc must be HH:MM[:SS] or ISO 8601, got {value!r}") from None
+    t = t.astimezone(timezone.utc)
+    if t.date() != day.date():
+        raise ValueError(f"pass_time_utc {value!r} is not on {date} (UTC)")
+    return t
+
+
+@dataclass
+class _S1Pass:
+    """The slices of one satellite pass (one absolute orbit) that touch the AOI."""
+    slices: list            # STAC items, ranked: AOI cover desc, then start, then id
+    covers: list[float]     # AOI fraction inside each slice's footprint (same order)
+    union_cover: float      # AOI fraction inside the union of the footprints
+
+    @property
+    def start(self) -> datetime:
+        return min(_s1_start(it) for it in self.slices)
+
+    @property
+    def end(self) -> datetime:
+        return max(_parse_utc(it.properties["end_datetime"]) for it in self.slices)
+
+    def time_distance(self, t: datetime) -> timedelta:
+        """Zero inside ``[start, end]``, else the gap to the nearer end."""
+        return max(self.start - t, t - self.end, timedelta(0))
+
+    def describe(self) -> dict:
+        from .data import s1_shared
+
+        first = min(self.slices, key=_s1_start)
+        last = max(self.slices, key=lambda it: _parse_utc(it.properties["end_datetime"]))
+        p = first.properties
+        return {
+            "platform": p.get("platform") or first.id[:3],
+            "absolute_orbit": int(p["sat:absolute_orbit"]),
+            "relative_orbit": int(p["sat:relative_orbit"]),
+            "orbit_state": s1_shared.orbit_from_item(first) or "UNKNOWN",
+            "start_utc": p["start_datetime"],
+            "end_utc": last.properties["end_datetime"],
+            "aoi_cover_footprints": round(self.union_cover, 6),
+            "slice_ids": [it.id for it in sorted(self.slices, key=_s1_start)],
+        }
+
+
+def _s1_pass_line(d: dict) -> str:
+    """One human-readable line per pass, for logs and errors."""
+    n = len(d["slice_ids"])
+    return (f"{d['orbit_state'].lower()} {d['platform']} abs. orbit {d['absolute_orbit']} "
+            f"(rel. {d['relative_orbit']}) {d['start_utc'][11:19]}-{d['end_utc'][11:19]} UTC, "
+            f"{n} slice{'s' if n > 1 else ''}, AOI cover {d['aoi_cover_footprints']:.3f}")
+
+
+def _s1_pass_group(item) -> tuple[str, int]:
+    """Pass identity: satellite + absolute orbit (a datatake's slices share both)."""
+    p = item.properties
+    return str(p.get("platform") or item.id[:3]).lower(), int(p["sat:absolute_orbit"])
+
+
+def _s1_drop_duplicates(items: list) -> list:
+    """One item per acquisition (satellite, start, end).
+
+    MPC lists some products twice, e.g. on 2025-07-19
+    ``S1C_..._003292_006A41`` and ``S1C_..._003292`` (same times and
+    footprint). Keeps the full product name (the longer id), then the smaller id.
+    """
+    best: dict = {}
+    for it in items:
+        k = (_s1_pass_group(it)[0], it.properties["start_datetime"],
+             it.properties["end_datetime"])
+        if k not in best or (-len(it.id), it.id) < (-len(best[k].id), best[k].id):
+            best[k] = it
+    return list(best.values())
+
+
+def _s1_passes(aoi, date: str) -> list[_S1Pass]:
+    """The passes on ``date`` whose IW GRDH VV+VH slices intersect the AOI, by start."""
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+
     from .data import mpc_s1, s1_shared
 
     day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -2712,12 +2992,49 @@ def _select_s1_target(aoi, date: str) -> tuple[Any, float]:
     items = _ai2_s1_candidates(mpc_s1.search_grd_items(interval, bbox_4326=aoi.bounds))
     if not items:
         raise FetchError(f"No Sentinel-1 IW GRDH VV+VH scene on {date} over {aoi.bounds}")
-    best = min(items, key=lambda it: (-s1_shared.footprint_intersection_area(it, aoi),
-                                      _s1_start(it)))
-    cover = s1_shared.footprint_intersection_area(best, aoi) / aoi.area
-    if cover == 0.0:
+    area = {it.id: s1_shared.footprint_intersection_area(it, aoi) for it in items}
+    items = _s1_drop_duplicates([it for it in items if area[it.id] > 0.0])
+    if not items:
         raise FetchError(f"No Sentinel-1 footprint on {date} intersects {aoi.bounds}")
-    return best, cover
+    groups: dict = {}
+    for it in items:
+        groups.setdefault(_s1_pass_group(it), []).append(it)
+    passes = []
+    for group in groups.values():
+        # Ranked as the one-slice choice was: footprint overlap, then earliest start.
+        ranked = sorted(group, key=lambda it: (-area[it.id], _s1_start(it), it.id))
+        union = unary_union([shape(it.geometry) for it in ranked]).intersection(aoi).area
+        passes.append(_S1Pass(slices=ranked, covers=[area[it.id] / aoi.area for it in ranked],
+                              union_cover=union / aoi.area))
+    return sorted(passes, key=lambda p: (p.start, _s1_pass_group(p.slices[0])))
+
+
+def _select_s1_pass(aoi, date: str, *, orbit_state: str | None = None,
+                    pass_time: datetime | None = None) -> tuple[_S1Pass, list[_S1Pass], str]:
+    """The one pass the request names: ``(chosen, all passes on the date, how chosen)``.
+
+    Several passes and no selector (or a selector that leaves several) is an
+    error that lists them; so is a selector that matches none.
+    """
+    passes = _s1_passes(aoi, date)
+    chosen, rule = passes, []
+    if orbit_state is not None:
+        chosen = [p for p in chosen if p.describe()["orbit_state"].lower() == orbit_state]
+        rule.append(f"orbit_state={orbit_state}")
+    if pass_time is not None:
+        chosen = [p for p in chosen if p.time_distance(pass_time) <= _S1_PASS_TIME_TOL]
+        rule.append(f"pass_time_utc={pass_time:%H:%M:%S}")
+    listing = "\n".join(f"  {_s1_pass_line(p.describe())}" for p in passes)
+    if not chosen:
+        raise FetchError(f"No Sentinel-1 pass on {date} over {aoi.bounds} matches "
+                         f"{', '.join(rule)}; passes on the date:\n{listing}")
+    if len(chosen) > 1:
+        what = f" matching {', '.join(rule)}" if rule else ""
+        raise FetchError(
+            f"{len(chosen)} Sentinel-1 passes{what} on {date} over {aoi.bounds}; choose one "
+            f"with orbit_state ('ascending'/'descending') and/or pass_time_utc (HH:MM[:SS], "
+            f"within {_S1_PASS_TIME_TOL.seconds // 60} min of the pass):\n{listing}")
+    return chosen[0], passes, ", ".join(rule) or "the only pass on the date"
 
 
 def _select_s1_historical(target) -> Any:
@@ -2776,18 +3093,24 @@ def _ai2_utm_epsg(lon: float, lat: float) -> int:
     return int(infos[0].code)
 
 
-def _ai2_scene_window(footprint: dict) -> tuple[int, tuple[int, int, int, int]]:
+def _ai2_scene_window(footprint: dict,
+                      epsg: int | None = None) -> tuple[int, tuple[int, int, int, int]]:
     """AI2's scene-ID window: UTM zone of the footprint centroid, int() pixel bounds.
 
     Mirrors ``setup_dataset_with_scene_ids``: the footprint is reprojected
     vertex-wise, divided by (10, -10) and its bounds are truncated with
     ``int()`` (towards zero, so the negative row bounds round up).
+
+    ``epsg`` forces the zone. The later slices of a pass use the first slice's
+    zone so that all lie on one lattice; where their own centroid zone agrees,
+    which is the common case, the window is AI2's own.
     """
     from rasterio.warp import transform_geom
     from shapely.geometry import shape
 
-    shp = shape(footprint)
-    epsg = _ai2_utm_epsg(shp.centroid.x, shp.centroid.y)
+    if epsg is None:
+        shp = shape(footprint)
+        epsg = _ai2_utm_epsg(shp.centroid.x, shp.centroid.y)
     minx, miny, maxx, maxy = shape(transform_geom("EPSG:4326", f"EPSG:{epsg}", footprint)).bounds
     g = S1_VESSEL_GSD_M
     return epsg, (int(minx / g), int(maxy / -g), int(maxx / g), int(miny / -g))
@@ -2884,7 +3207,6 @@ def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple) -> dict:
     centre outside it) and the scene's line count (``lines``), which date the
     AOI within the slice.
     """
-    from pyproj import Transformer
     from rasterio.control import GroundControlPoint
     from rasterio.transform import GCPTransformer
 
@@ -2906,14 +3228,31 @@ def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple) -> dict:
     r1 = min(math.ceil(np.max(rows)) + m, header["height"])
     if c1 <= c0 or r1 <= r0:
         raise FetchError(f"{header['scene_id']}: AOI maps outside the radar raster")
+    return {"col_off": c0, "row_off": r0, "width": c1 - c0, "height": r1 - r0,
+            "tps_roundtrip_max_m": round(err_m, 3),
+            "aoi_center_row": _s1_centre_line(tps, epsg, aoi_px, header["height"]),
+            "lines": header["height"]}
+
+
+def _s1_centre_line(tps, epsg: int, aoi_px: tuple, lines: int) -> float:
+    """Radar line of the centre of ``aoi_px`` (inverse TPS), clamped to ``[0, lines]``."""
+    from pyproj import Transformer
+
     g = S1_VESSEL_GSD_M
     lon_c, lat_c = Transformer.from_crs(epsg, 4326, always_xy=True).transform(
         (aoi_px[0] + aoi_px[2]) / 2 * g, (aoi_px[1] + aoi_px[3]) / 2 * -g)
     row_c, _ = tps.rowcol(lon_c, lat_c, op=float)
-    return {"col_off": c0, "row_off": r0, "width": c1 - c0, "height": r1 - r0,
-            "tps_roundtrip_max_m": round(err_m, 3),
-            "aoi_center_row": round(float(min(max(row_c, 0.0), header["height"])), 3),
-            "lines": header["height"]}
+    return round(float(min(max(row_c, 0.0), lines)), 3)
+
+
+def _s1_aoi_centre_line(header: dict, epsg: int, aoi_px: tuple) -> float:
+    """``_s1_centre_line`` from a cached scene header (no network)."""
+    from rasterio.control import GroundControlPoint
+    from rasterio.transform import GCPTransformer
+
+    gcps = [GroundControlPoint(row=r, col=c, x=x, y=y, z=z, id=i)
+            for i, c, r, x, y, z in header["gcps"]]
+    return _s1_centre_line(GCPTransformer(gcps, tps=True), epsg, aoi_px, header["height"])
 
 
 def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Path,
@@ -3073,6 +3412,8 @@ def _write_s1_vessel_cache(tif_path: Path, meta_path: Path, scenes: S1VesselScen
     _atomic_write_text(meta_path, json.dumps({
         "target_scene": dataclasses.asdict(scenes.target_scene),
         "historical_scene": dataclasses.asdict(scenes.historical_scene),
+        "target_slices": [dataclasses.asdict(s) for s in scenes.target_slices],
+        "historical_slices": [dataclasses.asdict(s) for s in scenes.historical_slices],
         "scene_time_utc": scenes.scene_time_utc,
         "geo": {"crs": geo.crs, "transform": list(geo.transform)[:6],
                 "bounds_projected": geo.bounds_projected, "bounds_wgs84": geo.bounds_wgs84,
@@ -3100,6 +3441,8 @@ def _load_s1_vessel_cache(tif_path: Path, meta_path: Path) -> S1VesselScenes:
         historical_scene=S1SceneInfo(**meta["historical_scene"]),
         scene_time_utc=meta["scene_time_utc"],
         provenance=meta["provenance"],
+        target_slices=[S1SceneInfo(**s) for s in meta["target_slices"]],
+        historical_slices=[S1SceneInfo(**s) for s in meta["historical_slices"]],
     )
 
 

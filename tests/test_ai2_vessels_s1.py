@@ -52,7 +52,8 @@ def _rect(west: float, south: float, east: float, north: float) -> dict:
 
 def _item(item_id: str, start: str, footprint: dict, *, end: str | None = None,
           direction: str = "descending", rel_orbit: int = 66, abs_orbit: int = 3432,
-          pols: tuple[str, ...] = ("VV", "VH"), mode: str = "IW") -> SimpleNamespace:
+          pols: tuple[str, ...] = ("VV", "VH"), mode: str = "IW",
+          platform: str = "sentinel-1d") -> SimpleNamespace:
     """An MPC ``sentinel-1-grd`` STAC item with the fields the fetch reads."""
     from shapely.geometry import shape
 
@@ -61,7 +62,7 @@ def _item(item_id: str, start: str, footprint: dict, *, end: str | None = None,
         properties={"start_datetime": start, "end_datetime": end or start,
                     "sat:orbit_state": direction, "sat:relative_orbit": rel_orbit,
                     "sat:absolute_orbit": abs_orbit, "sar:instrument_mode": mode,
-                    "sar:polarizations": list(pols), "platform": "sentinel-1d"},
+                    "sar:polarizations": list(pols), "platform": platform},
         assets={"vv": SimpleNamespace(
             href=f"https://example.blob/GRD/{item_id}_71E0.SAFE/measurement/iw-vv.tiff")})
 
@@ -466,6 +467,21 @@ def test_geojson_schema_matches_marine_awareness():
     json.dumps(fc)  # serialisable without a custom encoder
 
 
+def test_geojson_records_the_pass_only_when_given():
+    from imint.exporters.export import s1_vessel_feature_collection
+
+    s1_pass = {"slice_ids": ["S1C_A", "S1C_B"], "selected_by": "orbit_state=descending"}
+    fc = s1_vessel_feature_collection(
+        _fake_result(), _GEO, date="2026-06-27", bbox=_BBOX, scene_id="S1C_A + S1C_B",
+        historical_scene_id="S1C_H + S1D_H", scene_time_utc="2026-06-27T05:39:37.6Z",
+        scene_start_utc="2026-06-27T05:39:11.6Z", scene_end_utc="2026-06-27T05:40:01.6Z",
+        source="test", s1_pass=s1_pass)
+    assert set(fc["properties"]) == REQUIRED_FC_PROPS | {"s1_pass"}
+    assert fc["properties"]["s1_pass"] == s1_pass
+    assert fc["properties"]["scene_id"] == "S1C_A + S1C_B"
+    assert "s1_pass" not in _fc()["properties"]
+
+
 def test_geojson_drops_detections_outside_the_requested_bbox():
     fc = _fc()
     assert fc["properties"]["n_outside_bbox"] == 1
@@ -514,58 +530,215 @@ def test_geojson_rejects_non_utc_time(field):
                                      source="s", **times)
 
 
-# ── scene selection (catalogue faked) ───────────────────────────────────────
+# ── pass and scene selection (catalogue faked) ──────────────────────────────
 
 _T0 = "2026-06-28T05:31:35.545314Z"
 _TARGET_ID = "S1D_IW_GRDH_1SDV_20260628T053135_20260628T053200_003432_0060CF"
 
 
-def test_select_target_takes_best_cover_iw_grdh_dual_pol_on_the_day(monkeypatch):
+def test_select_pass_takes_the_only_pass_iw_grdh_dual_pol_on_the_day(monkeypatch):
     from shapely.geometry import box
 
     aoi = box(10.5, 57.55, 11.7, 58.05)
     full = _rect(10.0, 57.0, 12.0, 59.0)
     items = [
         _item(_TARGET_ID, _T0, _rect(10.0, 57.0, 12.0, 58.04)),                 # cover 0.98
-        _item("S1A_IW_GRDH_1SDV_20260628T165000_X", "2026-06-28T16:50:00Z",
-              _rect(11.6, 57.0, 13.0, 59.0)),                                      # cover 0.083
-        _item("S1C_IW_GRDM_1SDV_20260628T053000_X", "2026-06-28T05:30:00Z", full),  # not GRDH
+        _item("S1C_IW_GRDM_1SDV_20260628T053000_X", "2026-06-28T05:30:00Z", full,  # not GRDH
+              platform="sentinel-1c", abs_orbit=1),
         _item("S1A_IW_GRDH_1SSV_20260628T053000_X", "2026-06-28T05:30:00Z", full,
-              pols=("VV",)),                                                       # single pol
+              pols=("VV",), platform="sentinel-1a", abs_orbit=2),                  # single pol
         _item("S1A_EW_GRDH_1SDV_20260628T053000_X", "2026-06-28T05:30:00Z", full,
-              mode="EW"),                                                          # not IW
-        _item("S1D_IW_GRDH_1SDV_20260627T053135_X", "2026-06-27T05:31:35Z", full),  # other day
+              mode="EW", platform="sentinel-1a", abs_orbit=3),                     # not IW
+        _item("S1D_IW_GRDH_1SDV_20260627T053135_X", "2026-06-27T05:31:35Z", full,  # other day
+              abs_orbit=3417),
     ]
     cat = FakeCatalogue(items)
     monkeypatch.setattr(mpc_s1, "search_grd_items", cat)
-    best, cover = fetch._select_s1_target(aoi, "2026-06-28")
-    assert best.id == _TARGET_ID
-    assert cover == pytest.approx(0.98)
+    chosen, passes, rule = fetch._select_s1_pass(aoi, "2026-06-28")
+    assert [it.id for it in chosen.slices] == [_TARGET_ID] and passes == [chosen]
+    assert chosen.covers == [pytest.approx(0.98)]
+    assert rule == "the only pass on the date"
     assert cat.calls == [{"interval": "2026-06-28T00:00:00Z/2026-06-29T00:00:00Z",
                           "bbox_4326": aoi.bounds, "intersects": None, "limit": 50}]
 
 
-def test_select_target_tie_goes_to_the_earliest_start(monkeypatch):
+def test_select_pass_ranks_slices_by_cover_then_earliest_start(monkeypatch):
     from shapely.geometry import box
 
     fp = _rect(10.0, 57.0, 12.0, 59.0)
     late = _item("S1D_IW_GRDH_1SDV_20260628T053200_X", "2026-06-28T05:32:00Z", fp)
     early = _item("S1D_IW_GRDH_1SDV_20260628T053135_X", _T0, fp)
-    monkeypatch.setattr(mpc_s1, "search_grd_items", FakeCatalogue([late, early]))
-    assert fetch._select_s1_target(box(10.5, 57.55, 11.7, 58.05), "2026-06-28")[0] is early
+    sliver = _item("S1D_IW_GRDH_1SDV_20260628T053110_X", "2026-06-28T05:31:10Z",
+                   _rect(10.0, 57.5, 12.0, 57.6))
+    monkeypatch.setattr(mpc_s1, "search_grd_items", FakeCatalogue([sliver, late, early]))
+    chosen, _, _ = fetch._select_s1_pass(box(10.5, 57.55, 11.7, 58.05), "2026-06-28")
+    assert chosen.slices == [early, late, sliver]          # one pass: same satellite + orbit
+    assert chosen.describe()["slice_ids"] == [sliver.id, early.id, late.id]   # time order
 
 
-def test_select_target_raises_without_a_covering_scene(monkeypatch):
+def test_select_pass_raises_without_a_covering_scene(monkeypatch):
     from shapely.geometry import box
 
     aoi = box(10.5, 57.55, 11.7, 58.05)
     monkeypatch.setattr(mpc_s1, "search_grd_items", FakeCatalogue([]))
     with pytest.raises(fetch.FetchError, match="No Sentinel-1 IW GRDH"):
-        fetch._select_s1_target(aoi, "2026-06-28")
+        fetch._select_s1_pass(aoi, "2026-06-28")
     monkeypatch.setattr(mpc_s1, "search_grd_items",
                         FakeCatalogue([_item(_TARGET_ID, _T0, _rect(20, 60, 21, 61))]))
     with pytest.raises(fetch.FetchError, match="intersects"):
-        fetch._select_s1_target(aoi, "2026-06-28")
+        fetch._select_s1_pass(aoi, "2026-06-28")
+
+
+def _poly(*lonlat: tuple[float, float]) -> dict:
+    return {"type": "Polygon", "coordinates": [[list(p) for p in (*lonlat, lonlat[0])]]}
+
+
+def _skagen_0627() -> dict[str, SimpleNamespace]:
+    """MPC items of 2026-06-27 over the Skagen-Marstrand bbox (ids, times, footprints):
+    descending S1C split over two slices of one datatake, ascending S1C in one."""
+    def s1c(item_id, start, end, fp, **kw):
+        return _item(item_id, start, fp, end=end, platform="sentinel-1c", **kw)
+
+    return {
+        "dsc_n": s1c("S1C_IW_GRDH_1SDV_20260627T053911_20260627T053936_008287_01063E",
+                     "2026-06-27T05:39:11.688393Z", "2026-06-27T05:39:36.686143Z",
+                     _poly((12.076245, 57.750389), (12.705921, 59.235237),
+                           (8.065848, 59.675667), (7.627708, 58.184185)),
+                     rel_orbit=139, abs_orbit=8287),
+        "dsc_s": s1c("S1C_IW_GRDH_1SDV_20260627T053936_20260627T054001_008287_01063E",
+                     "2026-06-27T05:39:36.687612Z", "2026-06-27T05:40:01.686858Z",
+                     _poly((11.479633, 56.263756), (12.076209, 57.750301),
+                           (7.629532, 58.183952), (7.206832, 56.691799)),
+                     rel_orbit=139, abs_orbit=8287),
+        "asc": s1c("S1C_IW_GRDH_1SDV_20260627T165257_20260627T165322_008294_010682",
+                   "2026-06-27T16:52:57.190316Z", "2026-06-27T16:53:22.188725Z",
+                   _poly((9.451989, 58.642635), (10.070417, 57.157291),
+                         (14.449341, 57.589111), (14.015204, 59.080757)),
+                   direction="ascending", rel_orbit=146, abs_orbit=8294),
+    }
+
+
+def test_two_passes_without_a_selector_are_refused_with_a_listing(monkeypatch):
+    from shapely.geometry import box
+
+    monkeypatch.setattr(mpc_s1, "search_grd_items",
+                        FakeCatalogue(list(_skagen_0627().values())))
+    with pytest.raises(fetch.FetchError) as err:
+        fetch._select_s1_pass(box(10.5, 57.55, 11.7, 58.05), "2026-06-27")
+    msg = str(err.value)
+    assert msg.startswith("2 Sentinel-1 passes on 2026-06-27")
+    assert "orbit_state" in msg and "pass_time_utc" in msg
+    assert ("descending sentinel-1c abs. orbit 8287 (rel. 139) 05:39:11-05:40:01 UTC, "
+            "2 slices, AOI cover 1.000") in msg
+    assert ("ascending sentinel-1c abs. orbit 8294 (rel. 146) 16:52:57-16:53:22 UTC, "
+            "1 slice, AOI cover 1.000") in msg
+
+
+@pytest.mark.parametrize(("selector", "want"), [
+    ({"orbit_state": "descending"}, "dsc"),
+    ({"orbit_state": "ascending"}, "asc"),
+    ({"pass_time": "16:53"}, "asc"),
+    ({"pass_time": "2026-06-27T05:39:37.62Z"}, "dsc"),
+    ({"pass_time": "05:41:30"}, "dsc"),                   # 89 s after the last slice ends
+    ({"pass_time": "2026-06-27T07:39:00+02:00"}, "dsc"),
+    ({"orbit_state": "descending", "pass_time": "05:39"}, "dsc"),
+])
+def test_selector_picks_the_pass_and_joins_its_slices(monkeypatch, selector, want):
+    from shapely.geometry import box
+
+    items = _skagen_0627()
+    monkeypatch.setattr(mpc_s1, "search_grd_items", FakeCatalogue(list(items.values())))
+    when = selector.get("pass_time")
+    chosen, passes, rule = fetch._select_s1_pass(
+        box(10.5, 57.55, 11.7, 58.05), "2026-06-27", orbit_state=selector.get("orbit_state"),
+        pass_time=None if when is None else fetch._s1_pass_time(when, "2026-06-27"))
+    assert len(passes) == 2 and chosen in passes
+    if want == "asc":
+        assert chosen.slices == [items["asc"]] and chosen.covers == [pytest.approx(1.0)]
+    else:   # the southern slice covers more of the AOI (0.591 vs 0.409), so it ranks first
+        assert chosen.slices == [items["dsc_s"], items["dsc_n"]]
+        assert chosen.covers == [pytest.approx(0.591, abs=1e-3), pytest.approx(0.409, abs=1e-3)]
+        assert chosen.union_cover > 0.999
+    assert rule == ", ".join(
+        f"orbit_state={v}" if k == "orbit_state"
+        else f"pass_time_utc={fetch._s1_pass_time(v, '2026-06-27'):%H:%M:%S}"
+        for k, v in selector.items())
+
+
+def test_selector_matching_no_pass_is_refused(monkeypatch):
+    from shapely.geometry import box
+
+    monkeypatch.setattr(mpc_s1, "search_grd_items",
+                        FakeCatalogue(list(_skagen_0627().values())))
+    with pytest.raises(fetch.FetchError, match="matches pass_time_utc=05:43:00") as err:
+        fetch._select_s1_pass(box(10.5, 57.55, 11.7, 58.05), "2026-06-27",
+                              pass_time=fetch._s1_pass_time("05:43", "2026-06-27"))
+    assert "05:39:11-05:40:01" in str(err.value) and "16:52:57-16:53:22" in str(err.value)
+    with pytest.raises(fetch.FetchError, match="matches orbit_state=ascending, pass_time_utc"):
+        fetch._select_s1_pass(box(10.5, 57.55, 11.7, 58.05), "2026-06-27",
+                              orbit_state="ascending",
+                              pass_time=fetch._s1_pass_time("05:39", "2026-06-27"))
+
+
+def test_two_passes_in_one_direction_need_the_pass_time(monkeypatch):
+    """2026-06-28 Skagen: an S1A pass (rel. 168) clips the bbox 7 min before the S1D one."""
+    from shapely.geometry import box
+
+    s1a = _item("S1A_IW_GRDH_1SDV_20260628T052351_20260628T052416_065165_0836F0",
+                "2026-06-28T05:23:51Z", _rect(9.0, 57.0, 10.6, 58.5),
+                end="2026-06-28T05:24:16Z", rel_orbit=168, abs_orbit=65165,
+                platform="sentinel-1a")
+    s1d_n = _item("S1D_IW_GRDH_1SDV_20260628T053110_20260628T053135_003432_0060CF",
+                  "2026-06-28T05:31:10Z", _rect(10.0, 58.04, 12.0, 59.5),
+                  end="2026-06-28T05:31:35Z")
+    s1d = _item(_TARGET_ID, _T0, _rect(10.0, 57.0, 12.0, 58.04),
+                end="2026-06-28T05:32:00.545314Z")
+    monkeypatch.setattr(mpc_s1, "search_grd_items", FakeCatalogue([s1a, s1d_n, s1d]))
+    aoi = box(10.5, 57.55, 11.7, 58.05)
+    with pytest.raises(fetch.FetchError,
+                       match="2 Sentinel-1 passes matching orbit_state=descending"):
+        fetch._select_s1_pass(aoi, "2026-06-28", orbit_state="descending")
+    chosen, passes, _ = fetch._select_s1_pass(
+        aoi, "2026-06-28", pass_time=fetch._s1_pass_time("05:31", "2026-06-28"))
+    assert chosen.slices == [s1d, s1d_n] and [p.slices[0] for p in passes] == [s1a, s1d]
+
+
+def test_duplicate_catalogue_items_count_once(monkeypatch):
+    """MPC lists 2025-07-19 Oresund twice (with and without the datatake id)."""
+    from shapely.geometry import box
+
+    fp = _rect(12.0, 55.5, 13.5, 56.5)
+    kw = dict(end="2025-07-19T16:52:56.5Z", direction="ascending", rel_orbit=146,
+              abs_orbit=3292, platform="sentinel-1c")
+    short = _item("S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292",
+                  "2025-07-19T16:52:31.5Z", fp, **kw)
+    full = _item("S1C_IW_GRDH_1SDV_20250719T165231_20250719T165256_003292_006A41",
+                 "2025-07-19T16:52:31.5Z", fp, **kw)
+    for order in ([short, full], [full, short]):
+        monkeypatch.setattr(mpc_s1, "search_grd_items", FakeCatalogue(order))
+        chosen, passes, _ = fetch._select_s1_pass(box(12.54, 55.99, 12.72, 56.08), "2025-07-19")
+        assert chosen.slices == [full] and len(passes) == 1
+
+
+@pytest.mark.parametrize(("kwargs", "match"), [
+    ({"orbit_state": "north"}, "orbit_state must be one of"),
+    ({"pass_time_utc": "25:00"}, "pass_time_utc must be"),
+    ({"pass_time_utc": "2026-06-28T05:31:00Z"}, "is not on 2026-06-27"),
+    ({"pass_time_utc": "23:30-02:00"}, "is not on 2026-06-27"),   # 01:30 UTC next day
+])
+def test_invalid_selectors_fail_before_any_search(tmp_path, monkeypatch, kwargs, match):
+    monkeypatch.setattr(mpc_s1, "search_grd_items", _no_network)
+    with pytest.raises(ValueError, match=match):
+        fetch.fetch_s1_vessel_scenes(SKAGEN_BBOX, "2026-06-27", cache_dir=tmp_path, **kwargs)
+
+
+def test_pass_time_forms():
+    t = fetch._s1_pass_time
+    assert t("05:39", "2026-06-27") == fetch._parse_utc("2026-06-27T05:39:00Z")
+    assert t("05:39:37.5Z", "2026-06-27") == fetch._parse_utc("2026-06-27T05:39:37.5Z")
+    assert t("2026-06-27T05:39:37", "2026-06-27") == fetch._parse_utc("2026-06-27T05:39:37Z")
+    assert t(" 2026-06-27T07:39:00+02:00 ", "2026-06-27") == \
+        fetch._parse_utc("2026-06-27T05:39:00Z")
 
 
 def _historical_candidates() -> dict[str, SimpleNamespace]:
@@ -614,6 +787,28 @@ def test_select_historical_raises_without_same_direction_scene(monkeypatch):
         fetch._select_s1_historical(target)
 
 
+def test_cli_hands_the_selectors_to_the_fetch_and_reports_a_refusal(tmp_path, monkeypatch,
+                                                                     capsys):
+    from scripts import detect_vessels_s1 as cli
+
+    seen = {}
+
+    def refuse(coords, date, *, cache_dir, orbit_state, pass_time_utc):
+        seen.update(date=date, orbit_state=orbit_state, pass_time_utc=pass_time_utc)
+        raise fetch.FetchError("2 Sentinel-1 passes on 2026-06-27 over (...); choose one ...")
+
+    monkeypatch.setattr(fetch, "fetch_s1_vessel_scenes", refuse)
+    args = ["--date", "2026-06-27", "--bbox", "10.5", "57.55", "11.7", "58.05",
+            "--cache-dir", str(tmp_path), "--out", str(tmp_path / "out.geojson")]
+    assert cli.main([*args, "--orbit-state", "descending", "--pass-time", "05:39"]) == 2
+    assert seen == {"date": "2026-06-27", "orbit_state": "descending", "pass_time_utc": "05:39"}
+    assert "fetch failed: 2 Sentinel-1 passes" in capsys.readouterr().err
+    assert cli.main(args) == 2 and seen["orbit_state"] is seen["pass_time_utc"] is None
+    with pytest.raises(SystemExit):                      # argparse error, no fetch
+        cli.main([*args, "--pass-time", "29:00"])
+    assert "pass_time_utc must be" in capsys.readouterr().err
+
+
 # ── fetch geometry ──────────────────────────────────────────────────────────
 
 def test_utm_zone_rule_matches_rslearn():
@@ -638,13 +833,24 @@ def test_aoi_lies_on_the_window_lattice_and_is_clipped():
 
 
 def test_cache_key_is_deterministic_and_pinned():
-    key = fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-28")
+    key = fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-28", [_TARGET_ID])
     # Pinned: a change of the key derivation (or of a version constant) must be deliberate.
-    assert key == "76b7613d2936b018"
+    # (Format 2 keyed date + bbox only: "76b7613d2936b018" for this request.)
+    assert key == "f531577c8b5af38c"
     assert key == fetch._s1_vessel_cache_key(dict(reversed(list(SKAGEN_BBOX.items()))),
-                                             "2026-06-28")
-    assert key != fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-29")
-    assert key != fetch._s1_vessel_cache_key({**SKAGEN_BBOX, "west": 10.51}, "2026-06-28")
+                                             "2026-06-28", [_TARGET_ID])
+    assert key != fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-29", [_TARGET_ID])
+    assert key != fetch._s1_vessel_cache_key({**SKAGEN_BBOX, "west": 10.51}, "2026-06-28",
+                                             [_TARGET_ID])
+
+
+def test_cache_key_differs_per_pass_and_ignores_slice_order():
+    s = _skagen_0627()
+    dsc = [s["dsc_s"].id, s["dsc_n"].id]
+    key = fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-27", dsc)
+    assert key == fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-27", dsc[::-1])
+    assert key != fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-27", [s["asc"].id])
+    assert key != fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-27", dsc[:1])
 
 
 def test_line_time_interpolates_within_the_slice():
@@ -798,6 +1004,21 @@ def test_fetch_offline_end_to_end_then_cache_round_trip(tmp_path, monkeypatch):
     assert scenes.target_scene.scene_id == target.id
     assert scenes.historical_scene.scene_id == hist.id
     assert scenes.provenance["valid_frac_target"] > 0.99
+    # One pass, one slice: the pass record says so and the slice API is the scene.
+    assert (scenes.scene_id, scenes.historical_scene_id) == (target.id, hist.id)
+    assert scenes.target_slices == [scenes.target_scene]
+    assert scenes.historical_slices == [scenes.historical_scene]
+    assert (scenes.start_utc, scenes.end_utc) == (scenes.target_scene.start_utc,
+                                                  scenes.target_scene.end_utc)
+    rec = scenes.provenance["pass"]
+    assert rec["slice_ids"] == [target.id] and rec["other_passes"] == []
+    assert rec["selected_by"] == "the only pass on the date" and rec["skipped_slices"] == []
+    assert rec["scene_time_from"] == target.id
+    assert [(s["scene_id"], s["historical_scene_id"], s["rank"]) for s in rec["slices"]] == \
+        [(target.id, hist.id, 0)]
+    assert rec["slices"][0]["aoi_px"] == scenes.provenance["aoi_px"] == list(aoi_px)
+    assert rec["slices"][0]["ai2_window_px"] == scenes.provenance["ai2_window_px"] == list(window)
+    assert rec["slices"][0]["mosaic_px"] == np.count_nonzero(scenes.target[0])
     bands = scenes.bands()
     assert set(bands) == set(ALL_BAND_KEYS)
     assert np.shares_memory(bands["VV_DN"], scenes.target)
@@ -814,19 +1035,183 @@ def test_fetch_offline_end_to_end_then_cache_round_trip(tmp_path, monkeypatch):
     assert abs((got - expected).total_seconds()) < 1e-3
     assert 0 < (got - start).total_seconds() < 25
 
-    # Cache: both files, no temp files, and a second request is answered offline.
-    key = fetch._s1_vessel_cache_key(_SYNTH_AOI, "2026-06-28")
+    # Cache: both files, no temp files. A second request runs the target-day search
+    # (the pass's slices are in the key) but no historical search, read or warp.
+    key = fetch._s1_vessel_cache_key(_SYNTH_AOI, "2026-06-28", [target.id])
     out_dir = cache / "s1_vessel_inputs"
     assert sorted(p.name for p in out_dir.iterdir()) == [f"2026-06-28_{key}.json",
                                                          f"2026-06-28_{key}.tif"]
     assert not list(cache.rglob("*.part"))
-    monkeypatch.setattr(mpc_s1, "search_grd_items", _no_network)
+    cat = FakeCatalogue([target, hist])
+    monkeypatch.setattr(mpc_s1, "search_grd_items", cat)
+    monkeypatch.setattr(fetch, "_s1_grd_to_window_grid", _no_network)
     again = fetch.fetch_s1_vessel_scenes(_SYNTH_AOI, "2026-06-28", cache_dir=cache)
+    assert [c["interval"] for c in cat.calls] == ["2026-06-28T00:00:00Z/2026-06-29T00:00:00Z"]
     np.testing.assert_array_equal(again.target, scenes.target)
     np.testing.assert_array_equal(again.historical, scenes.historical)
     assert again.target.dtype == np.uint16
     assert again.scene_time_utc == scenes.scene_time_utc
     assert again.provenance == scenes.provenance
+    assert again.target_slices == scenes.target_slices
+    assert again.historical_slices == scenes.historical_slices
+
+
+def _iso(t) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _synthetic_pass(tmp_path: Path, cuts: list[tuple[int, int]]) -> list[dict]:
+    """Slices of the synthetic scene (lines ``r0:r1`` each) as one S1D datatake,
+    each with a historical twin 36 days earlier (same raster, so a correctly
+    paired historical equals its target pixel for pixel)."""
+    t0, line = fetch._parse_utc(_T0), timedelta(seconds=25) / 1800
+    out = []
+    for k, (r0, r1) in enumerate(cuts):
+        path = tmp_path / f"slice{k}.tif"
+        header = synthetic_grd(path, rows=(r0, r1))
+        fp = _synthetic_footprint(path)
+        start, end = t0 + r0 * line, t0 + r1 * line
+        h_start, h_end = start - timedelta(days=36), end - timedelta(days=36)
+        out.append({
+            "path": path, "header": header, "rows": (r0, r1),
+            "item": _item(f"S1D_IW_GRDH_1SDV_{start:%Y%m%dT%H%M%S}_{end:%Y%m%dT%H%M%S}_"
+                          f"003432_0060CF_{k}", _iso(start), fp, end=_iso(end)),
+            "hist": _item(f"S1D_IW_GRDH_1SDV_{h_start:%Y%m%dT%H%M%S}_{h_end:%Y%m%dT%H%M%S}_"
+                          f"002907_004F80_{k}", _iso(h_start), fp, end=_iso(h_end),
+                          abs_orbit=2907),
+        })
+    return out
+
+
+def _cache_slice(cache: Path, sl: dict, epsg: int) -> tuple[tuple, tuple, np.ndarray]:
+    """Cache one slice's radar windows (target + historical) as the fetch will request
+    them, and return (window, AOI part, the slice's full-raster chain on that part)."""
+    window = fetch._ai2_scene_window(sl["item"].geometry, epsg)[1]
+    sub = fetch._s1_aoi_pixel_bounds(_SYNTH_AOI, epsg, window)
+    for item in (sl["item"], sl["hist"]):
+        for pol in ("vv", "vh"):
+            _cache_radar_window(sl["path"], {**sl["header"], "scene_id": item.id}, pol, epsg,
+                                sub, cache / "s1_grd" / item.id)
+    first = sl["header"]["gcps"][0]
+    ref = fetch._s1_grd_to_window_grid(sl["path"], fetch._ai2_utm_epsg(first[3], first[4]),
+                                       epsg, window, sub)
+    return window, sub, ref
+
+
+@pytest.mark.filterwarnings("ignore::rasterio.errors.NotGeoreferencedWarning")
+@pytest.mark.parametrize("split", [720, 500])     # AOI lines 392-822, its centre on line 607
+def test_fetch_mosaics_the_slices_of_one_pass(tmp_path, monkeypatch, split):
+    """An AOI across the cut between two slices of one datatake: both slices are used,
+    each with its own historical scene, on one lattice; every pixel is its slice's own
+    full-scene chain value; the AOI is dated by the slice holding its centre."""
+    import rasterio
+    from pyproj import Transformer
+    from rasterio.transform import GCPTransformer
+
+    slices = _synthetic_pass(tmp_path, [(0, split), (split, 1800)])
+    cache = tmp_path / "cache"
+    epsg = 32632                      # both slice centroids lie in zone 32
+    refs = [_cache_slice(cache, sl, epsg) for sl in slices]
+    cat = FakeCatalogue([x for sl in slices for x in (sl["item"], sl["hist"])])
+    monkeypatch.setattr(mpc_s1, "search_grd_items", cat)
+    monkeypatch.setattr(mpc_s1, "sign_item", _no_network)
+
+    scenes = fetch.fetch_s1_vessel_scenes(_SYNTH_AOI, "2026-06-28", cache_dir=cache)
+
+    # Ranked by AOI cover: the slice holding more of lines 392-822 comes first.
+    ranked = [0, 1] if split == 720 else [1, 0]
+    assert scenes.target_scene.scene_id == slices[ranked[0]]["item"].id
+    assert scenes.historical_scene.scene_id == slices[ranked[0]]["hist"].id
+    # Grid: the AOI on the shared lattice (the union of the two windows).
+    union = tuple(f(r[0][i] for r in refs) for i, f in enumerate((min, min, max, max)))
+    aoi_px = fetch._s1_aoi_pixel_bounds(_SYNTH_AOI, epsg, union)
+    c0, r0, c1, r1 = aoi_px
+    assert scenes.target.shape == scenes.historical.shape == (2, r1 - r0, c1 - c0)
+    assert scenes.geo.transform == Affine(10, 0, c0 * 10, 0, -10, r0 * -10)
+    # Expected mosaic from the independent full-raster chains: the first-ranked slice
+    # whole, then the other where it has data and the first has none.
+    expected = np.zeros((r1 - r0, c1 - c0), dtype=np.uint16)
+    owner = np.full(expected.shape, -1)
+    for rank, k in enumerate(ranked):
+        _, (a0, b0, a1, b1), ref = refs[k]
+        rows, cols = slice(b0 - r0, b1 - r0), slice(a0 - c0, a1 - c0)
+        part, own = expected[rows, cols], owner[rows, cols]
+        take = (ref != 0) if rank == 0 else (own < 0) & (ref != 0)
+        part[take] = ref[take]
+        own[take] = rank
+    np.testing.assert_array_equal(scenes.target[0], expected)
+    # Each pixel's historical comes from the same slice as its target (twin rasters).
+    np.testing.assert_array_equal(scenes.historical, scenes.target)
+    second = np.count_nonzero(owner == 1)
+    assert second > 0.1 * expected.size                 # the second slice really contributes
+    assert scenes.provenance["valid_frac_target"] > 0.995
+    assert np.count_nonzero(expected) > max(np.count_nonzero(r[2]) for r in refs)
+
+    # Slices in acquisition order, joined ids, first start, last end.
+    assert [s.scene_id for s in scenes.target_slices] == [sl["item"].id for sl in slices]
+    assert [s.scene_id for s in scenes.historical_slices] == [sl["hist"].id for sl in slices]
+    assert scenes.scene_id == " + ".join(sl["item"].id for sl in slices)
+    assert scenes.historical_scene_id == " + ".join(sl["hist"].id for sl in slices)
+    assert scenes.start_utc == slices[0]["item"].properties["start_datetime"]
+    assert scenes.end_utc == slices[1]["item"].properties["end_datetime"]
+    rec = scenes.provenance["pass"]
+    assert rec["slice_ids"] == [sl["item"].id for sl in slices] and rec["skipped_slices"] == []
+    assert [s["rank"] for s in rec["slices"]] == [ranked.index(0), ranked.index(1)]
+    assert [s["aoi_px"] for s in rec["slices"]] == [list(r[1]) for r in refs]
+    assert [s["mosaic_px"] for s in rec["slices"]] == \
+        [int(np.count_nonzero(owner == ranked.index(k))) for k in (0, 1)]
+    assert set(scenes.provenance["radar_windows"]) == {
+        f"{x.id}/{pol}" for sl in slices for x in (sl["item"], sl["hist"]) for pol in ("vv", "vh")}
+
+    # AOI time: line 607 of the datatake, wherever the cut is; found here with the
+    # whole scene's TPS, independently of the slices.
+    full = tmp_path / "full.tif"
+    synthetic_grd(full)
+    with rasterio.open(full) as src:
+        tps = GCPTransformer(src.gcps[0], tps=True)
+    lon_c, lat_c = Transformer.from_crs(epsg, 4326, always_xy=True).transform(
+        (c0 + c1) * 5, (r0 + r1) * -5)
+    row_c, _ = tps.rowcol(lon_c, lat_c, op=float)
+    expected_t = fetch._parse_utc(_T0) + row_c * timedelta(seconds=25) / 1800
+    assert abs((fetch._parse_utc(scenes.scene_time_utc) - expected_t).total_seconds()) < 2e-3
+    holder = 0 if row_c < split else 1
+    assert rec["scene_time_from"] == slices[holder]["item"].id
+
+    # Key = the pass's slices; the cache answers a second request.
+    key = fetch._s1_vessel_cache_key(_SYNTH_AOI, "2026-06-28",
+                                     [sl["item"].id for sl in slices])
+    assert (cache / "s1_vessel_inputs" / f"2026-06-28_{key}.json").exists()
+    monkeypatch.setattr(fetch, "_s1_grd_to_window_grid", _no_network)
+    again = fetch.fetch_s1_vessel_scenes(_SYNTH_AOI, "2026-06-28", cache_dir=cache)
+    np.testing.assert_array_equal(again.target, scenes.target)
+    assert again.target_slices == scenes.target_slices
+    assert again.scene_id == scenes.scene_id and again.provenance == scenes.provenance
+
+
+@pytest.mark.filterwarnings("ignore::rasterio.errors.NotGeoreferencedWarning")
+def test_fetch_skips_a_slice_once_the_aoi_is_covered(tmp_path, monkeypatch):
+    """A second slice of the pass that touches the AOI is neither searched for a
+    historical scene nor downloaded when the first slice already covers every AOI
+    pixel: the result is the one-slice fetch (2026-06-28 Skagen has such a sliver)."""
+    slices = _synthetic_pass(tmp_path, [(0, 1800), (300, 420)])
+    cache = tmp_path / "cache"
+    window, sub, ref = _cache_slice(cache, slices[0], 32632)       # only the first is cached
+    assert np.count_nonzero(ref) == ref.size
+    cat = FakeCatalogue([x for sl in slices for x in (sl["item"], sl["hist"])])
+    monkeypatch.setattr(mpc_s1, "search_grd_items", cat)
+    monkeypatch.setattr(mpc_s1, "sign_item", _no_network)
+
+    scenes = fetch.fetch_s1_vessel_scenes(_SYNTH_AOI, "2026-06-28", cache_dir=cache)
+    np.testing.assert_array_equal(scenes.target[0], ref)
+    assert scenes.provenance["aoi_px"] == list(sub)
+    assert scenes.scene_id == slices[0]["item"].id
+    assert scenes.historical_scene_id == slices[0]["hist"].id
+    rec = scenes.provenance["pass"]
+    assert rec["slice_ids"] == [sl["item"].id for sl in slices]
+    assert rec["skipped_slices"] == [{"scene_id": slices[1]["item"].id,
+                                      "reason": "AOI already covered"}]
+    assert len(cat.calls) == 2                            # target day + one historical window
+    assert not (cache / "s1_grd" / slices[1]["item"].id).exists()
 
 
 def _synthetic_vessel_scenes():
