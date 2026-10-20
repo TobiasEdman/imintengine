@@ -318,8 +318,6 @@ def _mutual_nearest(a: np.ndarray, b: np.ndarray, max_m: float) -> list[tuple[in
 @pytest.mark.skipif(not _E2E_CACHE, reason="set IMINT_S1_E2E_CACHE to a local S1 cache dir "
                                            "(the MPC catalogue search still needs network)")
 def test_s1_pipeline_end_to_end_06_28():
-    from rasterio.transform import Affine  # noqa: F401  (rasterio present)
-
     from imint.analyzers.ai2_vessels_s1 import (
         DEFAULT_ATTR_CKPT,
         DEFAULT_DETECT_CKPT,

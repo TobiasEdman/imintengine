@@ -949,6 +949,93 @@ def test_sparse_scene_vrt_equals_full_scene_chain(tmp_path):
     np.testing.assert_array_equal(sparse, reference)
 
 
+def _synthetic_annotation(header: dict, pol: str) -> bytes:
+    """A product annotation whose geolocation grid is the synthetic GRD's GCPs."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.Element("product")
+    ET.SubElement(ET.SubElement(root, "adsHeader"), "polarisation").text = pol.upper()
+    grid = ET.SubElement(ET.SubElement(root, "geolocationGrid"), "geolocationGridPointList")
+    for (_, c, r, x, y, z), inc in zip(header["gcps"], header["gcp_incidence_deg"], strict=True):
+        point = ET.SubElement(grid, "geolocationGridPoint")
+        for tag, value in (("line", r), ("pixel", c), ("latitude", y), ("longitude", x),
+                           ("height", z), ("incidenceAngle", inc)):
+            ET.SubElement(point, tag).text = repr(float(value))
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+@pytest.mark.filterwarnings("ignore::rasterio.errors.NotGeoreferencedWarning")
+def test_scene_header_and_radar_window_are_fetched_annotated_and_cached(tmp_path,
+                                                                       monkeypatch):
+    """The network/disk path with the network faked: measurement header + annotation
+    download -> incidence per GCP -> header and XML cached -> read back offline; then
+    the radar window cut from the measurement and written with the sea-surface GCPs."""
+    import io
+    import urllib.request
+
+    import rasterio
+    from rasterio.windows import Window
+
+    safe = tmp_path / "remote" / "S1D_SYNTH_71E0.SAFE"
+    meas = {pol: safe / "measurement" / f"iw-{pol}.tiff" for pol in ("vv", "vh")}
+    truth = {pol: synthetic_grd(path) for pol, path in meas.items()}
+    served = {str(safe / "annotation" / f"iw-{pol}.xml"): _synthetic_annotation(truth[pol], pol)
+              for pol in meas}
+    opened, signs = [], []
+
+    def urlopen(url, timeout=None):
+        opened.append(url)
+        return io.BytesIO(served[url])
+
+    signed = SimpleNamespace(id="SYNTH", assets={
+        pol: SimpleNamespace(href=str(path), extra_fields={}) for pol, path in meas.items()})
+    monkeypatch.setattr(mpc_s1, "sign_item", lambda item: signs.append(item.id) or signed)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    item = SimpleNamespace(id="SYNTH")
+    scene_dir = tmp_path / "cache" / "s1_grd" / "SYNTH"
+
+    header, got = fetch._s1_scene_header(item, "vv", scene_dir, None)
+    ann = str(safe / "annotation" / "iw-vv.xml")
+    assert got is signed and signs == ["SYNTH"] and opened == [ann]
+    assert header["annotation_href"] == ann and header["href"] == str(meas["vv"])
+    assert header["gcps"] == truth["vv"]["gcps"]
+    assert header["gcp_incidence_deg"] == truth["vv"]["gcp_incidence_deg"]
+    assert (header["width"], header["height"], header["dtype"]) == (2400, 1800, "uint16")
+    assert (scene_dir / "vv_annotation.xml").read_bytes() == served[ann]
+    assert json.loads((scene_dir / "vv_header.json").read_text()) == header
+    assert not list(scene_dir.glob("*.part"))
+    # Read back: neither signing nor any download.
+    monkeypatch.setattr(mpc_s1, "sign_item", _no_network)
+    monkeypatch.setattr(urllib.request, "urlopen", _no_network)
+    assert fetch._s1_scene_header(item, "vv", scene_dir, None) == (header, None)
+
+    # The radar window: real DN cut from the measurement, sea-surface GCPs in crop space,
+    # the sea-surface GCPs computed once for window, TIFF and VRT.
+    monkeypatch.setattr(mpc_s1, "sign_item", lambda item: signed)
+    real_sea, sea_calls = fetch._s1_sea_surface, []
+    monkeypatch.setattr(fetch, "_s1_sea_surface",
+                        lambda h: sea_calls.append(h["scene_id"]) or real_sea(h))
+    epsg, window = fetch._ai2_scene_window(_synthetic_footprint(meas["vv"]))
+    aoi_px = fetch._s1_aoi_pixel_bounds(_SYNTH_AOI, epsg, window)
+    vrt, rwin, _, _ = fetch._s1_sparse_scene_vrt(item, "vv", epsg, aoi_px, scene_dir, None)
+    assert sea_calls == ["SYNTH"]
+    sea = real_sea(header)[0]
+    win = scene_dir / f"{fetch._s1_window_stem('vv', rwin)}.tif"
+    with rasterio.open(win) as src, rasterio.open(meas["vv"]) as full:
+        gcps, crs = src.gcps
+        np.testing.assert_array_equal(src.read(1), full.read(1, window=Window(
+            rwin["col_off"], rwin["row_off"], rwin["width"], rwin["height"])))
+        tags = src.tags()
+    assert crs.to_epsg() == 4326
+    assert (tags["SCENE_ID"], tags["COL_OFF"], tags["ROW_OFF"]) == (
+        "SYNTH", str(rwin["col_off"]), str(rwin["row_off"]))
+    assert [(g.col, g.row, g.x, g.y, g.z) for g in gcps] == [
+        (c - rwin["col_off"], r - rwin["row_off"], x, y, z) for _, c, r, x, y, z in sea]
+    with rasterio.open(vrt) as src:
+        vgcps, _ = src.gcps
+    assert [(g.col, g.row, g.x, g.y, g.z) for g in vgcps] == [tuple(g[1:]) for g in sea]
+
+
 @pytest.mark.filterwarnings("ignore::rasterio.errors.NotGeoreferencedWarning")
 def test_sparse_vrt_xml_escapes_wkt_and_rejects_unknown_dtype(tmp_path):
     import xml.etree.ElementTree as ET
