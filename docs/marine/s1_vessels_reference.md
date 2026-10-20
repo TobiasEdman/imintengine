@@ -849,6 +849,33 @@ historical-image chain and the tiling are enough to move them across it.
 - **Wording.** A detection without an AIS match is a candidate, not a confirmed dark
   vessel.
 
+### Pass choice check (2026-10-20)
+
+The pass selection and slice mosaic were run on real data from cached radar windows
+(GDAL 3.10.3, CPU). The 2026-06-27 references are the manual run of the same day: each
+slice pinned and fetched alone, detected alone, and the detections joined by hand. Its
+caches and layers stayed outside git.
+
+- **2026-06-28 Skagen bbox, `--pass-time 05:31`:** target and historical are
+  bit-identical to the format-2 one-scene entry (42 268 248 px), as are the grid, the
+  AOI time (05:31:40.547748 Z) and the radar windows. The pass's sliver slice
+  (`…T053110…`) is skipped without a search or download. 392 s, peak footprint 2.8 GB.
+- **2026-06-27 descending (`--orbit-state descending`):** the mosaic equals the two
+  manual per-slice inputs, combined by the rule, on all 42 268 248 px:
+  - 25 824 691 px come from `…T053936…` (rank 0, historical S1D 05-16) and 16 443 115 px
+    from `…T053911…` (historical S1C 05-15), on the same EPSG:32632 lattice (origin
+    588530, 6437470);
+  - 442 px of nodata lie along the seam, and 2 748 target pixels have no historical;
+  - AOI time 05:39:37.623515 Z, unchanged.
+
+  One detector run over 208 patches gives 90 raw, 66 after NMS, 1 removed by the
+  infrastructure filter, 62 in the bbox and 3 outside. All 62 match the hand-joined layer
+  (mutual nearest, max offset 0.09 m, max |Δscore| 0.0006). Fetch 638 s, detection 441 s.
+- **2026-06-27 ascending:** the input is bit-identical to the manual one, and the 71
+  features in the bbox are identical to its raw output. The marine-awareness layer holds
+  70 because one patch-seam duplicate (score 0.9202) was removed by hand.
+- marine-awareness `load_detections` reads 62 and 71.
+
 ### Review fixes
 
 A review of the port (verdict approve-with-fixes) led to these changes, each verified:
