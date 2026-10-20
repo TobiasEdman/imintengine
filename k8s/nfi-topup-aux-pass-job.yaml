@@ -1,0 +1,108 @@
+---
+# Aux pass for the 230 NFI top-up tiles (task 0105, IM-022 follow-up).
+#
+# The 230 top-up tiles in /data/unified_v2_512_nfi{2018,2019,2021,2022}_staging
+# are marked aux_complete=0 by k8s/nfi-topup-enrich-job.yaml (Tobias
+# 2026-10-12, option a: never zero-fill). Read-only probe 2026-10-19: height
+# is absent on all 230 (Trädhöjd was not yet in the mirror); markfukt is
+# absent on 4 and grunddata on 1, where the mirror has no valid pixel; the
+# other channels are present. Trädhöjd is now staged county by county
+# (#85). Per root, scripts/skg_aux_pass.py reads every absent or
+# empty channel from the mirror on the tile's own grid, writes it, records
+# aux_provenance (county rasters, their sha256 and source dates, omdrev per
+# pixel, git sha) and sets the flags in the same atomic rewrite:
+# aux_complete=1 when all five are present, otherwise aux_complete=0 with
+# aux_missing and a dated aux_gap_reason naming each genuine gap. Nothing is
+# zero-filled. Per-tile outcomes: /data/manifests/nfi<Y>_topup_aux_pass.json.
+#
+# This replaces the "rerun nfi-topup-enrich" plan in that Job's header: it is
+# pinned to d4d24f9, which predates the mirror, and its marking step would
+# stamp remaining gaps "pending_IM-022". S1 there is already done.
+#
+# Run only after skg-open-stage-tradhojd has finished: a county not yet in
+# the Trädhöjd mosaic is recorded as a height gap. The log prints the staged
+# counties first. The mirror is only read (no MANIFEST.lock); tiles are
+# written. The tile count per root must not change. Re-running is safe:
+# complete tiles are left byte-identical, and a later run fills recorded
+# gaps once their county is staged. Afterwards run the census
+# (k8s/nfi-topup-census-job.yaml, under a new name).
+#
+# Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256 (sha256 of
+# scripts/skg_aux_pass.py at that commit); the pod refuses to run if either
+# check fails.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-aux-pass
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: aux
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== nfi-topup-aux-pass — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libexpat1 >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio pyproj
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              export IMINT_GIT_SHA="$(git rev-parse HEAD)"
+              test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
+              echo "${IMINT_SCRIPT_SHA256}  scripts/skg_aux_pass.py" | sha256sum -c -
+              echo "HEAD: ${IMINT_GIT_SHA}"
+              python - <<'PY'
+              import json
+              from imint.training import skg_open
+              m = json.load(open("/data/skg_open/MANIFEST.json"))
+              print(f"Trädhöjd counties staged: {sorted(skg_open.staged_tradhojd_counties(m))}")
+              PY
+              RC=0
+              for Y in ${YEARS}; do
+                ROOT=/data/unified_v2_512_nfi${Y}_staging
+                [ -d "${ROOT}" ] || { echo "${Y}: no staging root"; RC=1; continue; }
+                BEFORE=$(find "${ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                echo ""; echo "######## ${Y}: ${BEFORE} tiles ########"
+                python scripts/skg_aux_pass.py --data-dir "${ROOT}" \
+                  --report "/data/manifests/nfi${Y}_topup_aux_pass.json" --workers 8 || RC=1
+                AFTER=$(find "${ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l)
+                [ "${BEFORE}" = "${AFTER}" ] || { echo "FAIL: tile count changed in ${ROOT}"; RC=1; }
+              done
+              echo "=== done (exit ${RC}): $(date -u) ==="
+              exit ${RC}
+          env:
+            - {name: IMINT_COMMIT, value: "eded310bd9494269003d85f049f20a4872f68095"}
+            - {name: IMINT_SCRIPT_SHA256, value: "bbf590922483336c3d86bfc2b458c9964f3c28444259bca847c8e116a2a9f10c"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
+            - {name: GDAL_CACHEMAX, value: "512"}
+          resources:
+            requests: {cpu: "8", memory: "16Gi"}
+            limits: {cpu: "8", memory: "16Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
