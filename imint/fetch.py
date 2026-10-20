@@ -3258,7 +3258,12 @@ def _s1_annotation_url(measurement_href: str, pol: str) -> str:
 
 
 def _s1_http_get(url: str, what: str, attempts: int = 3) -> bytes:
-    """GET with a timeout and retries; a failure is a FetchError naming ``what``."""
+    """GET with a timeout and retries; a failure is a FetchError naming ``what``.
+
+    HTTP 4xx (an expired SAS token is 403, a missing blob 404) is final and
+    raised at once: waiting does not heal it. Server errors and network
+    failures are retried ``attempts`` times.
+    """
     import time
     import urllib.error
     import urllib.request
@@ -3267,10 +3272,13 @@ def _s1_http_get(url: str, what: str, attempts: int = 3) -> bytes:
         try:
             with urllib.request.urlopen(url, timeout=60) as resp:
                 return resp.read()
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500 or k == attempts - 1:
+                raise FetchError(f"{what}: download failed (HTTP {e.code} {e.reason})") from e
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             if k == attempts - 1:
                 raise FetchError(f"{what}: download failed ({e})") from e
-            time.sleep(2 * (k + 1))
+        time.sleep(2 * (k + 1))
     raise AssertionError("unreachable")
 
 
@@ -3297,9 +3305,18 @@ def _s1_gcp_incidence(xml: bytes, header: dict, pol: str) -> list[float]:
         raise FetchError(f"{sid} {pol}: annotation grid has {len(points)} points, the TIFF "
                          f"{len(gcps)} GCPs")
     lo, hi = _S1_INCIDENCE_RANGE_DEG
+
+    def number(p, k: int, tag: str) -> float:
+        text = p.findtext(tag)
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            raise FetchError(f"{sid} {pol}: annotation grid point {k} has no numeric "
+                             f"<{tag}> ({text!r})") from None
+
     out = []
     for k, ((gid, c, r, x, y, z), p) in enumerate(zip(gcps, points, strict=True)):
-        pixel, line, lon, lat, h, inc = (float(p.findtext(t)) for t in (
+        pixel, line, lon, lat, h, inc = (number(p, k, t) for t in (
             "pixel", "line", "longitude", "latitude", "height", "incidenceAngle"))
         if (pixel, line) != (c, r) or max(abs(lon - x), abs(lat - y)) > _S1_GCP_IDENTITY_TOL_DEG \
                 or abs(h - z) > _S1_GCP_IDENTITY_TOL_M:
@@ -3339,8 +3356,10 @@ def _s1_sea_surface(header: dict) -> tuple[list[list], np.ndarray]:
     from degree differences. Then z = N.
 
     Raises:
-        FetchError: no or misaligned incidence angles, or a GCP row with fewer
-            than two points (no range direction).
+        FetchError: no or misaligned incidence angles, a GCP row with fewer
+            than two points (no range direction), or a row whose incidence does
+            not increase with pixel (then increasing pixel is not away from the
+            satellite and the shift would point the wrong way).
     """
     from pyproj import Geod
 
@@ -3356,6 +3375,7 @@ def _s1_sea_surface(header: dict) -> tuple[list[list], np.ndarray]:
     lon = np.array([g[3] for g in gcps], dtype=float)
     lat = np.array([g[4] for g in gcps], dtype=float)
     z = np.array([g[5] for g in gcps], dtype=float)
+    inc = np.asarray(inc, dtype=float)
     geod = Geod(ellps="WGS84")
     east = np.zeros(len(gcps))
     north = np.zeros(len(gcps))
@@ -3365,6 +3385,10 @@ def _s1_sea_surface(header: dict) -> tuple[list[list], np.ndarray]:
         if len(idx) < 2:
             raise FetchError(f"{header['scene_id']}: GCP row at line {line} has one point; "
                              f"its range direction is undefined")
+        if not (np.diff(inc[idx]) > 0).all():
+            raise FetchError(f"{header['scene_id']}: incidence does not increase with pixel "
+                             f"on the GCP row at line {line} ({inc[idx].round(2).tolist()}); "
+                             f"increasing pixel is not away from the satellite")
         a, b = idx[:-1], idx[1:]
         az_ab, az_ba, d = geod.inv(lon[a], lat[a], lon[b], lat[b])
         # + vector to the next GCP (in a's plane), - vector to the previous (in b's).
@@ -3373,7 +3397,7 @@ def _s1_sea_surface(header: dict) -> tuple[list[list], np.ndarray]:
         east[b] -= d * np.sin(np.radians(az_ba))
         north[b] -= d * np.cos(np.radians(az_ba))
     n = np.asarray(egm96_undulation(lon, lat), dtype=float)
-    shift = (n - z) / np.tan(np.radians(np.asarray(inc, dtype=float)))
+    shift = (n - z) / np.tan(np.radians(inc))
     az = np.degrees(np.arctan2(east, north))
     lon2, lat2, _ = geod.fwd(lon, lat, np.where(shift < 0, az + 180.0, az), np.abs(shift))
     out = [[g[0], g[1], g[2], float(x), float(y), float(h)]
@@ -3417,21 +3441,28 @@ def _s1_shift_stats(shift_m: np.ndarray, header: dict) -> dict:
 
 
 def _s1_window_stem(pol: str, rwin: dict) -> str:
-    """File stem of a cached radar window; names the geocoding its GCPs carry."""
+    """File stem of a cached radar window; names the geocoding its GCPs carry.
+
+    A window cached under another geocoding is downloaded again, not relabelled:
+    its embedded GCPs would be wrong, and rewriting them in place could expose a
+    half-written file to a concurrent reader.
+    """
     return (f"{pol}_c{rwin['col_off']}_r{rwin['row_off']}_{rwin['width']}x{rwin['height']}"
             f"_g{_s1_geocoding_id()}")
 
 
-def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple) -> dict:
+def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple,
+                     sea: tuple[list[list], np.ndarray] | None = None) -> dict:
     """Radar-geometry window (col, row, width, height) covering the AOI + margin.
 
     Also returns the radar line of the AOI centre (``aoi_center_row``, float;
     clamped to the scene when an AOI only partly covered by this slice has its
     centre outside it), the scene's line count (``lines``), which date the
     AOI within the slice, and the GCP shifts onto the sea surface
-    (``gcp_shift_m``). Uses the sea-surface GCPs.
+    (``gcp_shift_m``). Uses the sea-surface GCPs; ``sea`` is
+    ``_s1_sea_surface(header)`` when the caller already has it.
     """
-    gcps, shift = _s1_sea_surface(header)
+    gcps, shift = sea if sea is not None else _s1_sea_surface(header)
     tps = _s1_gcp_tps(gcps)
     lon, lat = _s1_aoi_outline_lonlat(epsg, aoi_px)
     rows, cols = tps.rowcol(lon, lat, op=float)
@@ -3487,8 +3518,9 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
     from rasterio.windows import Window
 
     header, signed = _s1_scene_header(item, pol, scene_dir, signed)
-    rwin = _s1_radar_window(header, epsg, aoi_px)
-    sea_gcps = _s1_sea_surface_gcps(header)
+    sea = _s1_sea_surface(header)                   # once per scene and polarisation
+    rwin = _s1_radar_window(header, epsg, aoi_px, sea)
+    sea_gcps = sea[0]
     stem = _s1_window_stem(pol, rwin)
     win_path, vrt_path = scene_dir / f"{stem}.tif", scene_dir / f"{stem}.vrt"
     if not win_path.exists():
@@ -3518,7 +3550,7 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
             tmp.unlink(missing_ok=True)
         print(f"    [S1 vessels] cached radar window {win_path} "
               f"({data.shape[1]}x{data.shape[0]} px)")
-    _atomic_write_text(vrt_path, _s1_sparse_vrt_xml(header, rwin, win_path.name))
+    _atomic_write_text(vrt_path, _s1_sparse_vrt_xml(header, rwin, win_path.name, sea_gcps))
     first = sea_gcps[0]
     return vrt_path, rwin, _ai2_utm_epsg(first[3], first[4]), signed
 
@@ -3526,9 +3558,11 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
 _GDAL_DATA_TYPES = {"uint16": "UInt16"}     # GRD measurement TIFFs are uint16
 
 
-def _s1_sparse_vrt_xml(header: dict, rwin: dict, window_file: str) -> str:
+def _s1_sparse_vrt_xml(header: dict, rwin: dict, window_file: str,
+                       gcps: list[list] | None = None) -> str:
     """GDAL VRT: the full scene's size and sea-surface GCPs, real pixels only in the window.
 
+    ``gcps`` is ``_s1_sea_surface_gcps(header)`` when the caller already has it.
     Built with ElementTree so the GCP CRS (possibly WKT with quotes) and every
     other value is XML-escaped.
     """
@@ -3542,7 +3576,7 @@ def _s1_sparse_vrt_xml(header: dict, rwin: dict, window_file: str) -> str:
     root = ET.Element("VRTDataset", rasterXSize=str(header["width"]),
                       rasterYSize=str(header["height"]))
     gcp_list = ET.SubElement(root, "GCPList", Projection=header["gcp_crs"])
-    for i, c, r, x, y, z in _s1_sea_surface_gcps(header):
+    for i, c, r, x, y, z in gcps if gcps is not None else _s1_sea_surface_gcps(header):
         ET.SubElement(gcp_list, "GCP", Id=str(i), Pixel=repr(c), Line=repr(r),
                       X=repr(x), Y=repr(y), Z=repr(z))
     band = ET.SubElement(root, "VRTRasterBand", dataType=gdal_type, band="1")

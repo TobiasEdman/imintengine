@@ -135,12 +135,73 @@ def _edit_grid(xml: bytes, fn) -> bytes:
     (lambda r, g: _swap_first_two(g), "is not TIFF GCP"),                      # reordered
     (lambda r, g: setattr(g[7].find("latitude"), "text", "57.9"), "is not TIFF GCP"),
     (lambda r, g: setattr(g[3].find("incidenceAngle"), "text", "0.5"), "outside"),
+    (lambda r, g: g[5].remove(g[5].find("incidenceAngle")), "no numeric <incidenceAngle>"),
+    (lambda r, g: setattr(g[5].find("height"), "text", "n/a"), "no numeric <height>"),
 ])
 def test_incidence_refuses_an_annotation_that_is_not_the_tiffs_grid(edit, match):
     sid = SCENES["dsc0628"]
     xml = _edit_grid(_oracle(sid).xml, edit)
     with pytest.raises(fetch.FetchError, match=match):
         fetch._s1_gcp_incidence(xml, _header(sid), "vv")
+
+
+def test_shift_refuses_incidence_that_falls_with_pixel():
+    """Increasing pixel must be away from the satellite (incidence rises along a row);
+    otherwise the shift would point the wrong way, so it raises instead."""
+    header = _header(SCENES["dsc0628"])
+    rows = sorted({g[2] for g in header["gcps"]})
+    inc = list(header["gcp_incidence_deg"])
+    k = [i for i, g in enumerate(header["gcps"]) if g[2] == rows[3]]
+    for i, j in zip(k, reversed(k), strict=True):          # one row mirrored
+        inc[i] = header["gcp_incidence_deg"][j]
+    with pytest.raises(fetch.FetchError, match=f"line {rows[3]}.*not away from the satellite"):
+        fetch._s1_sea_surface_gcps({**header, "gcp_incidence_deg": inc})
+
+
+class _Urlopen:
+    """``urllib.request.urlopen`` stand-in: one scripted outcome per call."""
+
+    def __init__(self, outcomes):
+        self.outcomes, self.calls = list(outcomes), []
+
+    def __call__(self, url, timeout=None):
+        import io
+
+        self.calls.append(url)
+        out = self.outcomes.pop(0)
+        if isinstance(out, BaseException):
+            raise out
+        return io.BytesIO(out)
+
+
+def _http_error(code: int):
+    import urllib.error
+
+    return urllib.error.HTTPError("https://x/a.xml?sig=s", code, "nope", {}, None)
+
+
+@pytest.mark.parametrize("outcomes, calls, ok", [
+    ([b"<product/>"], 1, True),
+    ([_http_error(403)], 1, False),                       # expired SAS: final, no retry
+    ([_http_error(404)], 1, False),
+    ([_http_error(503), b"<product/>"], 2, True),         # server error: retried
+    ([ConnectionError("reset"), TimeoutError("t"), b"<product/>"], 3, True),
+    ([TimeoutError("t")] * 3, 3, False),
+])
+def test_annotation_download_retries_only_what_can_heal(monkeypatch, outcomes, calls, ok):
+    import time
+    import urllib.request
+
+    opener = _Urlopen(outcomes)
+    sleeps = []
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    if ok:
+        assert fetch._s1_http_get("https://x/a.xml?sig=s", "S vv annotation") == b"<product/>"
+    else:
+        with pytest.raises(fetch.FetchError, match="S vv annotation: download failed"):
+            fetch._s1_http_get("https://x/a.xml?sig=s", "S vv annotation")
+    assert len(opener.calls) == calls and len(sleeps) == calls - 1
 
 
 def test_chain_1_header_without_incidence_is_rebuilt_not_reused(tmp_path, monkeypatch):

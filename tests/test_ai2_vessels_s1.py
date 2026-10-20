@@ -962,7 +962,7 @@ def test_sparse_vrt_xml_escapes_wkt_and_rejects_unknown_dtype(tmp_path):
               "gcp_crs": wkt,
               "gcps": [[str(i), float(c), float(r), 12.0 + c * 1e-4, 57.0 - r * 1e-4, 0.0]
                        for i, (c, r) in enumerate([(0, 0), (40, 0), (0, 30), (40, 30)])],
-              "gcp_incidence_deg": [35.0] * 4}
+              "gcp_incidence_deg": [33.0, 37.0, 33.0, 37.0]}     # rises with pixel
     rwin = {"col_off": 10, "row_off": 5, "width": 20, "height": 10}
     with rasterio.open(tmp_path / "win.tif", "w", driver="GTiff", width=20, height=10, count=1,
                        dtype="uint16") as dst:
