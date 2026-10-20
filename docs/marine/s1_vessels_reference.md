@@ -549,7 +549,7 @@ rasterio 1.4.4 / GDAL 3.10.3) plus `pystac-client` 0.9.0 and `planetary-computer
 |---|---|
 | `imint/fetch.py` `fetch_s1_vessel_scenes` | Target + historical GRD DN (uint16) on AI2's grid for a WGS84 bbox, with the AOI's acquisition time; cached. Chooses the pass (`orbit_state` / `pass_time_utc`) and mosaics its slices; `s1_vessel_passes` lists a date's passes. Puts the tie points on the sea surface (§ Geocoding). Owns the band keys and source string |
 | `imint/geoid/` | EGM96 15' grid (package data) and `egm96_undulation` |
-| `imint/data/mpc_s1.py` | `search_grd_items` / `sign_item` factored out of `fetch_s1_scene` (σ⁰ path unchanged, pinned by a test) |
+| `imint/data/mpc_s1.py` | `search_grd_items` / `sign_item` factored out of `fetch_s1_scene` (the σ⁰ path's code is unchanged, pinned by a test; its geocoding is the ellipsoid one, § Geocoding) |
 | `imint/data/s1_shared.py` | `footprint_intersection_area` (footprint, not bbox, overlap) |
 | `imint/analyzers/ai2_rslearn_blocks.py` | torchvision blocks shared by the S2 and S1 analyzers |
 | `imint/analyzers/ai2_vessels_s1.py` | `AI2S1VesselAnalyzer` (registered as `ai2_vessels_s1`) + pure helpers |
@@ -681,8 +681,11 @@ pass on the same date and bbox never meets the entry. Format-2 entries (keyed by
 bbox only, so either pass of a two-pass date) are not reused. The radar-window files are
 named by the geocoding id (`vv_c…_r…_W×H_g<id>.tif`) because they embed their GCPs, and
 scene headers without incidence angles are rebuilt, so a chain-1 cache downloads its
-windows again (one header read and one 1.8 MB annotation per scene and polarisation). Every cache file is written to a temp file and moved into
-place (`os.replace`), the record last, so a cache hit never reads a partial file.
+windows again (one header read and one 1.8 MB annotation per scene and polarisation).
+Re-downloading (~40 MB per window) is deliberate: relabelling a cached window would mean
+rewriting its embedded GCPs in place, which a concurrent reader could see half-done.
+Every cache file is written to a temp file and moved into place (`os.replace`), the
+record last, so a cache hit never reads a partial file.
 
 **Cost (Skagen bbox, cold cache).** 346 s wall clock and 1.9 GB peak RSS for both scenes
 and both polarisations. The time is dominated by the four full-request warps (~1 min per
@@ -934,6 +937,15 @@ same SAS token and validates it.
 (orbit state vectors + slant-range time of each grid point, re-solved at h = N): sea GCPs
 ≤ 0.14 m, land GCPs ≤ 1.5 m, on the four products.
 
+**Not changed: the σ⁰ path.** `imint/data/s1_shared.py` `read_window` warps a
+GCP-referenced GRD with `WarpedVRT(ds, src_crs=gcp_crs, crs=gcp_crs)` over the product's
+own GCPs, i.e. on the ellipsoid. It serves `mpc_s1.fetch_s1_scene` and the σ⁰ training
+tiles of `imint/training/aws_s1.py` and `imint/training/cdse_s1_stac.py`. By the same
+geometry, the sea in those tiles sits (N − z) / tan θ toward the satellite, 41–56 m off
+Skagen; this is the expected offset from the vessel chain's analysis, not a measurement
+on the tiles. Projected COGs (`imint/training/pc_s1_rtc.py`, RTC) skip that warp and are
+not covered here. The fix is tracked as ImintEngine task 0113.
+
 **Provenance and cache.** `S1_VESSEL_CHAIN_VERSION` = 2. `provenance["geocoding"]`
 records the tie-point model and the geoid grid and its sha256;
 each `radar_windows` entry records `gcp_shift_m` (min / median / max over the sea GCPs,
@@ -959,8 +971,9 @@ now does:
    that the raw sea GCPs are at |z| < 1 m (catches a change of ESA's convention);
 2. frozen radar positions of 29/30/30 slow anchored ships, geocoded through the
    pipeline's own TPS, vs their AIS hull centres: |median| ≤ 10 m in range and along track
-   per layer, asc − dsc within 15 m; the same fixture gives +45 to +57 m on chain 1's GCPs
-   (asserted, so the check has teeth);
+   per layer, asc − dsc within 15 m. Range medians −3.5 / +0.7 / +2.1 m and along track
+   +2.4 / +0.9 / +8.0 m (06-27 dsc / 06-27 asc / 06-28 dsc); the same fixture gives
+   +55.1 / +56.7 / +44.9 m on chain 1's GCPs (asserted > 40 m, so the check has teeth);
 3. `@pytest.mark.slow`, with `IMINT_S1_E2E_CACHE` set to a local S1 cache (the MPC
    catalogue search still needs network): fetch + detector for 2026-06-28 against the same
    ships, and with `IMINT_S1_AI2_REFERENCE_DIR` the AI2 parity in radar coordinates.
@@ -972,20 +985,19 @@ the satellite):
 
 | layer | n | range median | along-track median | chain 1 range | layer moved (median dE, dN) |
 |---|---|---|---|---|---|
-| 06-27 05:39 S1C dsc (2 slices) | 29 | +3.0 m | −4.1 m | +55.1 m | (−47.5, +15.0) m |
-| 06-27 16:53 S1C asc | 30 | +6.2 m | −4.3 m | +56.7 m | (+47.7, +4.8) m |
-| 06-28 05:31 S1D dsc | 30 | +5.1 m | +0.6 m | +44.9 m | (−35.5, +10.0) m |
+| 06-27 05:39 S1C dsc (2 slices) | 29 | −1.8 m | −0.6 m | +55.1 m | (−55.6, +10.8) m |
+| 06-27 16:53 S1C asc | 30 | +1.8 m | +1.7 m | +56.7 m | (+51.3, +12.7) m |
+| 06-28 05:31 S1D dsc | 30 | +0.4 m | +7.4 m | +44.9 m | (−41.4, +6.1) m |
 
-- All pass (|median| ≤ 10 m, n ≥ 20). Same-day asc − dsc range medians: +3.3 m; the same
-  ship's E-W residual, asc − dsc: −10.6 m (n 21; chain 1 −111.8 m).
+- All pass (|median| ≤ 10 m, n ≥ 20). Same-day asc − dsc range medians: +3.5 m; the same
+  ship's E-W residual, asc − dsc: −1.3 m (n 21; chain 1 −111.8 m).
 - The layers move west on descending and east on ascending passes: the sea-surface shift
   (41–57 m at the ships).
-- AI2 parity in radar coordinates, 06-28: 76 pairs, median |Δ| 0.76 px, mean vector
-  0.13 m. In map coordinates the same pairs are 40.6 m apart, by design.
-- Detection sets change only at the margins: 62 → 64, 70 → 65 and 77 → 77 detections in
-  the bbox; every changed one scores 0.70–0.83 or lies at the bbox's east edge, matched
-  pairs differ by a median 0.001–0.002 in score, and all AIS-matched slow ships are still
-  detected.
+- AI2 parity in radar coordinates, 06-28: 75 pairs, median |Δ| 0.95 px, mean vector
+  1.05 m. In map coordinates the same pairs are 41.2 m apart, by design.
+- Detection sets change only at the margins: 62 → 62, 70 → 65 and 77 → 78 detections in
+  the bbox (the changed ones lie near the 0.7 threshold or the bbox edge), and all
+  AIS-matched slow ships are still detected.
 - Details, per-ship residuals and the layers: marine-awareness research
   `2026-10-20_s1_offset_diagnosis/fix_verification.md` and `fix_runs/`.
 
