@@ -675,7 +675,7 @@ are nodata, and they reach no AOI pixel through either cubic kernel.
 
 **Cache.** The model input is cached as one uint16 GeoTIFF plus a JSON record (scenes,
 slices, grid, AOI time, provenance); the key hashes the pixel-chain version (2), the
-geocoding model (tie points, geoid grid sha256), the
+geocoding model (tie points, geoid grid sha256, GCP pixel convention), the
 record-format version (3), the date, the bbox and the chosen pass's slice ids, so another
 pass on the same date and bbox never meets the entry. Format-2 entries (keyed by date and
 bbox only, so either pass of a two-pass date) are not reused. The radar-window files are
@@ -918,6 +918,14 @@ historical scenes alike (`_s1_sea_surface_gcps`):
   row, which is away from the right-looking satellite. The direction is the central
   difference of the row's neighbouring GCPs in the GCP's tangent plane (geodesic). Then
   z = N. θ is the annotation's `incidenceAngle` of that grid point.
+- Sample centres (`S1_GCP_SAMPLE_CENTRE`, own commit and flag): ESA's pixel/line are
+  sample centres (the last GCP is at width − 1), GDAL reads GCP Pixel/Line on its
+  pixel-corner lattice (the GRDs say `AREA_OR_POINT=Area`), so each GCP gets +0.5 pixel
+  and +0.5 line. Taken as delivered, every sample is geocoded ~7 m off, too far from the
+  satellite and too far along track; the step moves ships 5.0 m toward the satellite and
+  5.1 m back along track. It follows from the conventions; the AIS check cannot resolve
+  a 5 m term (both settings pass, below). `False` is the chain without the step: same
+  cache key, same pixels.
 
 Land GCPs above the geoid move toward the satellite (up to ~800 m in the Norwegian
 mountains), so the TPS describes sea-level targets everywhere; land in the backdrop is
@@ -947,13 +955,14 @@ on the tiles. Projected COGs (`imint/training/pc_s1_rtc.py`, RTC) skip that warp
 not covered here. The fix is tracked as ImintEngine task 0113.
 
 **Provenance and cache.** `S1_VESSEL_CHAIN_VERSION` = 2. `provenance["geocoding"]`
-records the tie-point model and the geoid grid and its sha256;
+records the tie-point model, the geoid grid and its sha256, and the GCP pixel convention;
 each `radar_windows` entry records `gcp_shift_m` (min / median / max over the sea GCPs,
 |z| < 1 m, and over all GCPs; + = away from the satellite). The cache key and the
 radar-window file names include the geocoding model.
 
 **AI2 parity is now in radar coordinates.** The port's model input is no longer
-bit-identical to rslearn's: the raster itself moves, by the sea-surface shift. The
+bit-identical to rslearn's: the raster itself moves, by the sea-surface shift less the
+~5 m sample-centre term (38–50 m median per layer; 42–57 m without the step). The
 detector sees the same
 radar data, so AI2 parity is checked by mapping our detections through the sea-surface
 TPS⁻¹ and AI2's through the TPS⁻¹ of its own 40-GCP crop, and comparing radar
@@ -971,8 +980,9 @@ now does:
    that the raw sea GCPs are at |z| < 1 m (catches a change of ESA's convention);
 2. frozen radar positions of 29/30/30 slow anchored ships, geocoded through the
    pipeline's own TPS, vs their AIS hull centres: |median| ≤ 10 m in range and along track
-   per layer, asc − dsc within 15 m. Range medians −3.5 / +0.7 / +2.1 m and along track
-   +2.4 / +0.9 / +8.0 m (06-27 dsc / 06-27 asc / 06-28 dsc); the same fixture gives
+   per layer, asc − dsc within 15 m. Range medians +1.5 / +5.6 / +7.1 m and along track
+   −2.7 / −4.1 / +2.9 m (06-27 dsc / 06-27 asc / 06-28 dsc; without the sample-centre
+   step −3.5 / +0.7 / +2.1 m and +2.4 / +0.9 / +8.0 m); the same fixture gives
    +55.1 / +56.7 / +44.9 m on chain 1's GCPs (asserted > 40 m, so the check has teeth);
 3. `@pytest.mark.slow`, with `IMINT_S1_E2E_CACHE` set to a local S1 cache (the MPC
    catalogue search still needs network): fetch + detector for 2026-06-28 against the same
@@ -983,20 +993,23 @@ now does:
 AIS hull centres of the same slow anchored ships (mutual nearest ≤ 150 m; range + = toward
 the satellite):
 
-| layer | n | range median | along-track median | chain 1 range | layer moved (median dE, dN) |
-|---|---|---|---|---|---|
-| 06-27 05:39 S1C dsc (2 slices) | 29 | −1.8 m | −0.6 m | +55.1 m | (−55.6, +10.8) m |
-| 06-27 16:53 S1C asc | 30 | +1.8 m | +1.7 m | +56.7 m | (+51.3, +12.7) m |
-| 06-28 05:31 S1D dsc | 30 | +0.4 m | +7.4 m | +44.9 m | (−41.4, +6.1) m |
+| layer | n | range median | along-track median | without the sample-centre step: range / track | chain 1 range | layer moved (median dE, dN) |
+|---|---|---|---|---|---|---|
+| 06-27 05:39 S1C dsc (2 slices) | 29 | +3.0 m | −4.1 m | −1.8 / −0.6 m | +55.1 m | (−47.5, +15.0) m |
+| 06-27 16:53 S1C asc | 30 | +6.2 m | −4.3 m | +1.8 / +1.7 m | +56.7 m | (+47.7, +4.8) m |
+| 06-28 05:31 S1D dsc | 30 | +5.1 m | +0.6 m | +0.4 / +7.4 m | +44.9 m | (−35.5, +10.0) m |
 
-- All pass (|median| ≤ 10 m, n ≥ 20). Same-day asc − dsc range medians: +3.5 m; the same
-  ship's E-W residual, asc − dsc: −1.3 m (n 21; chain 1 −111.8 m).
+- All pass (|median| ≤ 10 m, n ≥ 20), with and without the step. Same-day asc − dsc
+  range medians: +3.3 m (+3.5 m without); the same ship's E-W residual, asc − dsc:
+  −10.6 m (−1.3 m without; n 21; chain 1 −111.8 m).
 - The layers move west on descending and east on ascending passes: the sea-surface shift
-  (41–57 m at the ships).
-- AI2 parity in radar coordinates, 06-28: 75 pairs, median |Δ| 0.95 px, mean vector
-  1.05 m. In map coordinates the same pairs are 41.2 m apart, by design.
-- Detection sets change only at the margins: 62 → 62, 70 → 65 and 77 → 78 detections in
-  the bbox (the changed ones lie near the 0.7 threshold or the bbox edge), and all
+  (41–57 m at the ships) less the ~5 m sample-centre term toward the satellite.
+- AI2 parity in radar coordinates, 06-28: 76 pairs, median |Δ| 0.76 px, mean vector
+  0.13 m (without the step 75 pairs, 0.95 px, 1.05 m). In map coordinates the same pairs
+  are 40.6 m apart (41.2 m), by design.
+- Detection sets change only at the margins: 62 → 64, 70 → 65 and 77 → 77 detections in
+  the bbox (62, 65, 78 without the step); every changed one scores 0.70–0.83 or lies at
+  the bbox's east edge, matched pairs differ by a median 0.001–0.002 in score, and all
   AIS-matched slow ships are still detected.
 - Details, per-ship residuals and the layers: marine-awareness research
   `2026-10-20_s1_offset_diagnosis/fix_verification.md` and `fix_runs/`.

@@ -2482,6 +2482,19 @@ S1_VESSEL_CHAIN_VERSION = 2
 # describes targets at sea level (land GCPs above the geoid move toward the
 # satellite). The sign flips with the pass, so no constant shift can do this.
 _S1_TIE_POINTS = "sea surface: (N - z) / tan(incidence) away from the satellite, z = N"
+# GCP pixel convention. ESA's geolocation grid gives pixel/line of sample
+# centres (0 = the centre of the first sample; the last GCP is at width - 1).
+# GDAL reads a GCP's Pixel/Line on the pixel-corner lattice (the first pixel
+# spans 0..1; the GRDs say AREA_OR_POINT=Area). Taken as delivered, every
+# sample is geocoded half a pixel and half a line on, ~7 m: too far from the
+# satellite and too far along track. True: add half a pixel and a line, which
+# moves ships 5.0 m toward the satellite and 5.1 m back along track (measured
+# on the 06-28 S1D and 06-27 S1C asc headers). It follows from the two
+# conventions; the AIS check cannot resolve a 5 m term. Own flag and commit so
+# it can be reverted alone. Read at call time (_s1_gcp_half_px); part of the
+# geocoding model, hence of the cache key, only when True, so False is the
+# chain without the step: same key, same pixels.
+S1_GCP_SAMPLE_CENTRE = True
 # Annotation grid vs TIFF GCPs: the same points (same order, same values).
 _S1_GCP_IDENTITY_TOL_DEG = 1e-9
 _S1_GCP_IDENTITY_TOL_M = 1e-6
@@ -3334,8 +3347,17 @@ def _s1_geocoding_model() -> dict:
     """The tie-point model; part of the cache key and of the provenance."""
     from .geoid import EGM96_GRID, EGM96_MODEL, egm96_grid_sha256
 
-    return {"tie_points": _S1_TIE_POINTS, "surface": EGM96_MODEL,
-            "grid": EGM96_GRID.name, "grid_sha256": egm96_grid_sha256()}
+    model = {"tie_points": _S1_TIE_POINTS, "surface": EGM96_MODEL,
+             "grid": EGM96_GRID.name, "grid_sha256": egm96_grid_sha256()}
+    if S1_GCP_SAMPLE_CENTRE:
+        model["gcp_pixel_convention"] = (
+            "ESA sample centre -> GDAL corner lattice: pixel + 0.5, line + 0.5")
+    return model
+
+
+def _s1_gcp_half_px() -> float:
+    """GCP pixel/line offset of ``S1_GCP_SAMPLE_CENTRE``, read at call time."""
+    return 0.5 if S1_GCP_SAMPLE_CENTRE else 0.0
 
 
 def _s1_geocoding_id() -> str:
@@ -3347,7 +3369,8 @@ def _s1_geocoding_id() -> str:
 def _s1_sea_surface(header: dict) -> tuple[list[list], np.ndarray]:
     """The scene's GCPs on the sea surface, and each GCP's shift (m, + = away from the satellite).
 
-    Per GCP ``[id, col, row, lon, lat, z]``: N is the EGM96 undulation at
+    Per GCP ``[id, col, row, lon, lat, z]``: col and row move by
+    ``_s1_gcp_half_px()`` (sample centre on GDAL's lattice); N is the EGM96 undulation at
     (lon, lat); the GCP moves ``(N - z) / tan(incidence)`` metres along the
     ground direction of increasing pixel on its GCP row (S1 looks right, so
     increasing pixel is away from the satellite). That direction is the central
@@ -3400,7 +3423,8 @@ def _s1_sea_surface(header: dict) -> tuple[list[list], np.ndarray]:
     shift = (n - z) / np.tan(np.radians(inc))
     az = np.degrees(np.arctan2(east, north))
     lon2, lat2, _ = geod.fwd(lon, lat, np.where(shift < 0, az + 180.0, az), np.abs(shift))
-    out = [[g[0], g[1], g[2], float(x), float(y), float(h)]
+    half = _s1_gcp_half_px()
+    out = [[g[0], g[1] + half, g[2] + half, float(x), float(y), float(h)]
            for g, x, y, h in zip(gcps, lon2, lat2, n, strict=True)]
     return out, shift
 

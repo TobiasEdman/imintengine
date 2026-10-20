@@ -4,10 +4,11 @@
   "tie_points": "sea surface: (N - z) / tan(incidence) away from the satellite, z = N",
   "surface": "EGM96 15' (PROJ us_nga_egm96_15.tif), bilinear",
   "grid": "us_nga_egm96_15.tif",
-  "grid_sha256": "db493027562c9b004d7220fa881f5603adada4e1c5029b933fa7de4547b0e78d"
+  "grid_sha256": "db493027562c9b004d7220fa881f5603adada4e1c5029b933fa7de4547b0e78d",
+  "gcp_pixel_convention": "ESA sample centre -> GDAL corner lattice: pixel + 0.5, line + 0.5"
  },
  "n_diff": 0,
  "n": 42268248,
  "max_abs": 0,
- "seconds_full_chain": 147.0
+ "seconds_full_chain": 126.1
 }

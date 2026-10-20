@@ -837,12 +837,34 @@ def test_cache_key_is_deterministic_and_pinned():
     # Pinned: a change of the key derivation (or of a version constant) must be deliberate.
     # (Format 2 keyed date + bbox only: "76b7613d2936b018" for this request; chain 1,
     # GCPs on the ellipsoid: "f531577c8b5af38c".)
-    assert key == "1b0c720a3cc179a3"
+    assert key == _PINNED_KEY[fetch.S1_GCP_SAMPLE_CENTRE]
     assert key == fetch._s1_vessel_cache_key(dict(reversed(list(SKAGEN_BBOX.items()))),
                                              "2026-06-28", [_TARGET_ID])
     assert key != fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-29", [_TARGET_ID])
     assert key != fetch._s1_vessel_cache_key({**SKAGEN_BBOX, "west": 10.51}, "2026-06-28",
                                              [_TARGET_ID])
+
+
+# Chain 2 by S1_GCP_SAMPLE_CENTRE: with the half pixel, and without it, where False
+# must give exactly the key of the chain before the step.
+_PINNED_KEY = {True: "a29762473a72f9cf", False: "1b0c720a3cc179a3"}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_sample_centre_flag_is_read_at_call_time(tmp_path, monkeypatch, flag):
+    """The flag decides GCP offset, geocoding model, cache key and window names
+    together, when they are computed; False is the chain without the step."""
+    header = synthetic_grd(tmp_path / "grd.tif")
+    monkeypatch.setattr(fetch, "S1_GCP_SAMPLE_CENTRE", flag)
+    half = 0.5 if flag else 0.0
+    assert fetch._s1_gcp_half_px() == half
+    assert [(g[1], g[2]) for g in fetch._s1_sea_surface_gcps(header)] == [
+        (g[1] + half, g[2] + half) for g in header["gcps"]]
+    assert ("gcp_pixel_convention" in fetch._s1_geocoding_model()) is flag
+    key = fetch._s1_vessel_cache_key(SKAGEN_BBOX, "2026-06-28", [_TARGET_ID])
+    assert key == _PINNED_KEY[flag]
+    stem = fetch._s1_window_stem("vv", {"col_off": 1, "row_off": 2, "width": 3, "height": 4})
+    assert stem.endswith(f"_g{fetch._s1_geocoding_id()}")
 
 
 def test_cache_key_and_window_files_follow_the_geocoding_model(monkeypatch):
@@ -1066,6 +1088,9 @@ def test_sparse_vrt_xml_escapes_wkt_and_rejects_unknown_dtype(tmp_path):
     np.testing.assert_allclose([g.z for g in gcps],
                                geoid.egm96_undulation([g[3] for g in raw], [g[4] for g in raw]))
     assert all(abs(g.x - r[3]) > 1e-5 for g, r in zip(gcps, raw, strict=True))
+    # ESA sample centres on GDAL's corner lattice (S1_GCP_SAMPLE_CENTRE): half on.
+    half = fetch._s1_gcp_half_px()
+    assert [(g.col, g.row) for g in gcps] == [(r[1] + half, r[2] + half) for r in raw]
     np.testing.assert_array_equal(data[5:15, 10:30], np.arange(1, 201).reshape(10, 20))
     assert data[:5].sum() == 0
     with pytest.raises(fetch.FetchError, match="'float32' is not supported"):

@@ -84,6 +84,8 @@ def test_s1_sea_surface_gcps_match_range_doppler(scene):
 
     n = egm96_undulation(raw[:, 2], raw[:, 3])
     np.testing.assert_allclose(new[:, 4], n)                          # z = N
+    # Sample centres on GDAL's corner lattice (S1_GCP_SAMPLE_CENTRE).
+    np.testing.assert_array_equal(new[:, :2], raw[:, :2] + fetch._s1_gcp_half_px())
 
     # Corrected sea GCPs = the exact zero-Doppler solution on the sea surface.
     lon_n, lat_n = oracle.geolocate_grid(n)
