@@ -37,6 +37,10 @@ data/nfi/
 # cut from AI2's own materialised model input (Copernicus Sentinel-1 data 2026).
 # Needed by tests/test_ai2_vessels_s1.py.
 !tests/fixtures/ai2_s1_vessel_crop.npz
+# Exception: EGM96 15' geoid grid (PROJ us_nga_egm96_15.tif, NGA, public
+# domain), 2.7 MB. Package data of imint.geoid: the S1 vessel chain puts its
+# tie points on the sea surface with it, offline and deterministic.
+!imint/geoid/us_nga_egm96_15.tif
 
 # Baselines (large numpy files)
 **/baselines/
