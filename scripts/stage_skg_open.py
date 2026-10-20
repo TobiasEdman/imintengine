@@ -431,7 +431,10 @@ def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1) -> dic
     strips per worker in flight; this process writes them in row order.
     Every strip goes through the same ``block_stat``, so the raster equals
     the serial one. Measured 2026-10-20 on county 05 (170000 x 160000 px):
-    x6.3 wall time at 8 workers, reading and the statistic both scaling."""
+    x6.3 wall time at 8 workers, reading and the statistic both scaling.
+    The workers are spawned (no fork of a process holding GDAL handles), so
+    the caller's main module must be importable: run this script as a
+    file, as the Job does, not from stdin."""
     import multiprocessing
     from collections import deque
     from concurrent.futures import ProcessPoolExecutor
