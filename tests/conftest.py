@@ -13,6 +13,11 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "slow: long real-data runs, opt-in through an env var (skipped otherwise)")
+
+
 @pytest.fixture
 def rgb_uniform():
     """A uniform 64x64 RGB image (all 0.5) — no variance, no edges."""
