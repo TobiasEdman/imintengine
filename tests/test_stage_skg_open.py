@@ -396,8 +396,8 @@ def _staging(monkeypatch, tmp_path, free_gib=1000.0):
         target.write_bytes(b"zip")
         return {}
 
-    def convert(item, zpath, out, work, method):
-        calls.append(("convert", item.name))
+    def convert(item, zpath, out, work, method, tradhojd_workers=1):
+        calls.append(("convert", item.name) if tradhojd_workers == 1 else ("convert", item.name, tradhojd_workers))
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"tif")
         return {"sha256": "d" * 64, "bytes": 3, "verified": True}
@@ -579,3 +579,58 @@ def test_a_writer_never_removes_a_lock_that_is_no_longer_its_own(tmp_path):
         lock.unlink()                                                   # cleared by hand as stale ...
         lock.write_text('{"owner": "drop_skg_open_raw", "token": "other"}')   # ... and taken by another writer
     assert lock.read_text() == '{"owner": "drop_skg_open_raw", "token": "other"}'
+
+
+def _height_raster(path, rows=1300, cols=640):
+    """A 1 m int16 Trädhöjd-like raster: random heights, a nodata margin and scattered nodata."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    rng = np.random.default_rng(7)
+    data = rng.integers(0, 350, size=(rows, cols), dtype=np.int16)
+    data[:, :90] = -1
+    data[rng.random(data.shape) < 0.05] = -1
+    data[600:700, :] = -1                                   # a band straddling the first strip boundary
+    with rasterio.open(path, "w", driver="GTiff", width=cols, height=rows, count=1, dtype="int16",
+                       crs="EPSG:3006", transform=from_origin(460000, 6270000, 1, 1), nodata=-1) as d:
+        d.write(data, 1)
+    return path
+
+
+def test_parallel_derivation_writes_the_same_raster_as_serial(tmp_path):
+    """--tradhojd-workers only spreads the strips over processes: pixels, record and file bytes match."""
+    import rasterio
+
+    src = str(_height_raster(tmp_path / "t.tif"))
+    one = st.derive_tradhojd_10m(src, tmp_path / "serial.tif", "p90")
+    three = st.derive_tradhojd_10m(src, tmp_path / "parallel.tif", "p90", workers=3)
+    with rasterio.open(tmp_path / "serial.tif") as a, rasterio.open(tmp_path / "parallel.tif") as b:
+        np.testing.assert_array_equal(a.read(1), b.read(1))
+    assert one == three and one["valid_cells"] > 0
+    assert st.sha256_of(tmp_path / "serial.tif") == st.sha256_of(tmp_path / "parallel.tif")
+
+
+def test_a_deflate_entry_is_extracted_only_when_asked(tmp_path):
+    tif = _height_raster(tmp_path / "Tradhojd01.tif", rows=40, cols=40)
+    zpath = tmp_path / "sksTradhojd01.zip"
+    with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.write(tif, "Tradhojd01.tif")
+    src, tmp = st.gdal_source(zpath, tmp_path / "work")
+    assert src.startswith("/vsizip/") and tmp is None
+    src, tmp = st.gdal_source(zpath, tmp_path / "work", extract=True)
+    assert src == str(tmp) and tmp.read_bytes() == tif.read_bytes()
+
+
+def test_workers_reach_the_conversion_and_the_floor_covers_their_extraction(monkeypatch, tmp_path):
+    calls, _ = _staging(monkeypatch, tmp_path)
+    assert st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01",
+                    "--drop-raw", "--tradhojd-workers", "8"]) == 0
+    assert ("convert", "sksTradhojd01.zip", 8) in calls
+
+    calls, _ = _staging(monkeypatch, tmp_path / "b", free_gib=60.0)
+    big = zipfile.ZipInfo("Tradhojd01.tif")
+    big.compress_type, big.file_size = st.ZIP_DEFLATE, 20 * 2**30       # plain Deflate, extracted for workers
+    monkeypatch.setattr(st, "zip_tif_entry", lambda z: big)
+    code = st.main(["--dest", str(tmp_path / "b/m"), "--products", "tradhojd", "--counties", "01",
+                    "--drop-raw", "--min-free-gib", "50", "--tradhojd-workers", "8"])
+    assert code == 3 and calls == [("download", "sksTradhojd01.zip")]
