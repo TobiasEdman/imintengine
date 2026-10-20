@@ -315,17 +315,28 @@ def zip_tif_entry(zpath: Path) -> zipfile.ZipInfo:
     return tifs[0]
 
 
-def gdal_source(zpath: Path, work: Path) -> tuple[str, Path | None]:
+def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str, Path | None]:
     """A GDAL-openable path for the zip's raster.
 
     Deflate (method 8) is read in place through ``/vsizip/``. Deflate64
     (method 9, used by the whole-country and most Trädhöjd zips) is not
     supported by GDAL or ``zipfile``; it is inflated with ``inflate64`` to a
-    temporary file that the caller removes.
+    temporary file that the caller removes. ``extract`` writes a Deflate
+    entry to such a file too: a fresh ``/vsizip/`` handle that seeks to a
+    late row inflates the stream from its start, so parallel readers each
+    opening the zip would pay that again and again.
     """
     info = zip_tif_entry(zpath)
     if info.compress_type == ZIP_DEFLATE or info.compress_type == zipfile.ZIP_STORED:
-        return f"/vsizip/{zpath}/{info.filename}", None
+        if not extract:
+            return f"/vsizip/{zpath}/{info.filename}", None
+        work.mkdir(parents=True, exist_ok=True)
+        tmp = work / info.filename
+        with zipfile.ZipFile(zpath) as z, z.open(info) as src, open(tmp, "wb") as out:
+            shutil.copyfileobj(src, out, 16 << 20)        # zipfile checks the entry's CRC at the end
+        if tmp.stat().st_size != info.file_size:
+            raise OSError(f"{zpath.name}: extracted {tmp.stat().st_size} bytes, expected {info.file_size}")
+        return str(tmp), tmp
     if info.compress_type != ZIP_DEFLATE64:
         raise ValueError(f"{zpath.name}: unsupported zip method {info.compress_type}")
     import inflate64
@@ -350,14 +361,15 @@ def gdal_source(zpath: Path, work: Path) -> tuple[str, Path | None]:
     return str(tmp), tmp
 
 
-def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str) -> dict:
+def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str,
+            tradhojd_workers: int = 1) -> dict:
     """Write the derived COG for ``item``; returns the record for the manifest."""
-    src, tmp = gdal_source(zpath, work)
+    src, tmp = gdal_source(zpath, work, extract=item.product == "tradhojd" and tradhojd_workers > 1)
     out.parent.mkdir(parents=True, exist_ok=True)
     partial = out.with_name(out.name + ".part.tif")
     try:
         if item.product == "tradhojd":
-            check = derive_tradhojd_10m(src, partial, tradhojd_method)
+            check = derive_tradhojd_10m(src, partial, tradhojd_method, workers=tradhojd_workers)
             method = f"block {tradhojd_method} of the 1 m cells per 10 m cell, nodata-aware, int16 dm"
         else:
             subprocess.run(["gdal_translate", "-q", *COG_OPTS, src, str(partial)], check=True)
@@ -400,10 +412,33 @@ def block_stat(block, stat: str, nodata: int):
     return np.clip(out, -1, 32767).astype(np.int16)
 
 
-def derive_tradhojd_10m(src: str, out: Path, stat: str) -> dict:
-    """Reduce the 1 m Trädhöjd raster to the NMD 10 m lattice, streaming
-    ten source rows at a time (memory-bounded, sequential: works on a
-    strip TIFF read through /vsizip/)."""
+def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int):
+    """``block_stat`` of ``n_rows`` source rows from ``row``; runs in a worker process."""
+    import rasterio
+    from rasterio.windows import Window
+
+    with rasterio.open(src) as ds:
+        return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata)
+
+
+def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1) -> dict:
+    """Reduce the 1 m Trädhöjd raster to the NMD 10 m lattice, one strip of
+    640 source rows at a time (memory-bounded; works on a strip TIFF read
+    through /vsizip/).
+
+    With ``workers`` > 1 the strips are reduced by that many spawned
+    processes, each opening ``src`` and reading its own rows, at most two
+    strips per worker in flight; this process writes them in row order.
+    Every strip goes through the same ``block_stat``, so the raster equals
+    the serial one. Measured 2026-10-20 on county 05 (170000 x 160000 px):
+    x6.3 wall time at 8 workers, reading and the statistic both scaling.
+    The workers are spawned (no fork of a process holding GDAL handles), so
+    the caller's main module must be importable: run this script as a
+    file, as the Job does, not from stdin."""
+    import multiprocessing
+    from collections import deque
+    from concurrent.futures import ProcessPoolExecutor
+
     import numpy as np
     import rasterio
     from rasterio.transform import from_origin
@@ -422,20 +457,42 @@ def derive_tradhojd_10m(src: str, out: Path, stat: str) -> dict:
                 "tiled": True, "blockxsize": 512, "blockysize": 512, "compress": "DEFLATE",
                 "predictor": 2, "BIGTIFF": "IF_SAFER"}
         src_bounds = [float(v) for v in ds.bounds]
-        rows_per_chunk = 10 * 64
-        vmin, vmax, n_valid = None, None, 0
-        with rasterio.open(out, "w", **prof) as dst:
-            for r in range(0, ds.height, rows_per_chunk):
-                n = min(rows_per_chunk, ds.height - r)
-                block = ds.read(1, window=Window(0, r, ds.width, n))
-                reduced = block_stat(block, stat, nod)
-                dst.write(reduced, 1, window=Window(0, r // 10, ow, n // 10))
-                valid = reduced[reduced != -1]
-                if valid.size:
-                    n_valid += int(valid.size)
-                    lo, hi = int(valid.min()), int(valid.max())
-                    vmin = lo if vmin is None else min(vmin, lo)
-                    vmax = hi if vmax is None else max(vmax, hi)
+        height = ds.height
+    rows_per_chunk = 10 * 64
+    strips = [(r, min(rows_per_chunk, height - r)) for r in range(0, height, rows_per_chunk)]
+    vmin, vmax, n_valid = None, None, 0
+
+    def write(dst, r, n, reduced):
+        nonlocal vmin, vmax, n_valid
+        dst.write(reduced, 1, window=Window(0, r // 10, ow, n // 10))
+        valid = reduced[reduced != -1]
+        if valid.size:
+            n_valid += int(valid.size)
+            lo, hi = int(valid.min()), int(valid.max())
+            vmin = lo if vmin is None else min(vmin, lo)
+            vmax = hi if vmax is None else max(vmax, hi)
+
+    with rasterio.open(out, "w", **prof) as dst:
+        if workers <= 1:
+            with rasterio.open(src) as ds:        # one handle, read in order: a strip TIFF in a zip seeks cheaply forward
+                for r, n in strips:
+                    write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod))
+        else:
+            ex = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"))
+            try:
+                todo, pending = iter(strips), deque()
+                for r, n in todo:
+                    pending.append((r, n, ex.submit(_reduce_strip, src, r, n, stat, nod)))
+                    if len(pending) == 2 * workers:
+                        break
+                while pending:
+                    r, n, fut = pending.popleft()
+                    nxt = next(todo, None)
+                    if nxt is not None:
+                        pending.append((*nxt, ex.submit(_reduce_strip, src, *nxt, stat, nod)))
+                    write(dst, r, n, fut.result())
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)   # a SIGTERM or error must not wait for the queue
     rec = {"width": ow, "height": oh, "res_m": 10.0, "nodata": -1, "dtype": "int16",
            "bounds": src_bounds, "statistic": stat,
            "value_min_dm": vmin, "value_max_dm": vmax, "valid_cells": n_valid}
@@ -631,6 +688,8 @@ def _main(argv: list[str] | None = None) -> int:
     p.add_argument("--tradhojd-method", default="p90", choices=list(TRADHOJD_STATS),
                    help="10 m statistic of the 1 m Trädhöjd cells; p90 is closest to the "
                         "retired proxy's height channel (see docs/data/skg_open_mirror.md)")
+    p.add_argument("--tradhojd-workers", type=int, default=1,
+                   help="processes reducing Trädhöjd strips in parallel; the raster is the same for any value")
     p.add_argument("--drop-raw", action="store_true",
                    help="delete the raw zip after its derived raster is verified (tradhojd only)")
     p.add_argument("--accept-upstream-change", action="store_true",
@@ -716,7 +775,8 @@ def _main(argv: list[str] | None = None) -> int:
             manifest["files"][it.name] = rec
             save_manifest(dest, manifest)
         info = zip_tif_entry(raw)
-        if info.compress_type == ZIP_DEFLATE64:            # inflated to a work file of this size first
+        if info.compress_type == ZIP_DEFLATE64 or (it.product == "tradhojd" and args.tradhojd_workers > 1):
+            # inflated to a work file of this size first (gdal_source)
             free = shutil.disk_usage(dest).free
             if (free - info.file_size) / 2**30 < args.min_free_gib:
                 stopped = (f"STOP before inflating {it.name}: {free / 2**30:.1f} GiB free, inflation needs "
@@ -725,7 +785,8 @@ def _main(argv: list[str] | None = None) -> int:
                 print(stopped, flush=True)
                 break
         print(f"    convert -> {it.derived}", flush=True)
-        manifest["derived"][it.derived] = convert(it, raw, dest / it.derived, work, args.tradhojd_method)
+        manifest["derived"][it.derived] = convert(it, raw, dest / it.derived, work, args.tradhojd_method,
+                                                  tradhojd_workers=args.tradhojd_workers)
         save_manifest(dest, manifest)              # the verified derivation is on record first
         if args.drop_raw and it.product == "tradhojd":
             raw.unlink()
