@@ -2,10 +2,12 @@
   "id": "0111",
   "subject": "S1 vessel fetch: choose the pass, join its slices",
   "description": "Owner decision 2026-10-20 (relayed by the marine-awareness session): fetch_s1_vessel_scenes cannot choose between two passes on one date (2026-06-27 Skagen-Marstrand: descending S1C 05:39 split over two slices, ascending S1C 16:53). Add orbit_state / pass_time_utc selectors to fetch_s1_vessel_scenes and scripts/detect_vessels_s1.py, select the pass (one datatake) and mosaic every slice of it that covers the AOI on one AI2 window lattice, historical scene per slice by AI2's rule, refuse an ambiguous date without a selector, put the pass's scene ids in the cache key, record the pass and slices in the provenance. Single-pass single-slice dates unchanged. Intended files: imint/fetch.py, imint/exporters/export.py, scripts/detect_vessels_s1.py, tests/test_ai2_vessels_s1.py, docs/marine/s1_vessels_reference.md. No geocoding change (separate radar-to-chart offset investigation).",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/s1-pass-choice",
-  "runtime": null,
+  "runtime": "claude",
   "created_at": "2026-10-20T13:35:43Z",
-  "updated_at": "2026-10-20T13:35:43Z"
+  "updated_at": "2026-10-20T13:38:28Z",
+  "claimed_by": "claude-s1pass-1020",
+  "claimed_at": "2026-10-20T13:38:28Z"
 }
