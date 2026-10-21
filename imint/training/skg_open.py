@@ -124,13 +124,20 @@ def check_bbox(west: float, south: float, east: float, north: float,
             "caller decoupled extent from pixels.")
 
 
+#: GDAL 3.10 reads a large multi-source VRT request in threads and drops a
+#: source's read error: an unreadable county raster would come back as
+#: nodata, which the readers turn into 0 (a 1280 x 2560 px window, measured
+#: 2026-10-21). Read serially, the error raises.
+SERIAL_VRT = {"VRT_NUM_THREADS": "1"}
+
+
 def _read_window(path: Path, west: float, south: float, east: float, north: float,
                  out_shape: tuple[int, int], *, resampling, fill):
     """Read ``path`` over the bbox onto ``out_shape``; outside-raster = ``fill``."""
     import rasterio
     from rasterio.windows import from_bounds
 
-    with rasterio.open(path) as ds:
+    with rasterio.Env(**SERIAL_VRT), rasterio.open(path) as ds:
         if ds.crs is not None and ds.crs.to_epsg() != 3006:
             raise ValueError(f"{path}: expected EPSG:3006, got {ds.crs}")
         win = from_bounds(west, south, east, north, ds.transform)
