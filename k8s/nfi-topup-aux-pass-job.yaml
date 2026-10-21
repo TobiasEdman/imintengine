@@ -30,6 +30,15 @@
 # Code pin: IMINT_COMMIT (full sha) and IMINT_SCRIPT_SHA256 (sha256 of
 # scripts/skg_aux_pass.py at that commit); the pod refuses to run if either
 # check fails.
+#
+# 2026-10-21: repinned from eded310 to 1eb8492 (#94, #95). Trädhöjd county
+# 24's tile 720_76 is truncated upstream (~39 km² unreadable). Its gaps are
+# recorded on the county's manifest record, and from #94 read_tradhojd
+# refuses a window touching them. eded310's reader predates that and would
+# have written height 0 there. The preflight below refuses to run unless the
+# pinned reader knows recorded gaps (skg_open.tradhojd_gaps) and county 24's
+# gaps are on record: apply the Trädhöjd Job once after its run, which
+# backfills them, before this one.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -79,6 +88,10 @@ spec:
               from imint.training import skg_open
               m = json.load(open("/data/skg_open/MANIFEST.json"))
               print(f"Trädhöjd counties staged: {sorted(skg_open.staged_tradhojd_counties(m))}")
+              gaps = skg_open.tradhojd_gaps(m)     # a reader without it returns a gap as height 0
+              print(f"Trädhöjd upstream gaps on record: {gaps}")
+              assert any(c == "24" for c, _ in gaps), \
+                  "county 24's upstream gaps are not on record: apply the Trädhöjd Job (backfill) first"
               PY
               RC=0
               for Y in ${YEARS}; do
@@ -94,8 +107,8 @@ spec:
               echo "=== done (exit ${RC}): $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "eded310bd9494269003d85f049f20a4872f68095"}
-            - {name: IMINT_SCRIPT_SHA256, value: "bbf590922483336c3d86bfc2b458c9964f3c28444259bca847c8e116a2a9f10c"}
+            - {name: IMINT_COMMIT, value: "1eb84923b1c3a6dc2d42ab015034b5a460c14ba8"}
+            - {name: IMINT_SCRIPT_SHA256, value: "cf111e6eaba590ada36df609f9442a6373547ebf6e3e057f0c18a72c6e853c61"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
             - {name: GDAL_CACHEMAX, value: "512"}
           resources:

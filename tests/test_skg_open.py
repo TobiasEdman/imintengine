@@ -253,3 +253,34 @@ def test_tree_height_touching_a_recorded_upstream_gap_fails_loud(mirror, tmp_pat
         skg_open.read_tradhojd(W, S, E, N, size_px=PX)
     with_gaps([[E, S, E + 10, N]])                                  # touching the window's edge only
     assert skg_open.read_tradhojd(W, S, E, N, size_px=PX)[20, 20] == 125
+
+
+def test_an_unreadable_county_raster_in_the_mosaic_raises_not_zeros(tmp_path):
+    """A 1280 x 2560 px window over a 2-source mosaic is read by GDAL 3.10 in threads, which would
+    return the cut source as nodata (then 0) without the serial read; a 512 px window is serial anyway."""
+    import rasterio
+    from rasterio.crs import CRS
+    from rasterio.enums import Resampling
+    from rasterio.errors import RasterioIOError
+
+    from rasterio.transform import from_origin
+
+    px = 1280
+    for i, name in enumerate(("a.tif", "b.tif")):             # tiled, as the county COGs are
+        with rasterio.open(tmp_path / name, "w", driver="GTiff", width=px, height=px, count=1, dtype="int16",
+                           crs="EPSG:3006", tiled=True, blockxsize=128, blockysize=128, nodata=-1,
+                           transform=from_origin(W + i * px * 10, N, 10, 10)) as d:
+            d.write(np.full((px, px), 125, dtype=np.int16), 1)
+    raw = (tmp_path / "b.tif").read_bytes()
+    (tmp_path / "b.tif").write_bytes(raw[: len(raw) * 6 // 10])
+    src = "".join(f'<SimpleSource><SourceFilename relativeToVRT="1">{n}</SourceFilename><SourceBand>1</SourceBand>'
+                  f'<SrcRect xOff="0" yOff="0" xSize="{px}" ySize="{px}" />'
+                  f'<DstRect xOff="{i * px}" yOff="0" xSize="{px}" ySize="{px}" /></SimpleSource>'
+                  for i, n in enumerate(("a.tif", "b.tif")))
+    (tmp_path / "m.vrt").write_text(
+        f'<VRTDataset rasterXSize="{2 * px}" rasterYSize="{px}"><SRS>{CRS.from_epsg(3006).to_wkt()}</SRS>'
+        f'<GeoTransform>{W}, 10, 0, {N}, 0, -10</GeoTransform><VRTRasterBand dataType="Int16" band="1">'
+        f'<NoDataValue>-1</NoDataValue>{src}</VRTRasterBand></VRTDataset>')
+    with pytest.raises(RasterioIOError):
+        skg_open._read_window(tmp_path / "m.vrt", W, N - px * 10, W + 2 * px * 10, N, (px, 2 * px),
+                              resampling=Resampling.nearest, fill=-1)

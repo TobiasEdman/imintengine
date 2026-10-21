@@ -79,6 +79,9 @@ def _gap(exc: skg_open.SkgMirrorMissingError) -> str:
         return f"county {counties} not staged in the mirror"
     if "no county" in msg:
         return "no county covers the window"
+    if "upstream gap" in msg:
+        counties = re.search(r"\[[^]]*\]", msg).group(0)
+        return f"county {counties} has a recorded upstream gap in the window"
     return "mirror product missing"
 
 

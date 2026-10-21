@@ -420,3 +420,20 @@ def test_no_container_sets_an_env_variable_twice() -> None:
                 names = [e["name"] for e in c.get("env") or []]
                 found += [(path.name, c.get("name"), n) for n in sorted({n for n in names if names.count(n) > 1})]
     assert not found, f"env names set twice: {found}"
+
+
+def test_every_aux_pass_job_refuses_a_reader_blind_to_recorded_gaps() -> None:
+    """A Job running skg_aux_pass.py pinned to a commit whose skg_open predates
+    recorded gaps (#94) writes Trädhöjd height 0 over a truncated upstream
+    tile (nfi-topup-aux-pass was pinned to eded310). Its preflight must call
+    skg_open.tradhojd_gaps, which fails on such a pin."""
+    import yaml
+
+    jobs = []
+    for path in sorted((REPO / "k8s").glob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            for c in _containers(doc):
+                script = "\n".join(c.get("args", []) + c.get("command", []))
+                if "scripts/skg_aux_pass.py" in script:
+                    jobs.append((path.name, "skg_open.tradhojd_gaps(" in script))
+    assert jobs and all(ok for _, ok in jobs), jobs

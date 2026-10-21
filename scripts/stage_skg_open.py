@@ -380,7 +380,7 @@ TILED_NODATA = -1
 #: unreadable block stops the derivation. An entry applies only to the tile
 #: with this CRC-32, and the backfill only to the zip with this sha256, so a
 #: republished zip is checked afresh. Found 2026-10-21 in run r2: 2456 of the
-#: tile's 6241 blocks, every one from (58, 47) on, apart from 5 never-written
+#: tile's 6241 blocks, every one from (58, 47) on, apart from 14 never-written
 #: (all-0) blocks; the gaps are the conservative rectangles around them.
 KNOWN_TRUNCATED_TILES = {
     "sksTradhojd24.zip": {
