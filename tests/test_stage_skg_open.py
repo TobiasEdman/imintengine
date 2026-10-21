@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import http.server
 import json
+import math
 import os
 import shutil
 import signal
@@ -847,3 +848,165 @@ def test_the_floor_covers_every_tile_of_a_tiled_county(monkeypatch, tmp_path):
     code = st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01",
                     "--drop-raw", "--min-free-gib", "50"])
     assert code == 3 and calls == [("download", "sksTradhojd01.zip")]
+
+
+# ── truncated upstream tiles (county 24's 720_76, run r2 2026-10-21) ──
+
+_BIG = 1280         # px: two full 640-row strips. GDAL 3.10 reads a 2-source VRT strip this large in
+                    # threads and drops the read error; a smaller one (the 360-row tail of a 1000 px
+                    # tile) is read serially and raises anyway, so it cannot test SERIAL_VRT
+
+
+def _truncated_zip(tmp_path: Path) -> tuple[Path, int, list[list[float]], int]:
+    """sksTradhojd24.zip with tiles a and b (all 7, 1280 px, 128 px blocks)
+    and their VRT; b's file is cut at 60 %, as 720_76 is upstream. Returns
+    the zip, b's CRC-32, rectangles around b's unreadable blocks (the partial
+    first row, then the rows below) and how many blocks are unreadable."""
+    import rasterio
+    from rasterio.crs import CRS
+    from rasterio.errors import RasterioIOError
+    from rasterio.transform import from_origin
+
+    src = tmp_path / "tiles"
+    src.mkdir()
+    for i, name in enumerate(("a.tif", "b.tif")):
+        with rasterio.open(src / name, "w", driver="GTiff", width=_BIG, height=_BIG, count=1, dtype="int16",
+                           tiled=True, blockxsize=128, blockysize=128,
+                           transform=from_origin(_W + i * _BIG, _N, 1, 1)) as d:
+            d.write(np.full((_BIG, _BIG), 7, np.int16), 1)
+    raw = (src / "b.tif").read_bytes()
+    (src / "b.tif").write_bytes(raw[: len(raw) * 6 // 10])
+    with rasterio.open(src / "b.tif") as ds:
+        bad = []
+        for _, w in ds.block_windows(1):
+            try:
+                ds.read(1, window=w)
+            except RasterioIOError:
+                bad.append(ds.window_bounds(w))
+    top = max(b[3] for b in bad)
+    first = [b for b in bad if b[3] == top]
+    rects = [[min(b[0] for b in first), min(b[1] for b in first), max(b[2] for b in first), top],
+             [_W + _BIG, _N - _BIG, _W + 2 * _BIG, min(b[1] for b in first)]]
+    simple = "".join(
+        f'<SimpleSource><SourceFilename relativeToVRT="1">{n}</SourceFilename><SourceBand>1</SourceBand>'
+        f'<SrcRect xOff="0" yOff="0" xSize="{_BIG}" ySize="{_BIG}" />'
+        f'<DstRect xOff="{i * _BIG}" yOff="0" xSize="{_BIG}" ySize="{_BIG}" /></SimpleSource>'
+        for i, n in enumerate(("a.tif", "b.tif")))
+    vrt = (f'<VRTDataset rasterXSize="{2 * _BIG}" rasterYSize="{_BIG}">'
+           f'<SRS dataAxisToSRSAxisMapping="1,2">{CRS.from_epsg(3006).to_wkt()}</SRS>'
+           f'<GeoTransform>{_W}, 1, 0, {_N}, 0, -1</GeoTransform>'
+           f'<VRTRasterBand dataType="Int16" band="1">{simple}</VRTRasterBand></VRTDataset>')
+    zpath = tmp_path / "sksTradhojd24.zip"
+    with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("lan/lan.vrt", vrt)
+        for name in ("a.tif", "b.tif"):
+            z.write(src / name, f"lan/{name}")
+        crc = z.getinfo("lan/b.tif").CRC
+    return zpath, crc, rects, len(bad)
+
+
+def _known(monkeypatch, crc, rects, count):
+    entry = {"crc32": crc, "unreadable_blocks": count, "gaps": rects}
+    monkeypatch.setattr(st, "KNOWN_TRUNCATED_TILES", {"sksTradhojd24.zip": {"sha256": "z", "tiles": {"b.tif": entry}}})
+    return entry
+
+
+_ITEM24 = st.Item("sksTradhojd24.zip", "tradhojd", "tradhojd/tradhojd_10m_24.tif", county="24")
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_an_unreadable_tile_stops_the_derivation(monkeypatch, tmp_path, workers):
+    from rasterio.errors import RasterioIOError
+
+    monkeypatch.setattr(st, "KNOWN_TRUNCATED_TILES", {})
+    zpath, _, _, n_bad = _truncated_zip(tmp_path)
+    assert n_bad
+    with pytest.raises(RasterioIOError):
+        st.convert(_ITEM24, zpath, tmp_path / "out.tif", tmp_path / "work", "p90", tradhojd_workers=workers)
+    assert not (tmp_path / "work/sksTradhojd24").exists()
+
+
+def test_a_known_truncated_tile_is_staged_with_its_gaps_recorded(monkeypatch, tmp_path):
+    import rasterio
+
+    zpath, crc, rects, n_bad = _truncated_zip(tmp_path)
+    entry = _known(monkeypatch, crc, rects, n_bad)
+    out = tmp_path / "m/tradhojd_10m_24.tif"
+    rec = st.convert(_ITEM24, zpath, out, tmp_path / "work", "p90", tradhojd_workers=2)
+    assert rec["gaps"] == entry["gaps"] and "gaps recorded" in rec["method"]
+    with rasterio.open(out) as ds:
+        got, west, north = ds.read(1), ds.transform.c, ds.transform.f
+    for gw, gs, ge, gn in rects:
+        inside = got[math.ceil((north - gn) / 10):math.floor((north - gs) / 10),
+                     math.ceil((gw - west) / 10):math.floor((ge - west) / 10)]
+        assert inside.size and (inside == -1).all()
+    assert (got[:, :_BIG // 10] == 7).all()                        # the intact tile
+    st.convert(_ITEM24, zpath, out, tmp_path / "work", "average")
+    with rasterio.open(out) as ds:
+        assert np.isin(ds.read(1), [7, -1]).all()                  # cells cut by the gap average only real heights
+
+
+def test_a_known_tile_that_differs_from_what_was_examined_is_refused(monkeypatch, tmp_path):
+    zpath, crc, rects, n_bad = _truncated_zip(tmp_path)
+    _known(monkeypatch, crc, rects, n_bad + 1)
+    with pytest.raises(ValueError, match="unreadable blocks"):
+        st.gdal_source(zpath, tmp_path / "work")
+    assert not (tmp_path / "work/sksTradhojd24").exists()
+
+
+def test_a_known_entry_applies_only_to_its_crc(monkeypatch, tmp_path):
+    from rasterio.errors import RasterioIOError
+
+    zpath, crc, rects, n_bad = _truncated_zip(tmp_path)
+    _known(monkeypatch, crc ^ 1, rects, n_bad)                      # a republished tile is checked afresh
+    with pytest.raises(RasterioIOError):
+        st.convert(_ITEM24, zpath, tmp_path / "out.tif", tmp_path / "work", "p90")
+
+
+def _staged_county(tmp_path: Path, zip_sha: str, value_in_gap: int) -> tuple[Path, list[float]]:
+    """A dest where county 01 is already derived (raw zip dropped), 100 x 100 cells of 50 with -1 in the gap."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    dest = tmp_path / "m"
+    gap = [_W + 200.0, _N - 500.0, _W + 600.0, _N - 300.0]
+    a = np.full((100, 100), 50, np.int16)
+    a[30:50, 20:60] = value_in_gap
+    (dest / "tradhojd").mkdir(parents=True)
+    with rasterio.open(dest / "tradhojd/tradhojd_10m_01.tif", "w", driver="GTiff", width=100, height=100, count=1,
+                       dtype="int16", crs="EPSG:3006", transform=from_origin(_W, _N, 10, 10), nodata=-1) as d:
+        d.write(a, 1)
+    (dest / "MANIFEST.json").write_text(json.dumps({
+        "schema": st.MANIFEST_SCHEMA, "source_url": st.SOURCE_URL, "vrt": {}, "history": [],
+        "files": {"sksTradhojd01.zip": {"sha256": zip_sha, "raw_deleted_at": "2026-10-21T16:13:50Z"}},
+        "derived": {"tradhojd/tradhojd_10m_01.tif": {"sha256": "d" * 64, "bytes": 1, "nodata": -1}}}))
+    return dest, gap
+
+
+def _known01(monkeypatch, gap):
+    monkeypatch.setattr(st, "KNOWN_TRUNCATED_TILES", {"sksTradhojd01.zip": {
+        "sha256": "s" * 64, "tiles": {"x.tif": {"crc32": 0, "unreadable_blocks": 1, "gaps": [gap]}}}})
+
+
+def test_known_gaps_are_recorded_on_a_county_staged_before_them(monkeypatch, tmp_path):
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    dest, gap = _staged_county(tmp_path, "s" * 64, -1)
+    _known01(monkeypatch, gap)
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert calls == []                                              # nothing downloaded or derived again
+    rec = snaps[-1]["derived"]["tradhojd/tradhojd_10m_01.tif"]
+    assert rec["gaps"] == [gap] and rec["gaps_recorded_at"]
+
+
+def test_known_gaps_are_not_recorded_over_valid_cells_or_another_zip(monkeypatch, tmp_path):
+    _staging(monkeypatch, tmp_path)
+    dest, gap = _staged_county(tmp_path, "s" * 64, 50)              # the raster has heights inside the gap
+    _known01(monkeypatch, gap)
+    with pytest.raises(ValueError, match="valid cells inside the known gap"):
+        st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"])
+
+    _, snaps = _staging(monkeypatch, tmp_path / "b")
+    dest, gap = _staged_county(tmp_path / "b", "o" * 64, -1)        # staged from another zip
+    _known01(monkeypatch, gap)
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert "gaps" not in snaps[-1]["derived"]["tradhojd/tradhojd_10m_01.tif"]

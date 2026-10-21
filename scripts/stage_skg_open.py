@@ -40,6 +40,7 @@ import contextlib
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import secrets
@@ -372,6 +373,73 @@ def _extract_entry(zpath: Path, info: zipfile.ZipInfo, tmp: Path) -> None:
 #: Nodata of the tiled mosaic where no tile lies, and of the derived raster.
 TILED_NODATA = -1
 
+#: Tiles truncated in the published zip itself: their CRC-32 matches the zip
+#: directory, but the blocks past the cut cannot be read. Such a tile is staged
+#: with those blocks as nodata and its gaps recorded on the derived raster,
+#: where ``read_tradhojd`` refuses any window that touches them; any other
+#: unreadable block stops the derivation. An entry applies only to the tile
+#: with this CRC-32, and the backfill only to the zip with this sha256, so a
+#: republished zip is checked afresh. Found 2026-10-21 in run r2: 2456 of the
+#: tile's 6241 blocks, every one from (58, 47) on, apart from 5 never-written
+#: (all-0) blocks; the gaps are the conservative rectangles around them.
+KNOWN_TRUNCATED_TILES = {
+    "sksTradhojd24.zip": {
+        "sha256": "05c5c6a1f8ad3f3aa0ff093222482b645073fef6cd81d9561f1dbfe548703ac4",
+        "tiles": {
+            "720_76.tif": {"crc32": 0x170E97A9, "unreadable_blocks": 2456,
+                           "gaps": [[767424.0, 7203856.0, 770000.0, 7203984.0],
+                                    [760000.0, 7200000.0, 770000.0, 7203856.0]]},
+        },
+    },
+}
+
+#: GDAL 3.10 reads the sources of a large VRT request in threads and then
+#: drops a source's read error: a truncated tile read as nodata, silently
+#: (run r2, rasterio 1.4.4 / GDAL 3.10.3). Read serially, the error raises.
+#: The derivation is already parallel across worker processes.
+SERIAL_VRT = {"VRT_NUM_THREADS": "1"}
+
+
+def known_truncated(zip_name: str, tiles: list[zipfile.ZipInfo]) -> dict[str, dict]:
+    """The ``KNOWN_TRUNCATED_TILES`` entries of ``zip_name`` whose tile is among
+    ``tiles`` with the listed CRC-32, by tile name."""
+    known = KNOWN_TRUNCATED_TILES.get(zip_name, {}).get("tiles", {})
+    crcs = {Path(t.filename).name: t.CRC for t in tiles}
+    return {name: k for name, k in known.items() if crcs.get(name) == k["crc32"]}
+
+
+def _patch_truncated_tile(tif: Path, known: dict) -> None:
+    """Rewrite a known truncated tile with its unreadable blocks as nodata.
+
+    Its unreadable blocks must be exactly ``known["unreadable_blocks"]`` in
+    number and each lie inside one of ``known["gaps"]``; otherwise this
+    raises, since the tile is not the one that was examined."""
+    import numpy as np
+    import rasterio
+    from rasterio.errors import RasterioIOError
+
+    with rasterio.open(tif) as src:
+        profile = src.profile
+        blocks = []
+        for _, win in src.block_windows(1):
+            try:
+                blocks.append((win, src.read(1, window=win)))
+            except RasterioIOError:
+                blocks.append((win, None))
+        bad = [src.window_bounds(win) for win, a in blocks if a is None]
+    inside = all(any(gw <= left and gs <= bottom and right <= ge and top <= gn
+                     for gw, gs, ge, gn in known["gaps"]) for left, bottom, right, top in bad)
+    if len(bad) != known["unreadable_blocks"] or not inside:
+        raise ValueError(f"{tif.name}: {len(bad)} unreadable blocks, expected {known['unreadable_blocks']} "
+                         f"inside {known['gaps']}")
+    patched = tif.with_name(tif.name + ".patched.tif")
+    with rasterio.open(patched, "w", **profile) as dst:
+        for win, a in blocks:
+            if a is None:
+                a = np.full((int(win.height), int(win.width)), TILED_NODATA, dtype=profile["dtype"])
+            dst.write(a, 1, window=win)
+    os.replace(patched, tif)
+
 
 def _mark_tiled_vrt_nodata(vrt: Path, tiles: list[zipfile.ZipInfo]) -> None:
     """Check the shipped mosaic VRT against the zip's tiles and give it a nodata value.
@@ -424,6 +492,8 @@ def _extract_tiled(zpath: Path, work: Path, entries: list[zipfile.ZipInfo]) -> t
             out.parent.mkdir(parents=True, exist_ok=True)
             _extract_entry(zpath, info, out)
         vrt = root / vrt_info.filename
+        for name, known in known_truncated(zpath.name, tiles).items():
+            _patch_truncated_tile(vrt.parent / name, known)
         _mark_tiled_vrt_nodata(vrt, tiles)
     except BaseException:
         shutil.rmtree(root, ignore_errors=True)
@@ -481,7 +551,9 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
     10 m cell whose 1 m cells are all 0 becomes nodata. ``read_tradhojd``
     reads nodata as 0, so readers see the same heights; the county's zeros
     no longer cover its neighbours in the mosaic."""
-    tiled = zip_tiles(zpath) is not None
+    entries = zip_tiles(zpath)
+    tiled = entries is not None
+    gaps = [g for k in known_truncated(zpath.name, entries[1:]).values() for g in k["gaps"]] if tiled else []
     if tiled and item.product != "tradhojd":
         raise ValueError(f"{zpath.name}: tiled zips are handled for tradhojd only, not {item.product}")
     src, tmp = gdal_source(zpath, work, extract=item.product == "tradhojd" and tradhojd_workers > 1)
@@ -494,6 +566,8 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
             method = f"block {tradhojd_method} of the 1 m cells per 10 m cell, nodata-aware, int16 dm"
             if tiled:
                 method += "; tiled source: a 10 m cell whose 1 m cells are all 0 is nodata"
+            if gaps:
+                method += "; truncated upstream tiles: their unreadable blocks are nodata, the gaps recorded"
         else:
             subprocess.run(["gdal_translate", "-q", *COG_OPTS, src, str(partial)], check=True)
             method = "gdal_translate lossless"
@@ -507,7 +581,7 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
         if partial.exists():
             partial.unlink()
     return {"from": item.name, "method": method, "bytes": out.stat().st_size,
-            "sha256": sha256_of(out), "created_at": _now(), **check}
+            "sha256": sha256_of(out), "created_at": _now(), **check, **({"gaps": gaps} if gaps else {})}
 
 
 TRADHOJD_STATS = ("p90", "p95", "average", "max")
@@ -547,7 +621,7 @@ def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int, all_z
     import rasterio
     from rasterio.windows import Window
 
-    with rasterio.open(src) as ds:
+    with rasterio.Env(**SERIAL_VRT), rasterio.open(src) as ds:
         return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata,
                           all_zero_cells_nodata)
 
@@ -606,7 +680,7 @@ def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1, *,
 
     with rasterio.open(out, "w", **prof) as dst:
         if workers <= 1:
-            with rasterio.open(src) as ds:        # one handle, read in order: a strip TIFF in a zip seeks cheaply forward
+            with rasterio.Env(**SERIAL_VRT), rasterio.open(src) as ds:    # one handle, read in order
                 for r, n in strips:
                     write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod,
                                                 all_zero_cells_nodata))
@@ -668,6 +742,35 @@ def verify_tradhojd_10m(out: Path, expected: dict) -> dict:
         raise ValueError(f"{out}: values {expected['value_min_dm']}..{expected['value_max_dm']} dm "
                          f"outside the plausible {lo}..{hi} dm")
     return {"verified": True, "verified_windows": 3}
+
+
+def record_known_gaps(item: Item, manifest: dict, dest: Path) -> bool:
+    """Record the known gaps on a county derived before they were known.
+
+    Applies only when the recorded zip is the one they were found in (its
+    sha256) and no gaps are recorded yet. Every 10 m cell lying wholly inside
+    a gap must already be nodata, or this raises. Returns whether the record
+    changed."""
+    import rasterio
+    from rasterio.windows import Window
+
+    known = KNOWN_TRUNCATED_TILES.get(item.name)
+    der = manifest["derived"].get(item.derived)
+    if (not known or der is None or "gaps" in der
+            or manifest["files"].get(item.name, {}).get("sha256") != known["sha256"]):
+        return False
+    gaps = [g for k in known["tiles"].values() for g in k["gaps"]]
+    with rasterio.open(dest / item.derived) as ds:
+        west, north, res = ds.transform.c, ds.transform.f, ds.res[0]
+        for gw, gs, ge, gn in gaps:
+            c0, c1 = math.ceil((gw - west) / res), math.floor((ge - west) / res)
+            r0, r1 = math.ceil((north - gn) / res), math.floor((north - gs) / res)
+            a = ds.read(1, window=Window(c0, r0, c1 - c0, r1 - r0))
+            if (a != der["nodata"]).any():
+                raise ValueError(f"{item.derived}: {int((a != der['nodata']).sum())} valid cells inside "
+                                 f"the known gap {[gw, gs, ge, gn]}")
+    der["gaps"], der["gaps_recorded_at"] = gaps, _now()
+    return True
 
 
 def verify_cog(src: str, cog: Path, *, lossless: bool) -> dict:
@@ -875,6 +978,9 @@ def _main(argv: list[str] | None = None) -> int:
             save_manifest(dest, manifest)
             print(f"    resumed {it.name}: derived raster re-verified, raw zip deleted", flush=True)
         if is_done(it, manifest, dest):
+            if record_known_gaps(it, manifest, dest):
+                save_manifest(dest, manifest)
+                print(f"    recorded the known upstream gaps of {it.derived}", flush=True)
             skipped += 1
             continue
         t0 = time.time()
