@@ -181,3 +181,15 @@ def test_dry_run_writes_neither_tiles_nor_report(env):
 def test_an_empty_root_refuses(env):
     with pytest.raises(SystemExit, match="REFUSING"):
         _run(env)
+
+
+def test_a_recorded_upstream_gap_is_named_as_such(env):
+    _mirror(env / "mirror")
+    m = json.loads((env / "mirror/MANIFEST.json").read_text())
+    m["derived"]["tradhojd/tradhojd_10m_01.tif"]["gaps"] = [[W + 100, S + 100, W + 200, S + 200]]
+    (env / "mirror/MANIFEST.json").write_text(json.dumps(m))
+    t = _tile(env / "tiles/nfi2018_a.npz")
+    assert _run(env) == 0
+    d = _load(t)
+    assert "height" not in d and list(d["aux_missing"]) == ["height"]
+    assert "height: county ['01'] has a recorded upstream gap in the window" in str(d["aux_gap_reason"])
