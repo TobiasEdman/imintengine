@@ -34,8 +34,15 @@
 # have been OOM-killed. Deflate64 is now streamed by unzip (a few MB).
 # Each extracted work file is read back and its CRC-32 checked against the
 # zip directory (~2 s per 4 GiB measured), and a partial one is removed on
-# failure or SIGTERM (fcd4445). The run resumed 2026-10-21 05:49Z kept the
-# 4e7734f pin; this pin applies from the next apply on.
+# failure or SIGTERM (fcd4445). The run resumed 2026-10-21 05:49Z (pin
+# 4e7734f) staged 22 and 23 (Deflate64 through unzip, 13856 s with the
+# download) and stopped at 12:03Z on county 24: its zip is 689 Deflate
+# tiles + a mosaic VRT (102.7 GiB extracted), with no CRS or nodata tag
+# and 0 at sea. 3351bb6 extracts and checks them, gives the VRT nodata
+# -1, and makes an all-0 10 m cell nodata. GDAL_CACHEMAX caps each
+# process's block cache: every strip is read once, and the 8 workers'
+# strips (~2.8 GiB each at county 24's 360 km width, measured) stay far
+# below the limit.
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -143,8 +150,9 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "fcd44451c94121af28355e61ed4f1c1e7cc7293e"}
-            - {name: IMINT_SCRIPT_SHA256, value: "4fb34ae8f0e16ee57335eac6376aadb0edd6ce57699512b2eccc4224cc821b22"}
+            - {name: IMINT_COMMIT, value: "3351bb64a59340fcfca95733d33c84305255d5dc"}
+            - {name: IMINT_SCRIPT_SHA256, value: "4f44dbb26168d4a91e1c96aba4e5451f0897fd1cefbe45f0590fb9bda8624962"}
+            - {name: GDAL_CACHEMAX, value: "512"}       # MB per process; strips are read once
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
