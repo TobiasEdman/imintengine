@@ -673,3 +673,45 @@ def test_a_corrupt_deflate64_entry_fails_loudly(tmp_path):
     bad.write_bytes(bytes(data))
     with pytest.raises(OSError, match="unzip exit"):
         st.gdal_source(bad, tmp_path / "work")
+    assert not any((tmp_path / "work").iterdir())
+
+
+def _fake_unzip(writes: bytes, *, then: BaseException | None = None):
+    def run(cmd, *, stdout, **_):
+        assert cmd[:2] == ["unzip", "-p"]
+        stdout.write(writes)
+        stdout.flush()
+        if then is not None:
+            raise then
+        return subprocess.CompletedProcess(cmd, 0, stderr="")
+    return run
+
+
+def test_a_deflate64_work_file_with_the_wrong_crc_is_removed(monkeypatch, tmp_path):
+    size = st.zip_tif_entry(_DEFLATE64_ZIP).file_size
+    monkeypatch.setattr(st.subprocess, "run", _fake_unzip(b"\0" * size))      # exit 0, right size, wrong bytes
+    with pytest.raises(OSError, match="CRC-32"):
+        st.gdal_source(_DEFLATE64_ZIP, tmp_path / "work")
+    assert not any((tmp_path / "work").iterdir())
+
+
+def test_an_interrupted_deflate64_extraction_leaves_no_work_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(st.subprocess, "run", _fake_unzip(b"\0" * 100, then=SystemExit(143)))   # SIGTERM
+    with pytest.raises(SystemExit):
+        st.gdal_source(_DEFLATE64_ZIP, tmp_path / "work")
+    assert not any((tmp_path / "work").iterdir())
+
+
+def test_an_extracted_deflate_entry_is_crc_checked_on_disk(monkeypatch, tmp_path):
+    tif = _height_raster(tmp_path / "Tradhojd01.tif", rows=40, cols=40)
+    zpath = tmp_path / "sksTradhojd01.zip"
+    with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.write(tif, "Tradhojd01.tif")
+
+    def copy_wrong_bytes(src, out, length):
+        out.write(b"\0" * len(src.read()))
+
+    monkeypatch.setattr(st.shutil, "copyfileobj", copy_wrong_bytes)
+    with pytest.raises(OSError, match="CRC-32"):
+        st.gdal_source(zpath, tmp_path / "work", extract=True)
+    assert not any((tmp_path / "work").iterdir())
