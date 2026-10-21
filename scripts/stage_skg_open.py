@@ -52,6 +52,7 @@ import time
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -305,6 +306,14 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
+def crc32_of(path: Path) -> int:
+    crc = 0
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(16 << 20), b""):
+            crc = zlib.crc32(chunk, crc)
+    return crc
+
+
 # ── extract / convert ───────────────────────────────────────────────────────
 
 def zip_tif_entry(zpath: Path) -> zipfile.ZipInfo:
@@ -329,29 +338,36 @@ def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str,
     entry to such a file too: a fresh ``/vsizip/`` handle that seeks to a
     late row inflates the stream from its start, so parallel readers each
     opening the zip would pay that again and again.
+
+    A work file is returned only once its size and CRC-32, read back from
+    disk, equal the zip directory's; the derivation reads exactly those
+    bytes. On any failure, including SIGTERM's SystemExit mid-extraction,
+    the partial work file (up to ~55 GiB for county 25) is removed.
     """
     info = zip_tif_entry(zpath)
-    if info.compress_type == ZIP_DEFLATE or info.compress_type == zipfile.ZIP_STORED:
-        if not extract:
-            return f"/vsizip/{zpath}/{info.filename}", None
-        work.mkdir(parents=True, exist_ok=True)
-        tmp = work / info.filename
-        with zipfile.ZipFile(zpath) as z, z.open(info) as src, open(tmp, "wb") as out:
-            shutil.copyfileobj(src, out, 16 << 20)        # zipfile checks the entry's CRC at the end
-        if tmp.stat().st_size != info.file_size:
-            raise OSError(f"{zpath.name}: extracted {tmp.stat().st_size} bytes, expected {info.file_size}")
-        return str(tmp), tmp
-    if info.compress_type != ZIP_DEFLATE64:
+    if info.compress_type not in (ZIP_DEFLATE, zipfile.ZIP_STORED, ZIP_DEFLATE64):
         raise ValueError(f"{zpath.name}: unsupported zip method {info.compress_type}")
+    if info.compress_type != ZIP_DEFLATE64 and not extract:
+        return f"/vsizip/{zpath}/{info.filename}", None
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / info.filename
-    with open(tmp, "wb") as out:
-        done = subprocess.run(["unzip", "-p", str(zpath), info.filename], stdout=out,
-                              stderr=subprocess.PIPE, text=True)
-    if done.returncode != 0:
-        raise OSError(f"{zpath.name}: unzip exit {done.returncode}: {done.stderr.strip()[:300]}")
-    if tmp.stat().st_size != info.file_size:
-        raise OSError(f"{zpath.name}: inflated {tmp.stat().st_size} bytes, expected {info.file_size}")
+    try:
+        if info.compress_type == ZIP_DEFLATE64:
+            with open(tmp, "wb") as out:
+                done = subprocess.run(["unzip", "-p", str(zpath), info.filename], stdout=out,
+                                      stderr=subprocess.PIPE, text=True)
+            if done.returncode != 0:
+                raise OSError(f"{zpath.name}: unzip exit {done.returncode}: {done.stderr.strip()[:300]}")
+        else:
+            with zipfile.ZipFile(zpath) as z, z.open(info) as src, open(tmp, "wb") as out:
+                shutil.copyfileobj(src, out, 16 << 20)
+        if tmp.stat().st_size != info.file_size:
+            raise OSError(f"{zpath.name}: extracted {tmp.stat().st_size} bytes, expected {info.file_size}")
+        if (crc := crc32_of(tmp)) != info.CRC:
+            raise OSError(f"{zpath.name}: extracted file has CRC-32 {crc:08x}, expected {info.CRC:08x}")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return str(tmp), tmp
 
 

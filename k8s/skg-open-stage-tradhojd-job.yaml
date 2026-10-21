@@ -32,6 +32,10 @@
 # download) and was stopped at 17:12Z while county 22 downloaded: inflate64
 # had kept 27 GB in the parent after county 21, and counties 22-25 would
 # have been OOM-killed. Deflate64 is now streamed by unzip (a few MB).
+# Each extracted work file is read back and its CRC-32 checked against the
+# zip directory (~2 s per 4 GiB measured), and a partial one is removed on
+# failure or SIGTERM (fcd4445). The run resumed 2026-10-21 05:49Z kept the
+# 4e7734f pin; this pin applies from the next apply on.
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -92,7 +96,7 @@ spec:
               T0=$(date -u +%s)
               echo "=== skg-open-stage-tradhojd — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git gdal-bin unzip >/dev/null 2>&1
-              unzip -v | grep -q DEFLATE64    # Deflate64 zips are streamed by unzip
+              unzip -v | grep DEFLATE64 >/dev/null    # Deflate64 zips are streamed by unzip; no -q, which could SIGPIPE unzip under pipefail
               pip install -q --no-cache-dir numpy rasterio
               gdalinfo --version
               mkdir -p /workspace && cd /workspace
@@ -139,8 +143,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "4e7734f37ba948bc443dc675a5739c0e5a9ae2d4"}
-            - {name: IMINT_SCRIPT_SHA256, value: "9e00dcf25f84e197718a7370086dde69c3834b78585bc0f36604480e81837e46"}
+            - {name: IMINT_COMMIT, value: "fcd44451c94121af28355e61ed4f1c1e7cc7293e"}
+            - {name: IMINT_SCRIPT_SHA256, value: "4fb34ae8f0e16ee57335eac6376aadb0edd6ce57699512b2eccc4224cc821b22"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
