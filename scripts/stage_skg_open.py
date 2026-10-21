@@ -324,6 +324,113 @@ def zip_tif_entry(zpath: Path) -> zipfile.ZipInfo:
     return tifs[0]
 
 
+def zip_tiles(zpath: Path) -> list[zipfile.ZipInfo] | None:
+    """A county shipped as tiles: its mosaic ``.vrt`` entry first, then the
+    ``.tif`` tiles, all in the VRT's directory. ``None`` for a zip with one
+    raster and no VRT.
+
+    Read 2026-10-21 from the zip directories: Trädhöjd county 24
+    (Västerbotten) is 689 Deflate tiles of 10 km plus
+    ``vasterbottens/vasterbottens.vrt``; every other county is one raster."""
+    with zipfile.ZipFile(zpath) as z:
+        infos = z.infolist()
+    vrts = [i for i in infos if i.filename.lower().endswith(".vrt")]
+    tifs = [i for i in infos if i.filename.lower().endswith(".tif")]
+    if not vrts:
+        return None
+    if len(vrts) != 1 or not tifs:
+        raise ValueError(f"{zpath.name}: expected one .vrt with its tiles, found {len(vrts)} .vrt and {len(tifs)} .tif")
+    home = Path(vrts[0].filename).parent
+    if strays := [i.filename for i in tifs if Path(i.filename).parent != home]:
+        raise ValueError(f"{zpath.name}: tiles outside the VRT's directory {home}: {strays[:5]}")
+    return [vrts[0], *tifs]
+
+
+def _extract_entry(zpath: Path, info: zipfile.ZipInfo, tmp: Path) -> None:
+    """Write one entry to ``tmp`` and check its size and CRC-32 read back from disk.
+
+    Deflate64 is streamed by Info-ZIP ``unzip -p`` (GDAL and ``zipfile``
+    cannot read it), Deflate and Stored by ``zipfile``. The caller removes
+    ``tmp`` on failure."""
+    if info.compress_type == ZIP_DEFLATE64:
+        with open(tmp, "wb") as out:
+            done = subprocess.run(["unzip", "-p", str(zpath), info.filename], stdout=out,
+                                  stderr=subprocess.PIPE, text=True)
+        if done.returncode != 0:
+            raise OSError(f"{zpath.name}: unzip exit {done.returncode}: {done.stderr.strip()[:300]}")
+    elif info.compress_type in (ZIP_DEFLATE, zipfile.ZIP_STORED):
+        with zipfile.ZipFile(zpath) as z, z.open(info) as src, open(tmp, "wb") as out:
+            shutil.copyfileobj(src, out, 16 << 20)
+    else:
+        raise ValueError(f"{zpath.name}: unsupported zip method {info.compress_type} for {info.filename}")
+    if tmp.stat().st_size != info.file_size:
+        raise OSError(f"{zpath.name}: extracted {tmp.stat().st_size} bytes, expected {info.file_size}")
+    if (crc := crc32_of(tmp)) != info.CRC:
+        raise OSError(f"{zpath.name}: extracted file has CRC-32 {crc:08x}, expected {info.CRC:08x}")
+
+
+#: Nodata of the tiled mosaic where no tile lies, and of the derived raster.
+TILED_NODATA = -1
+
+
+def _mark_tiled_vrt_nodata(vrt: Path, tiles: list[zipfile.ZipInfo]) -> None:
+    """Check the shipped mosaic VRT against the zip's tiles and give it a nodata value.
+
+    The tiles carry no nodata and no CRS tag; the VRT supplies EPSG:3006 but
+    no ``NoDataValue``, so GDAL would read the gaps between tiles as 0, a
+    valid height. The VRT must list exactly the zip's tiles, relative to
+    itself, in one band; ``NoDataValue`` -1 is then set. A VRT that already
+    has one is refused: its meaning would have to be checked first.
+
+    The SRS must declare ``AUTHORITY["EPSG","3006"]``, the CRS the derived
+    raster is written in. The shipped WKT1 is SWEREF99 TM with EPSG:3006's
+    parameters, but GDAL identifies it only at confidence 25, tied with
+    3847 and 3012, so ``to_epsg()`` cannot make this check."""
+    import xml.etree.ElementTree as ET
+
+    tree = ET.parse(vrt)
+    srs = tree.getroot().find("SRS")
+    if srs is None or 'AUTHORITY["EPSG","3006"]' not in "".join((srs.text or "").split()):
+        raise ValueError(f"{vrt.name}: the SRS does not declare EPSG:3006")
+    bands = tree.getroot().findall("VRTRasterBand")
+    if len(bands) != 1:
+        raise ValueError(f"{vrt.name}: expected one band, found {len(bands)}")
+    band = bands[0]
+    if band.find("NoDataValue") is not None:
+        raise ValueError(f"{vrt.name}: already has a NoDataValue; check what it means before staging")
+    sources = band.findall("./*/SourceFilename")
+    if any(s.get("relativeToVRT") != "1" for s in sources):
+        raise ValueError(f"{vrt.name}: a source is not relative to the VRT")
+    listed, shipped = sorted(s.text for s in sources), sorted(Path(t.filename).name for t in tiles)
+    if listed != shipped:
+        raise ValueError(f"{vrt.name}: lists {len(listed)} sources, the zip has {len(shipped)} tiles; "
+                         f"first differences {sorted(set(listed) ^ set(shipped))[:5]}")
+    nodata = ET.Element("NoDataValue")
+    nodata.text = str(TILED_NODATA)
+    band.insert(0, nodata)
+    tree.write(vrt)
+
+
+def _extract_tiled(zpath: Path, work: Path, entries: list[zipfile.ZipInfo]) -> tuple[str, Path]:
+    """Extract a tiled county (its VRT and every tile, each size- and
+    CRC-checked) under ``work/<zip stem>/`` and return the mosaic VRT and that
+    directory. On any failure, including SIGTERM, the directory is removed."""
+    vrt_info, tiles = entries[0], entries[1:]
+    root = work / zpath.stem
+    shutil.rmtree(root, ignore_errors=True)        # tiles left by a SIGKILLed run are not trusted
+    try:
+        for info in entries:
+            out = root / info.filename
+            out.parent.mkdir(parents=True, exist_ok=True)
+            _extract_entry(zpath, info, out)
+        vrt = root / vrt_info.filename
+        _mark_tiled_vrt_nodata(vrt, tiles)
+    except BaseException:
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    return str(vrt), root
+
+
 def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str, Path | None]:
     """A GDAL-openable path for the zip's raster.
 
@@ -343,7 +450,12 @@ def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str,
     disk, equal the zip directory's; the derivation reads exactly those
     bytes. On any failure, including SIGTERM's SystemExit mid-extraction,
     the partial work file (up to ~55 GiB for county 25) is removed.
+
+    A tiled county (``zip_tiles``) is always extracted, to a directory that
+    is returned in place of the work file; the source is its mosaic VRT.
     """
+    if (entries := zip_tiles(zpath)) is not None:
+        return _extract_tiled(zpath, work, entries)
     info = zip_tif_entry(zpath)
     if info.compress_type not in (ZIP_DEFLATE, zipfile.ZIP_STORED, ZIP_DEFLATE64):
         raise ValueError(f"{zpath.name}: unsupported zip method {info.compress_type}")
@@ -352,19 +464,7 @@ def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str,
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / info.filename
     try:
-        if info.compress_type == ZIP_DEFLATE64:
-            with open(tmp, "wb") as out:
-                done = subprocess.run(["unzip", "-p", str(zpath), info.filename], stdout=out,
-                                      stderr=subprocess.PIPE, text=True)
-            if done.returncode != 0:
-                raise OSError(f"{zpath.name}: unzip exit {done.returncode}: {done.stderr.strip()[:300]}")
-        else:
-            with zipfile.ZipFile(zpath) as z, z.open(info) as src, open(tmp, "wb") as out:
-                shutil.copyfileobj(src, out, 16 << 20)
-        if tmp.stat().st_size != info.file_size:
-            raise OSError(f"{zpath.name}: extracted {tmp.stat().st_size} bytes, expected {info.file_size}")
-        if (crc := crc32_of(tmp)) != info.CRC:
-            raise OSError(f"{zpath.name}: extracted file has CRC-32 {crc:08x}, expected {info.CRC:08x}")
+        _extract_entry(zpath, info, tmp)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
@@ -373,21 +473,36 @@ def gdal_source(zpath: Path, work: Path, *, extract: bool = False) -> tuple[str,
 
 def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str,
             tradhojd_workers: int = 1) -> dict:
-    """Write the derived COG for ``item``; returns the record for the manifest."""
+    """Write the derived COG for ``item``; returns the record for the manifest.
+
+    A tiled Trädhöjd county is derived from its mosaic VRT with
+    ``all_zero_cells_nodata``: its tiles fill the sea and the land outside
+    the county with 0, where every one-raster county has nodata -1, so a
+    10 m cell whose 1 m cells are all 0 becomes nodata. ``read_tradhojd``
+    reads nodata as 0, so readers see the same heights; the county's zeros
+    no longer cover its neighbours in the mosaic."""
+    tiled = zip_tiles(zpath) is not None
+    if tiled and item.product != "tradhojd":
+        raise ValueError(f"{zpath.name}: tiled zips are handled for tradhojd only, not {item.product}")
     src, tmp = gdal_source(zpath, work, extract=item.product == "tradhojd" and tradhojd_workers > 1)
     out.parent.mkdir(parents=True, exist_ok=True)
     partial = out.with_name(out.name + ".part.tif")
     try:
         if item.product == "tradhojd":
-            check = derive_tradhojd_10m(src, partial, tradhojd_method, workers=tradhojd_workers)
+            check = derive_tradhojd_10m(src, partial, tradhojd_method, workers=tradhojd_workers,
+                                        all_zero_cells_nodata=tiled)
             method = f"block {tradhojd_method} of the 1 m cells per 10 m cell, nodata-aware, int16 dm"
+            if tiled:
+                method += "; tiled source: a 10 m cell whose 1 m cells are all 0 is nodata"
         else:
             subprocess.run(["gdal_translate", "-q", *COG_OPTS, src, str(partial)], check=True)
             method = "gdal_translate lossless"
             check = verify_cog(src, partial, lossless=True)
         os.replace(partial, out)
     finally:
-        if tmp is not None and tmp.exists():
+        if tmp is not None and tmp.is_dir():
+            shutil.rmtree(tmp)
+        elif tmp is not None and tmp.exists():
             tmp.unlink()
         if partial.exists():
             partial.unlink()
@@ -398,10 +513,12 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
 TRADHOJD_STATS = ("p90", "p95", "average", "max")
 
 
-def block_stat(block, stat: str, nodata: int):
+def block_stat(block, stat: str, nodata: int, all_zero_cells_nodata: bool = False):
     """``stat`` of each 10×10 group of 1 m cells in ``block`` (rows and
     columns multiples of 10), ignoring nodata; a group with no valid cell
-    is nodata. Returns int16 (dm, rounded)."""
+    is nodata, and with ``all_zero_cells_nodata`` so is a group whose valid
+    cells are all 0 (zeros still count in every other group). Returns int16
+    (dm, rounded)."""
     import numpy as np
 
     h, w = block.shape
@@ -418,20 +535,25 @@ def block_stat(block, stat: str, nodata: int):
             v = np.nanpercentile(gf, int(stat[1:]), axis=2)
         else:
             raise ValueError(f"unknown tradhojd statistic {stat!r}")
-    out = np.where(n_valid > 0, np.rint(v), nodata)
+    keep = n_valid > 0
+    if all_zero_cells_nodata:
+        keep &= (valid & (g != 0)).any(axis=2)
+    out = np.where(keep, np.rint(v), nodata)
     return np.clip(out, -1, 32767).astype(np.int16)
 
 
-def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int):
+def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int, all_zero_cells_nodata: bool):
     """``block_stat`` of ``n_rows`` source rows from ``row``; runs in a worker process."""
     import rasterio
     from rasterio.windows import Window
 
     with rasterio.open(src) as ds:
-        return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata)
+        return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata,
+                          all_zero_cells_nodata)
 
 
-def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1) -> dict:
+def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1, *,
+                        all_zero_cells_nodata: bool = False) -> dict:
     """Reduce the 1 m Trädhöjd raster to the NMD 10 m lattice, one strip of
     640 source rows at a time (memory-bounded; works on a strip TIFF read
     through /vsizip/).
@@ -486,25 +608,27 @@ def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1) -> dic
         if workers <= 1:
             with rasterio.open(src) as ds:        # one handle, read in order: a strip TIFF in a zip seeks cheaply forward
                 for r, n in strips:
-                    write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod))
+                    write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod,
+                                                all_zero_cells_nodata))
         else:
             ex = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"))
             try:
                 todo, pending = iter(strips), deque()
                 for r, n in todo:
-                    pending.append((r, n, ex.submit(_reduce_strip, src, r, n, stat, nod)))
+                    pending.append((r, n, ex.submit(_reduce_strip, src, r, n, stat, nod, all_zero_cells_nodata)))
                     if len(pending) == 2 * workers:
                         break
                 while pending:
                     r, n, fut = pending.popleft()
                     nxt = next(todo, None)
                     if nxt is not None:
-                        pending.append((*nxt, ex.submit(_reduce_strip, src, *nxt, stat, nod)))
+                        pending.append((*nxt, ex.submit(_reduce_strip, src, *nxt, stat, nod,
+                                                        all_zero_cells_nodata)))
                     write(dst, r, n, fut.result())
             finally:
                 ex.shutdown(wait=False, cancel_futures=True)   # a SIGTERM or error must not wait for the queue
     rec = {"width": ow, "height": oh, "res_m": 10.0, "nodata": -1, "dtype": "int16",
-           "bounds": src_bounds, "statistic": stat,
+           "bounds": src_bounds, "statistic": stat, "all_zero_cells_nodata": all_zero_cells_nodata,
            "value_min_dm": vmin, "value_max_dm": vmax, "valid_cells": n_valid}
     return {**rec, **verify_tradhojd_10m(out, rec)}
 
@@ -784,13 +908,20 @@ def _main(argv: list[str] | None = None) -> int:
                 manifest["derived"].pop(it.derived, None)      # must be re-derived from the new bytes
             manifest["files"][it.name] = rec
             save_manifest(dest, manifest)
-        info = zip_tif_entry(raw)
-        if info.compress_type == ZIP_DEFLATE64 or (it.product == "tradhojd" and args.tradhojd_workers > 1):
-            # inflated to a work file of this size first (gdal_source)
+        # what gdal_source extracts first: every entry of a tiled county, a Deflate64
+        # entry, or a Deflate entry read by parallel workers
+        if (entries := zip_tiles(raw)) is not None:
+            inflate = sum(i.file_size for i in entries)
+        elif ((info := zip_tif_entry(raw)).compress_type == ZIP_DEFLATE64
+              or (it.product == "tradhojd" and args.tradhojd_workers > 1)):
+            inflate = info.file_size
+        else:
+            inflate = 0
+        if inflate:
             free = shutil.disk_usage(dest).free
-            if (free - info.file_size) / 2**30 < args.min_free_gib:
+            if (free - inflate) / 2**30 < args.min_free_gib:
                 stopped = (f"STOP before inflating {it.name}: {free / 2**30:.1f} GiB free, inflation needs "
-                           f"{info.file_size / 2**30:.1f} GiB, floor {args.min_free_gib:.0f} GiB "
+                           f"{inflate / 2**30:.1f} GiB, floor {args.min_free_gib:.0f} GiB "
                            "(the raw zip stays recorded; a re-run resumes here)")
                 print(stopped, flush=True)
                 break
