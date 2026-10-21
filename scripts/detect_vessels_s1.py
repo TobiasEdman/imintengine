@@ -7,9 +7,14 @@ writes the GeoJSON FeatureCollection marine-awareness reads
 (``imint.exporters.export.s1_vessel_feature_collection``). A detection without
 an AIS match is a candidate, not a confirmed dark vessel.
 
-Example (Skagen test scene, ~10 min on an M1 CPU once the inputs are cached):
+A date with several passes over the bbox needs ``--orbit-state`` and/or
+``--pass-time``; without them the fetch stops and lists the passes. A pass
+whose AOI spans two slices is mosaicked from both.
 
-    python scripts/detect_vessels_s1.py --date 2026-06-28 \\
+Example (Skagen test scene, ~10 min on an M1 CPU once the inputs are cached;
+an S1A pass at 05:23 also clips 6 % of this bbox, hence ``--pass-time``):
+
+    python scripts/detect_vessels_s1.py --date 2026-06-28 --pass-time 05:31 \\
         --bbox 10.50 57.55 11.70 58.05 --cache-dir ~/imint_cache/s1 \\
         --out outputs/s1/skagen_2026-06-28_s1.geojson
 """
@@ -30,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--date", required=True, help="target acquisition date (UTC), YYYY-MM-DD")
     ap.add_argument("--bbox", nargs=4, type=float, required=True,
                     metavar=("WEST", "SOUTH", "EAST", "NORTH"), help="WGS84 degrees")
+    ap.add_argument("--orbit-state", choices=("ascending", "descending"),
+                    help="use the pass in this direction (dates with several passes)")
+    ap.add_argument("--pass-time", metavar="HH:MM[:SS]",
+                    help="use the pass acquired within 2 min of this UTC time on --date "
+                         "(or a full ISO 8601 time)")
     ap.add_argument("--cache-dir", required=True, type=Path,
                     help="cache for radar windows and model inputs")
     ap.add_argument("--out", required=True, type=Path, help="output GeoJSON")
@@ -46,14 +56,25 @@ def main(argv: list[str] | None = None) -> int:
 
     from imint.analyzers.ai2_vessels_s1 import AI2S1VesselAnalyzer
     from imint.exporters.export import save_s1_vessel_geojson, s1_vessel_feature_collection
-    from imint.fetch import S1_VESSEL_SOURCE, fetch_s1_vessel_scenes
+    from imint.fetch import S1_VESSEL_SOURCE, FetchError, _s1_pass_time, fetch_s1_vessel_scenes
 
+    if args.pass_time is not None:
+        try:
+            _s1_pass_time(args.pass_time, args.date)
+        except ValueError as e:
+            ap.error(str(e))
     west, south, east, north = args.bbox
     coords = {"west": west, "south": south, "east": east, "north": north}
     t0 = time.time()
-    scenes = fetch_s1_vessel_scenes(coords, args.date, cache_dir=args.cache_dir)
-    print(f"fetch {time.time() - t0:.0f} s: target {scenes.target_scene.scene_id}, "
-          f"historical {scenes.historical_scene.scene_id}, grid {scenes.geo.crs} "
+    try:
+        scenes = fetch_s1_vessel_scenes(coords, args.date, cache_dir=args.cache_dir,
+                                        orbit_state=args.orbit_state,
+                                        pass_time_utc=args.pass_time)
+    except FetchError as e:     # e.g. several passes on the date: the message lists them
+        print(f"fetch failed: {e}", file=sys.stderr)
+        return 2
+    print(f"fetch {time.time() - t0:.0f} s: target {scenes.scene_id}, "
+          f"historical {scenes.historical_scene_id}, grid {scenes.geo.crs} "
           f"{scenes.geo.shape[1]}x{scenes.geo.shape[0]} px, AOI imaged at "
           f"{scenes.scene_time_utc}", flush=True)
 
@@ -74,10 +95,10 @@ def main(argv: list[str] | None = None) -> int:
 
     fc = s1_vessel_feature_collection(
         result, scenes.geo, date=args.date, bbox=args.bbox,
-        scene_id=scenes.target_scene.scene_id,
-        historical_scene_id=scenes.historical_scene.scene_id,
-        scene_time_utc=scenes.scene_time_utc, scene_start_utc=scenes.target_scene.start_utc,
-        scene_end_utc=scenes.target_scene.end_utc, source=S1_VESSEL_SOURCE)
+        scene_id=scenes.scene_id, historical_scene_id=scenes.historical_scene_id,
+        scene_time_utc=scenes.scene_time_utc, scene_start_utc=scenes.start_utc,
+        scene_end_utc=scenes.end_utc, source=S1_VESSEL_SOURCE,
+        s1_pass=scenes.provenance["pass"])
     print(f"GeoJSON: {len(fc['features'])} detections inside the bbox, "
           f"{fc['properties']['n_outside_bbox']} outside it dropped", flush=True)
     save_s1_vessel_geojson(fc, args.out)
@@ -89,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
             "outputs": result.outputs, "metadata": md,
             "target_scene": dataclasses.asdict(scenes.target_scene),
             "historical_scene": dataclasses.asdict(scenes.historical_scene),
+            "target_slices": [dataclasses.asdict(s) for s in scenes.target_slices],
+            "historical_slices": [dataclasses.asdict(s) for s in scenes.historical_slices],
             "scene_time_utc": scenes.scene_time_utc,
             "provenance": scenes.provenance,
         }, indent=1, default=float))
