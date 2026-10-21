@@ -13,8 +13,9 @@
 #
 # Per county, scripts/stage_skg_open.py downloads the zip and records its
 # sha256, bytes, URL and download date in MANIFEST.json. It extracts the
-# zip's 1 m raster to a work file about the zip's size (Deflate64 always;
-# Deflate too, because the 8 workers read rows in parallel), derives
+# zip's 1 m raster to a work file about the zip's size (Deflate64 always,
+# streamed by Info-ZIP unzip; Deflate too, because the 8 workers read rows
+# in parallel), derives
 # tradhojd/tradhojd_10m_<län>.tif with --tradhojd-workers 8 (the strips are
 # reduced in 8 processes and written in order; the raster equals the serial
 # one) and verifies it: EPSG:3006, int16,
@@ -27,6 +28,10 @@
 # 2026-10-20: the first run (serial, 1ef10d1) took ~19 min per GiB of zip
 # (counties 01, 03-06: ~104 h for all 21). Measured on county 07 with 8
 # workers: 68 s extraction + 852 s derivation, 8 cores, peak 10.9 GiB.
+# The parallel run (3ee27ab) staged counties 07-21 (~4 min per GiB with
+# download) and was stopped at 17:12Z while county 22 downloaded: inflate64
+# had kept 27 GB in the parent after county 21, and counties 22-25 would
+# have been OOM-killed. Deflate64 is now streamed by unzip (a few MB).
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -86,8 +91,9 @@ spec:
               export PYTHONUNBUFFERED=1
               T0=$(date -u +%s)
               echo "=== skg-open-stage-tradhojd — $(date -u) ==="
-              apt-get update -qq && apt-get install -y -qq git gdal-bin >/dev/null 2>&1
-              pip install -q --no-cache-dir numpy rasterio inflate64
+              apt-get update -qq && apt-get install -y -qq git gdal-bin unzip >/dev/null 2>&1
+              unzip -v | grep -q DEFLATE64    # Deflate64 zips are streamed by unzip
+              pip install -q --no-cache-dir numpy rasterio
               gdalinfo --version
               mkdir -p /workspace && cd /workspace
               git init -q ie && cd ie
@@ -133,8 +139,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "3ee27ab1422a8529712ec4d9008aac7bcecb3160"}
-            - {name: IMINT_SCRIPT_SHA256, value: "50ecb59440f82db9087ba19469e0a60894697b76c2cefd0447dabf83a8c08439"}
+            - {name: IMINT_COMMIT, value: "4e7734f37ba948bc443dc675a5739c0e5a9ae2d4"}
+            - {name: IMINT_SCRIPT_SHA256, value: "9e00dcf25f84e197718a7370086dde69c3834b78585bc0f36604480e81837e46"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
