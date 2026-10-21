@@ -392,3 +392,31 @@ def test_forward_term_releases_the_lock_when_bash_gets_sigterm(tmp_path) -> None
         assert proc.returncode == 143, (name, proc.returncode)
         assert "survived TERM" not in out, name
         assert not (dest / "MANIFEST.lock").exists(), name
+
+
+def _containers(node):
+    """Every container (and init container) anywhere in a parsed k8s document."""
+    if isinstance(node, dict):
+        for key in ("containers", "initContainers"):
+            if isinstance(node.get(key), list):
+                yield from node[key]
+        for value in node.values():
+            yield from _containers(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _containers(value)
+
+
+def test_no_container_sets_an_env_variable_twice() -> None:
+    """A repeated env name is silently "last one wins" in Kubernetes. d4b42db
+    added a second GDAL_CACHEMAX to the Trädhöjd Job, unseen because its check
+    turned env into a dict; here env is read as the list it is."""
+    import yaml
+
+    found = []
+    for path in sorted((REPO / "k8s").glob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            for c in _containers(doc):
+                names = [e["name"] for e in c.get("env") or []]
+                found += [(path.name, c.get("name"), n) for n in sorted({n for n in names if names.count(n) > 1})]
+    assert not found, f"env names set twice: {found}"

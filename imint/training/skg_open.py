@@ -235,6 +235,18 @@ def staged_tradhojd_counties(manifest: dict) -> set[str]:
     return {m.group(1) for s in sources if (m := pat.fullmatch(s)) and (mirror_dir() / s).exists()}
 
 
+def tradhojd_gaps(manifest: dict) -> list[tuple[str, list[float]]]:
+    """Recorded upstream gaps of the staged Trädhöjd counties, as
+    ``(county, [west, south, east, north])`` in EPSG:3006.
+
+    The staging records a gap where the published data itself is unreadable
+    (county 24's tile 720_76 is truncated in the zip). The 10 m raster has
+    nodata there, which a reader must not return as height 0."""
+    pat = re.compile(re.escape(TRADHOJD_PREFIX) + r"(\d{2})\.tif")
+    return [(m.group(1), g) for name, rec in manifest.get("derived", {}).items()
+            if (m := pat.fullmatch(name)) for g in rec.get("gaps", [])]
+
+
 def counties_in_window(west: float, south: float, east: float, north: float,
                        manifest: dict | None = None) -> set[str]:
     """Counties with a valid pixel inside the bbox in any county mask."""
@@ -266,9 +278,10 @@ def read_tradhojd(west: float, south: float, east: float, north: float,
 
     Trädhöjd is staged county by county, so its mosaic can lack counties. A
     window is read only when every county it lies in (by the grunddata county
-    mask) is staged; otherwise, or when no county covers it, this raises
-    :class:`SkgMirrorMissingError` instead of returning the mosaic's nodata
-    as zeros."""
+    mask) is staged and it touches no recorded upstream gap
+    (:func:`tradhojd_gaps`); otherwise, or when no county covers it, this
+    raises :class:`SkgMirrorMissingError` instead of returning the mosaic's
+    nodata as zeros."""
     from rasterio.enums import Resampling
 
     h_px, w_px = (size_px, size_px) if isinstance(size_px, int) else size_px
@@ -285,6 +298,12 @@ def read_tradhojd(west: float, south: float, east: float, north: float,
         raise SkgMirrorMissingError(
             f"trädhöjd: county {sorted(missing)} is not staged for bbox ({west}, {south}, {east}, {north}); "
             "stage it with scripts/stage_skg_open.py --products tradhojd")
+    hit = sorted({county for county, (gw, gs, ge, gn) in tradhojd_gaps(manifest)
+                  if west < ge and east > gw and south < gn and north > gs})
+    if hit:
+        raise SkgMirrorMissingError(
+            f"trädhöjd: bbox ({west}, {south}, {east}, {north}) touches a recorded upstream gap of "
+            f"county {hit}: the published data is unreadable there, so its heights are unknown")
     arr = _read_window(path, west, south, east, north, (h_px, w_px),
                        resampling=Resampling.nearest, fill=TRADHOJD_NODATA)
     data = arr.astype(np.float32)

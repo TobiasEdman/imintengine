@@ -238,3 +238,18 @@ def test_markfukt_fill_255_outside_its_county_does_not_count(mirror, tmp_path):
     _write_manifest(tmp_path, ["grunddata/omdrev2/volym_01.tif", "markfukt/markfukt_03.tif",
                                "tradhojd/tradhojd_10m_01.tif"])
     assert skg_open.counties_in_window(W, S, E, N) == {"01"}
+
+
+def test_tree_height_touching_a_recorded_upstream_gap_fails_loud(mirror, tmp_path):
+    import json
+
+    def with_gaps(gaps):
+        m = json.loads((tmp_path / "MANIFEST.json").read_text())
+        m["derived"]["tradhojd/tradhojd_10m_01.tif"]["gaps"] = gaps
+        (tmp_path / "MANIFEST.json").write_text(json.dumps(m))
+
+    with_gaps([[W + 300, S + 300, W + 310, S + 310]])               # one 10 m cell inside the window
+    with pytest.raises(skg_open.SkgMirrorMissingError, match=r"upstream gap of county \['01'\]"):
+        skg_open.read_tradhojd(W, S, E, N, size_px=PX)
+    with_gaps([[E, S, E + 10, N]])                                  # touching the window's edge only
+    assert skg_open.read_tradhojd(W, S, E, N, size_px=PX)[20, 20] == 125
