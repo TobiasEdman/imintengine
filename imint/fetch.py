@@ -2456,7 +2456,10 @@ def _fetch_ai2_bands(
 # (detected amplitude, uint16) from the ESA measurement TIFFs, warped exactly as
 # rslearn ingests and materialises them in AI2's scene-ID pipeline:
 #   1. radar geometry + GCPs -> cubic WarpedVRT, thin-plate spline, into the UTM
-#      zone of the FIRST GCP on GDAL's suggested grid (~10.06 m), uint16;
+#      zone of the FIRST GCP on GDAL's suggested grid (~10.06 m), uint16. One
+#      departure from rslearn (chain 2): the GCPs are first moved onto the sea
+#      surface, so ships sit where AIS puts them (see _S1_TIE_POINTS); AI2
+#      parity therefore holds in radar coordinates, not in UTM pixels;
 #   2. -> cubic WarpedVRT onto the window grid: UTM zone of the target footprint
 #      centroid, 10 m, origin on integer multiples of 10 m; uint16 (rslearn casts
 #      to float32 here; the analyzer does so per 512 px patch instead).
@@ -2467,7 +2470,36 @@ def _fetch_ai2_bands(
 # are real only inside a radar window around the AOI. Inside the AOI the output
 # is bit-identical to the full-scene chain; only the radar window is downloaded.
 
-S1_VESSEL_CHAIN_VERSION = 1          # pixel chain; part of the cache key, bump when it changes
+# Pixel chain; part of the cache key, bump when it changes. 2: every GCP is
+# moved onto the sea surface (``_s1_sea_surface_gcps``) before any use.
+S1_VESSEL_CHAIN_VERSION = 2
+# Geocoding of the radar raster (chain 2). ESA's GRD GCPs are zero-Doppler
+# solutions at the GCP's own ellipsoidal height z, ~0 m over the sea; the sea
+# lies on the geoid, N ~37 m higher off Skagen. GDAL's GCP transformer is 2-D
+# (it drops Z), so a ship at height N lands N / tan(incidence), 41-56 m,
+# toward the satellite. Each GCP is therefore moved (N - z) / tan(incidence)
+# away from the satellite along its GCP row and given z = N: the whole TPS then
+# describes targets at sea level (land GCPs above the geoid move toward the
+# satellite). The sign flips with the pass, so no constant shift can do this.
+_S1_TIE_POINTS = "sea surface: (N - z) / tan(incidence) away from the satellite, z = N"
+# GCP pixel convention. ESA's geolocation grid gives pixel/line of sample
+# centres (0 = the centre of the first sample; the last GCP is at width - 1).
+# GDAL reads a GCP's Pixel/Line on the pixel-corner lattice (the first pixel
+# spans 0..1; the GRDs say AREA_OR_POINT=Area). Taken as delivered, every
+# sample is geocoded half a pixel and half a line on, ~7 m: too far from the
+# satellite and too far along track. True: add half a pixel and a line, which
+# moves ships 5.0 m toward the satellite and 5.1 m back along track (measured
+# on the 06-28 S1D and 06-27 S1C asc headers). It follows from the two
+# conventions; the AIS check cannot resolve a 5 m term. Own flag and commit so
+# it can be reverted alone. Read at call time (_s1_gcp_half_px); part of the
+# geocoding model, hence of the cache key, only when True, so False is the
+# chain without the step: same key, same pixels.
+S1_GCP_SAMPLE_CENTRE = True
+# Annotation grid vs TIFF GCPs: the same points (same order, same values).
+_S1_GCP_IDENTITY_TOL_DEG = 1e-9
+_S1_GCP_IDENTITY_TOL_M = 1e-6
+_S1_INCIDENCE_RANGE_DEG = (15.0, 60.0)    # IW is ~29-46 deg; outside this is garbage
+_S1_SEA_GCP_MAX_ABS_Z_M = 1.0             # ESA solves sea GCPs at z ~ 0 (provenance stats)
 # Cached record layout; part of the cache key. 3: the key holds the pass's
 # slice ids and the record its slices (a format-2 entry is keyed by date + bbox
 # only and may hold either pass of a two-pass date, so it is never reused).
@@ -2548,8 +2580,9 @@ class S1VesselScenes:
             line of the AOI centre in the slice that supplied the centre pixel
             and ``lines`` that slice's line count. A slice spans ~25 s, so a
             slice start can be off by that much (~155 m of travel at 12 kn).
-        provenance: chain version, grids, the pass and its slices, radar
-            windows, coverage, library versions.
+        provenance: chain version, geocoding (tie points on the sea surface:
+            geoid model, grid sha256; per radar window the GCP shifts), grids,
+            the pass and its slices, radar windows, coverage, library versions.
         target_slices / historical_slices: every slice in the mosaic, in
             acquisition order, and the historical scene paired with each.
             Default: ``[target_scene]`` / ``[historical_scene]``.
@@ -2755,6 +2788,8 @@ def fetch_s1_vessel_scenes(
     in_time_order = sorted(used, key=lambda u: _s1_start(u["item"]))
     provenance = {
         "chain_version": S1_VESSEL_CHAIN_VERSION,
+        # The tie-point model; each radar window adds its GCP shifts (gcp_shift_m).
+        "geocoding": _s1_geocoding_model(),
         "source": S1_VESSEL_SOURCE,
         "request": {"coords": dict(coords), "date": date, "orbit_state": state,
                     "pass_time_utc": pass_time_utc},
@@ -2831,13 +2866,14 @@ def _s1_scene_pair(target_item, hist_item, epsg: int, window_px: tuple, aoi_px: 
 
 
 def _s1_vessel_cache_key(coords: dict, date: str, scene_ids: list[str]) -> str:
-    """Deterministic cache key of a fetch (chain + record versions, date, bbox, pass slices).
+    """Deterministic cache key of a fetch (chain + record versions, geocoding, date, bbox, slices).
 
     ``scene_ids`` are the chosen pass's slice ids (order-free): a request for
     another pass on the same date and bbox never meets this entry.
     """
     payload = {
         "chain": S1_VESSEL_CHAIN_VERSION,
+        "geocoding": _s1_geocoding_model(),
         "format": _S1_VESSEL_CACHE_FORMAT,
         "date": date,
         "bbox": [round(float(coords[k]), 6) for k in ("west", "south", "east", "north")],
@@ -3170,10 +3206,18 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 
 def _s1_scene_header(item, pol: str, scene_dir: Path, signed) -> tuple[dict, Any]:
-    """Full raster size, nodata and all GCPs of one measurement TIFF (cached JSON)."""
+    """Raster size, nodata, all GCPs of one measurement TIFF and each GCP's incidence.
+
+    The incidence angles (``gcp_incidence_deg``, one per GCP, same order) come
+    from the product annotation, whose geolocation grid must be the TIFF's GCPs
+    point for point. The header is cached as JSON (the annotation XML next to
+    it); a cached header without incidence angles (chain 1) is rebuilt.
+    """
     path = scene_dir / f"{pol}_header.json"
     if path.exists():
-        return json.loads(path.read_text()), signed
+        header = json.loads(path.read_text())
+        if "gcp_incidence_deg" in header:
+            return header, signed
     import rasterio
 
     from .data import mpc_s1, s1_shared
@@ -3194,25 +3238,256 @@ def _s1_scene_header(item, pol: str, scene_dir: Path, signed) -> tuple[dict, Any
             "gcp_crs": str(gcp_crs),
             "gcps": [[g.id, g.col, g.row, g.x, g.y, g.z] for g in gcps],
         }
+    ann_url = _s1_annotation_url(href, pol)
+    xml = _s1_http_get(ann_url, f"{item.id} {pol} annotation")
+    header["annotation_href"] = ann_url.split("?")[0]
+    header["gcp_incidence_deg"] = _s1_gcp_incidence(xml, header, pol)
     scene_dir.mkdir(parents=True, exist_ok=True)
+    tmp = _private_tmp(scene_dir / f"{pol}_annotation.xml")
+    try:
+        tmp.write_bytes(xml)
+        os.replace(tmp, scene_dir / f"{pol}_annotation.xml")
+    finally:
+        tmp.unlink(missing_ok=True)
     _atomic_write_text(path, json.dumps(header))
     return header, signed
 
 
-def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple) -> dict:
+def _s1_annotation_url(measurement_href: str, pol: str) -> str:
+    """The product annotation of a measurement TIFF: ``annotation/iw-{pol}.xml``.
+
+    Not MPC's ``schema-product-{pol}`` asset: for the 2026 products it points
+    at ``annotation/rfi/rfi-iw-{pol}.xml``, the RFI report (no geolocation
+    grid). MPC stores the annotation as the measurement's sibling; the SAS
+    token of the measurement href is valid for it. Its content is validated
+    by ``_s1_gcp_incidence``.
+    """
+    base, sep, query = measurement_href.partition("?")
+    tail = f"/measurement/iw-{pol}.tiff"
+    if not base.endswith(tail):
+        raise FetchError(f"measurement href {base!r} does not end in {tail!r}; cannot locate "
+                         f"its product annotation")
+    return f"{base[:-len(tail)]}/annotation/iw-{pol}.xml{sep}{query}"
+
+
+def _s1_http_get(url: str, what: str, attempts: int = 3) -> bytes:
+    """GET with a timeout and retries; a failure is a FetchError naming ``what``.
+
+    HTTP 4xx (an expired SAS token is 403, a missing blob 404) is final and
+    raised at once: waiting does not heal it. Server errors and network
+    failures are retried ``attempts`` times.
+    """
+    import time
+    import urllib.error
+    import urllib.request
+
+    for k in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500 or k == attempts - 1:
+                raise FetchError(f"{what}: download failed (HTTP {e.code} {e.reason})") from e
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            if k == attempts - 1:
+                raise FetchError(f"{what}: download failed ({e})") from e
+        time.sleep(2 * (k + 1))
+    raise AssertionError("unreachable")
+
+
+def _s1_gcp_incidence(xml: bytes, header: dict, pol: str) -> list[float]:
+    """Incidence angle (deg) of every GCP, from the product annotation's geolocation grid.
+
+    The grid must be the TIFF's GCPs: same count, same order, pixel/line equal
+    and lon/lat/height equal to float precision. Anything else (another file,
+    another product, a reordered grid) raises instead of pairing an angle with
+    the wrong tie point.
+    """
+    import xml.etree.ElementTree as ET
+
+    sid = header["scene_id"]
+    root = ET.fromstring(xml)
+    if root.tag != "product":
+        raise FetchError(f"{sid} {pol}: not a product annotation (root <{root.tag}>)")
+    ann_pol = (root.findtext("adsHeader/polarisation") or "").lower()
+    if ann_pol != pol:
+        raise FetchError(f"{sid} {pol}: annotation is for polarisation {ann_pol!r}")
+    points = root.findall("geolocationGrid/geolocationGridPointList/geolocationGridPoint")
+    gcps = header["gcps"]
+    if len(points) != len(gcps):
+        raise FetchError(f"{sid} {pol}: annotation grid has {len(points)} points, the TIFF "
+                         f"{len(gcps)} GCPs")
+    lo, hi = _S1_INCIDENCE_RANGE_DEG
+
+    def number(p, k: int, tag: str) -> float:
+        text = p.findtext(tag)
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            raise FetchError(f"{sid} {pol}: annotation grid point {k} has no numeric "
+                             f"<{tag}> ({text!r})") from None
+
+    out = []
+    for k, ((gid, c, r, x, y, z), p) in enumerate(zip(gcps, points, strict=True)):
+        pixel, line, lon, lat, h, inc = (number(p, k, t) for t in (
+            "pixel", "line", "longitude", "latitude", "height", "incidenceAngle"))
+        if (pixel, line) != (c, r) or max(abs(lon - x), abs(lat - y)) > _S1_GCP_IDENTITY_TOL_DEG \
+                or abs(h - z) > _S1_GCP_IDENTITY_TOL_M:
+            raise FetchError(f"{sid} {pol}: annotation grid point {k} (pixel {pixel}, line "
+                             f"{line}, {lon}, {lat}, {h} m) is not TIFF GCP {gid} ({c}, {r}, "
+                             f"{x}, {y}, {z} m)")
+        if not lo < inc < hi:
+            raise FetchError(f"{sid} {pol}: incidence {inc} deg at grid point {k} outside "
+                             f"({lo}, {hi})")
+        out.append(inc)
+    return out
+
+
+def _s1_geocoding_model() -> dict:
+    """The tie-point model; part of the cache key and of the provenance."""
+    from .geoid import EGM96_GRID, EGM96_MODEL, egm96_grid_sha256
+
+    model = {"tie_points": _S1_TIE_POINTS, "surface": EGM96_MODEL,
+             "grid": EGM96_GRID.name, "grid_sha256": egm96_grid_sha256()}
+    if S1_GCP_SAMPLE_CENTRE:
+        model["gcp_pixel_convention"] = (
+            "ESA sample centre -> GDAL corner lattice: pixel + 0.5, line + 0.5")
+    return model
+
+
+def _s1_gcp_half_px() -> float:
+    """GCP pixel/line offset of ``S1_GCP_SAMPLE_CENTRE``, read at call time."""
+    return 0.5 if S1_GCP_SAMPLE_CENTRE else 0.0
+
+
+def _s1_geocoding_id() -> str:
+    """Short id of ``_s1_geocoding_model()``: names the cached radar-window TIFFs."""
+    payload = json.dumps(_s1_geocoding_model(), sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()[:8]
+
+
+def _s1_sea_surface(header: dict) -> tuple[list[list], np.ndarray]:
+    """The scene's GCPs on the sea surface, and each GCP's shift (m, + = away from the satellite).
+
+    Per GCP ``[id, col, row, lon, lat, z]``: col and row move by
+    ``_s1_gcp_half_px()`` (sample centre on GDAL's lattice); N is the EGM96 undulation at
+    (lon, lat); the GCP moves ``(N - z) / tan(incidence)`` metres along the
+    ground direction of increasing pixel on its GCP row (S1 looks right, so
+    increasing pixel is away from the satellite). That direction is the central
+    difference of the row's neighbouring GCPs in the GCP's own tangent plane
+    (one-sided at the row ends), from geodesic azimuths and distances, never
+    from degree differences. Then z = N.
+
+    Raises:
+        FetchError: no or misaligned incidence angles, a GCP row with fewer
+            than two points (no range direction), or a row whose incidence does
+            not increase with pixel (then increasing pixel is not away from the
+            satellite and the shift would point the wrong way).
+    """
+    from pyproj import Geod
+
+    from .geoid import egm96_undulation
+
+    gcps = header["gcps"]
+    inc = header.get("gcp_incidence_deg")
+    if inc is None or len(inc) != len(gcps):
+        raise FetchError(f"{header['scene_id']}: header has no incidence angle per GCP; "
+                         f"rebuild it with _s1_scene_header")
+    col = np.array([g[1] for g in gcps], dtype=float)
+    row = np.array([g[2] for g in gcps], dtype=float)
+    lon = np.array([g[3] for g in gcps], dtype=float)
+    lat = np.array([g[4] for g in gcps], dtype=float)
+    z = np.array([g[5] for g in gcps], dtype=float)
+    inc = np.asarray(inc, dtype=float)
+    geod = Geod(ellps="WGS84")
+    east = np.zeros(len(gcps))
+    north = np.zeros(len(gcps))
+    for line in np.unique(row):
+        idx = np.flatnonzero(row == line)
+        idx = idx[np.argsort(col[idx], kind="stable")]
+        if len(idx) < 2:
+            raise FetchError(f"{header['scene_id']}: GCP row at line {line} has one point; "
+                             f"its range direction is undefined")
+        if not (np.diff(inc[idx]) > 0).all():
+            raise FetchError(f"{header['scene_id']}: incidence does not increase with pixel "
+                             f"on the GCP row at line {line} ({inc[idx].round(2).tolist()}); "
+                             f"increasing pixel is not away from the satellite")
+        a, b = idx[:-1], idx[1:]
+        az_ab, az_ba, d = geod.inv(lon[a], lat[a], lon[b], lat[b])
+        # + vector to the next GCP (in a's plane), - vector to the previous (in b's).
+        east[a] += d * np.sin(np.radians(az_ab))
+        north[a] += d * np.cos(np.radians(az_ab))
+        east[b] -= d * np.sin(np.radians(az_ba))
+        north[b] -= d * np.cos(np.radians(az_ba))
+    n = np.asarray(egm96_undulation(lon, lat), dtype=float)
+    shift = (n - z) / np.tan(np.radians(inc))
+    az = np.degrees(np.arctan2(east, north))
+    lon2, lat2, _ = geod.fwd(lon, lat, np.where(shift < 0, az + 180.0, az), np.abs(shift))
+    half = _s1_gcp_half_px()
+    out = [[g[0], g[1] + half, g[2] + half, float(x), float(y), float(h)]
+           for g, x, y, h in zip(gcps, lon2, lat2, n, strict=True)]
+    return out, shift
+
+
+def _s1_sea_surface_gcps(header: dict) -> list[list]:
+    """GCPs ``[id, col, row, lon, lat, z]`` on the sea surface (see ``_s1_sea_surface``).
+
+    The only GCPs the chain uses: radar window, AOI dating, window TIFF and the
+    sparse VRT that the warp reads. ``header["gcps"]`` is the raw product.
+    """
+    return _s1_sea_surface(header)[0]
+
+
+def _s1_gcp_tps(gcps: list[list]):
+    """GDAL's GCP thin-plate-spline transformer (the warp's model) over ``gcps``."""
+    from rasterio.control import GroundControlPoint
+    from rasterio.transform import GCPTransformer
+
+    return GCPTransformer([GroundControlPoint(row=r, col=c, x=x, y=y, z=z, id=i)
+                           for i, c, r, x, y, z in gcps], tps=True)
+
+
+def _s1_shift_stats(shift_m: np.ndarray, header: dict) -> dict:
+    """GCP shifts in metres (+ = away from the satellite): sea GCPs and all GCPs.
+
+    Sea GCPs (raw ``|z| < 1 m``) carry the shift the ships get; land GCPs above
+    the geoid move toward the satellite by hundreds of metres in mountains.
+    """
+    sea = np.array([abs(g[5]) < _S1_SEA_GCP_MAX_ABS_Z_M for g in header["gcps"]])
+
+    def stats(v: np.ndarray) -> dict:
+        if not v.size:
+            return {"n": 0}
+        return {"n": int(v.size), "min": round(float(v.min()), 2),
+                "median": round(float(np.median(v)), 2), "max": round(float(v.max()), 2)}
+
+    return {"sea": stats(shift_m[sea]), "all": stats(shift_m)}
+
+
+def _s1_window_stem(pol: str, rwin: dict) -> str:
+    """File stem of a cached radar window; names the geocoding its GCPs carry.
+
+    A window cached under another geocoding is downloaded again, not relabelled:
+    its embedded GCPs would be wrong, and rewriting them in place could expose a
+    half-written file to a concurrent reader.
+    """
+    return (f"{pol}_c{rwin['col_off']}_r{rwin['row_off']}_{rwin['width']}x{rwin['height']}"
+            f"_g{_s1_geocoding_id()}")
+
+
+def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple,
+                     sea: tuple[list[list], np.ndarray] | None = None) -> dict:
     """Radar-geometry window (col, row, width, height) covering the AOI + margin.
 
     Also returns the radar line of the AOI centre (``aoi_center_row``, float;
     clamped to the scene when an AOI only partly covered by this slice has its
-    centre outside it) and the scene's line count (``lines``), which date the
-    AOI within the slice.
+    centre outside it), the scene's line count (``lines``), which date the
+    AOI within the slice, and the GCP shifts onto the sea surface
+    (``gcp_shift_m``). Uses the sea-surface GCPs; ``sea`` is
+    ``_s1_sea_surface(header)`` when the caller already has it.
     """
-    from rasterio.control import GroundControlPoint
-    from rasterio.transform import GCPTransformer
-
-    gcps = [GroundControlPoint(row=r, col=c, x=x, y=y, z=z, id=i)
-            for i, c, r, x, y, z in header["gcps"]]
-    tps = GCPTransformer(gcps, tps=True)
+    gcps, shift = sea if sea is not None else _s1_sea_surface(header)
+    tps = _s1_gcp_tps(gcps)
     lon, lat = _s1_aoi_outline_lonlat(epsg, aoi_px)
     rows, cols = tps.rowcol(lon, lat, op=float)
     # Guard: the inverse TPS must agree with the forward TPS on the AOI outline.
@@ -3231,7 +3506,8 @@ def _s1_radar_window(header: dict, epsg: int, aoi_px: tuple) -> dict:
     return {"col_off": c0, "row_off": r0, "width": c1 - c0, "height": r1 - r0,
             "tps_roundtrip_max_m": round(err_m, 3),
             "aoi_center_row": _s1_centre_line(tps, epsg, aoi_px, header["height"]),
-            "lines": header["height"]}
+            "lines": header["height"],
+            "gcp_shift_m": _s1_shift_stats(shift, header)}
 
 
 def _s1_centre_line(tps, epsg: int, aoi_px: tuple, lines: int) -> float:
@@ -3246,18 +3522,18 @@ def _s1_centre_line(tps, epsg: int, aoi_px: tuple, lines: int) -> float:
 
 
 def _s1_aoi_centre_line(header: dict, epsg: int, aoi_px: tuple) -> float:
-    """``_s1_centre_line`` from a cached scene header (no network)."""
-    from rasterio.control import GroundControlPoint
-    from rasterio.transform import GCPTransformer
-
-    gcps = [GroundControlPoint(row=r, col=c, x=x, y=y, z=z, id=i)
-            for i, c, r, x, y, z in header["gcps"]]
-    return _s1_centre_line(GCPTransformer(gcps, tps=True), epsg, aoi_px, header["height"])
+    """``_s1_centre_line`` from a cached scene header (no network), sea-surface GCPs."""
+    return _s1_centre_line(_s1_gcp_tps(_s1_sea_surface_gcps(header)), epsg, aoi_px,
+                           header["height"])
 
 
 def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Path,
                          signed) -> tuple[Path, dict, int, Any]:
     """Cache the radar window and wrap it in a full-size VRT with all GCPs.
+
+    Both carry the sea-surface GCPs (``_s1_sea_surface_gcps``); the window
+    file's name holds the geocoding id, so a window cached with other GCPs is
+    never reused.
 
     Returns ``(vrt_path, radar_window, step1_epsg, signed_item_or_None)``.
     """
@@ -3266,8 +3542,10 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
     from rasterio.windows import Window
 
     header, signed = _s1_scene_header(item, pol, scene_dir, signed)
-    rwin = _s1_radar_window(header, epsg, aoi_px)
-    stem = f"{pol}_c{rwin['col_off']}_r{rwin['row_off']}_{rwin['width']}x{rwin['height']}"
+    sea = _s1_sea_surface(header)                   # once per scene and polarisation
+    rwin = _s1_radar_window(header, epsg, aoi_px, sea)
+    sea_gcps = sea[0]
+    stem = _s1_window_stem(pol, rwin)
     win_path, vrt_path = scene_dir / f"{stem}.tif", scene_dir / f"{stem}.vrt"
     if not win_path.exists():
         from .data import mpc_s1, s1_shared
@@ -3280,7 +3558,7 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
         # Self-describing crop: the GCPs shifted into the crop's pixel space.
         shifted = [GroundControlPoint(row=r - rwin["row_off"], col=c - rwin["col_off"],
                                       x=x, y=y, z=z, id=i)
-                   for i, c, r, x, y, z in header["gcps"]]
+                   for i, c, r, x, y, z in sea_gcps]
         tmp = _private_tmp(win_path)
         try:
             with rasterio.open(tmp, "w", driver="GTiff", width=data.shape[1],
@@ -3296,17 +3574,19 @@ def _s1_sparse_scene_vrt(item, pol: str, epsg: int, aoi_px: tuple, scene_dir: Pa
             tmp.unlink(missing_ok=True)
         print(f"    [S1 vessels] cached radar window {win_path} "
               f"({data.shape[1]}x{data.shape[0]} px)")
-    _atomic_write_text(vrt_path, _s1_sparse_vrt_xml(header, rwin, win_path.name))
-    first = header["gcps"][0]
+    _atomic_write_text(vrt_path, _s1_sparse_vrt_xml(header, rwin, win_path.name, sea_gcps))
+    first = sea_gcps[0]
     return vrt_path, rwin, _ai2_utm_epsg(first[3], first[4]), signed
 
 
 _GDAL_DATA_TYPES = {"uint16": "UInt16"}     # GRD measurement TIFFs are uint16
 
 
-def _s1_sparse_vrt_xml(header: dict, rwin: dict, window_file: str) -> str:
-    """GDAL VRT: the full scene's size and GCPs, real pixels only in the radar window.
+def _s1_sparse_vrt_xml(header: dict, rwin: dict, window_file: str,
+                       gcps: list[list] | None = None) -> str:
+    """GDAL VRT: the full scene's size and sea-surface GCPs, real pixels only in the window.
 
+    ``gcps`` is ``_s1_sea_surface_gcps(header)`` when the caller already has it.
     Built with ElementTree so the GCP CRS (possibly WKT with quotes) and every
     other value is XML-escaped.
     """
@@ -3320,7 +3600,7 @@ def _s1_sparse_vrt_xml(header: dict, rwin: dict, window_file: str) -> str:
     root = ET.Element("VRTDataset", rasterXSize=str(header["width"]),
                       rasterYSize=str(header["height"]))
     gcp_list = ET.SubElement(root, "GCPList", Projection=header["gcp_crs"])
-    for i, c, r, x, y, z in header["gcps"]:
+    for i, c, r, x, y, z in gcps if gcps is not None else _s1_sea_surface_gcps(header):
         ET.SubElement(gcp_list, "GCP", Id=str(i), Pixel=repr(c), Line=repr(r),
                       X=repr(x), Y=repr(y), Z=repr(z))
     band = ET.SubElement(root, "VRTRasterBand", dataType=gdal_type, band="1")

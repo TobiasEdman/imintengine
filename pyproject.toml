@@ -48,4 +48,5 @@ imint = [
   "fm/pib_grazing/*/*/train_stats/*.pth", "fm/cot_models/*.pt",
   "fm/cot_models_l1c/*.npz",
   "analyzers/water_quality/aoi/*.geojson",
+  "geoid/*.tif", "geoid/*.md",
 ]

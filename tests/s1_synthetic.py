@@ -17,6 +17,10 @@ def synthetic_grd(path: Path, width: int = 2400, height: int = 1800, *,
     ``rows=(r0, r1)`` writes only lines ``r0:r1`` of that scene, with GCPs of
     its own every ~360 lines: an azimuth slice, as ESA cuts one datatake into
     consecutive products. ``None`` is the whole scene (6 GCP lines).
+
+    The TIFF holds the raw GCPs (z = 0, as ESA's over the sea); the returned
+    header adds an IW-like incidence angle per GCP (30.5 -> 46 deg across the
+    swath), as ``_s1_scene_header`` reads it from the product annotation.
     """
     import rasterio
     from rasterio.control import GroundControlPoint
@@ -41,4 +45,28 @@ def synthetic_grd(path: Path, width: int = 2400, height: int = 1800, *,
         dst.write(data[r0:r1], 1)
     return {"scene_id": "SYNTH", "href": str(path), "width": width, "height": r1 - r0,
             "dtype": "uint16", "nodata": 0.0, "gcp_crs": "EPSG:4326",
-            "gcps": [[g.id, g.col, g.row, g.x, g.y, g.z] for g in gcps]}
+            "gcps": [[g.id, g.col, g.row, g.x, g.y, g.z] for g in gcps],
+            "gcp_incidence_deg": [30.5 + 15.5 * g.col / width for g in gcps]}
+
+
+def sea_surface_copy(path: Path, header: dict, out: Path) -> Path:
+    """``path``'s raster with the header's GCPs moved onto the sea surface.
+
+    The full-scene reference for the chain: same pixels, the GCPs the fetch
+    uses (``fetch._s1_sea_surface_gcps``) written by rasterio, not by the VRT
+    builder under test.
+    """
+    import rasterio
+    from rasterio.control import GroundControlPoint
+
+    from imint import fetch
+
+    gcps = [GroundControlPoint(row=r, col=c, x=x, y=y, z=z, id=i)
+            for i, c, r, x, y, z in fetch._s1_sea_surface_gcps(header)]
+    with rasterio.open(path) as src:
+        data, profile = src.read(1), src.profile
+    profile.pop("transform", None)
+    profile.update(gcps=gcps, crs="EPSG:4326")
+    with rasterio.open(out, "w", **profile) as dst:
+        dst.write(data, 1)
+    return out

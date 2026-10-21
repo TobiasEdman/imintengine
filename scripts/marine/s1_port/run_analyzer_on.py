@@ -44,7 +44,7 @@ def main() -> None:
     if a.mode == "ai2":
         stack = ai2
     else:
-        port, (pc0, pr0), _ = rec.read_port_input(a.port_input)
+        port, (pc0, pr0), _ = rec.read_port_input(a.port_input, chain=rec.AI2_PIXEL_CHAIN)
         sub = port[:, r0 - pr0:r1 - pr0, c0 - pc0:c1 - pc0]
         if sub.shape[1:] != ai2.shape[1:]:
             raise SystemExit(f"port input does not cover AI2's window: {sub.shape} vs {ai2.shape}")

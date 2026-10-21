@@ -1,0 +1,14 @@
+{
+  "id": "0112",
+  "subject": "S1 vessel geocoding: tie points on the sea surface",
+  "description": "Owner decision 2026-10-20 (relayed by the marine-awareness session): S1 vessel detections sit 41-56 m toward the satellite because the GRD tie points are solved at ellipsoid height ~0 while the sea lies on the geoid (N ~37 m) and the GDAL TPS warp ignores Z. Fix in the one pipeline (fetch_s1_vessel_scenes): cache each tie point's incidence angle from the product annotation, move every tie point (N - z)/tan(inc) away from the satellite before every GCP consumer (radar window, window TIFF, sparse VRT, warp), EGM96 15' grid shipped as package data, half-pixel sample-centre correction as a separate flagged step, bump S1_VESSEL_CHAIN_VERSION, record the surface model in provenance. Tests: corrected tie points vs an independent range-Doppler solver, geocoding of frozen anchored-ship radar positions vs AIS hull centres (|median| <= 10 m), slow 06-28 end-to-end run skipped without a local cache. Intended files: imint/fetch.py, imint/geoid/ (grid + helper), pyproject.toml (package data), tests/test_s1_geocoding.py, tests/fixtures/s1_geocoding/, docs/marine/s1_vessels_reference.md. Stacked on agent/te/claude/s1-pass-choice (task 0111).",
+  "status": "completed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/s1-sea-surface",
+  "runtime": "claude",
+  "created_at": "2026-10-20T16:54:06Z",
+  "updated_at": "2026-10-20T20:26:04Z",
+  "claimed_by": "claude-s1sea-1020",
+  "claimed_at": "2026-10-20T16:54:22Z",
+  "completed_at": "2026-10-20T20:26:04Z"
+}

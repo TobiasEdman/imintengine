@@ -5,9 +5,15 @@ Downloads the WHOLE target VV GRD from MPC once (~420 MB, kept at ``--full-tif``
 runs the same two warps on it without any sparsity, and compares inside the AOI
 with the fetch's cached model input (target VV, band 1).
 
+The full scene gets the chain's own GCPs: a VRT over the full TIFF written by
+the fetch's ``_s1_sparse_vrt_xml`` with the "radar window" set to the whole
+raster, from the scene header in the fetch's cache (chain 2: sea-surface GCPs;
+the TIFF's own GCPs are not used). The port input must come from this code's
+chain and geocoding model, else the script refuses.
+
     python scripts/marine/s1_port/full_scene_check.py \\
         --port-input <cache>/s1_vessel_inputs/2026-06-28_<key>.tif \\
-        --full-tif <record>/s1port/full_target_vv.tif --out full_scene_check.json
+        --full-tif <record>/s1port/full_target_vv.tif --work-dir <tmp> --out full_scene_check.json
 """
 from __future__ import annotations
 
@@ -47,24 +53,48 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--port-input", type=rec.Path, required=True)
     ap.add_argument("--full-tif", type=rec.Path, required=True)
+    ap.add_argument("--work-dir", type=rec.Path, required=True,
+                    help="where the full-scene VRT with the chain's GCPs is written")
     ap.add_argument("--out", type=rec.Path)
     a = ap.parse_args()
 
-    from imint.fetch import _s1_grd_to_window_grid
+    import json
 
-    port, _, meta = rec.read_port_input(a.port_input)
+    import rasterio
+
+    from imint.fetch import (
+        S1_VESSEL_CHAIN_VERSION,
+        _s1_geocoding_model,
+        _s1_grd_to_window_grid,
+        _s1_sparse_vrt_xml,
+    )
+
+    port, _, meta = rec.read_port_input(a.port_input, chain=S1_VESSEL_CHAIN_VERSION)
     prov = meta["provenance"]
+    if prov.get("geocoding") != _s1_geocoding_model():
+        raise SystemExit(f"{a.port_input}: geocoding {prov.get('geocoding')} is not this "
+                         f"code's {_s1_geocoding_model()}; re-run the fetch")
     item_id = meta["target_scene"]["scene_id"]
+    header = json.loads((a.port_input.parent.parent / "s1_grd" / item_id / "vv_header.json")
+                        .read_text())
     if not a.full_tif.exists():
         req = prov["request"]
         download_full_vv(item_id, req["date"],
                          [req["coords"][k] for k in ("west", "south", "east", "north")], a.full_tif)
+    with rasterio.open(a.full_tif) as src:
+        assert (src.width, src.height) == (header["width"], header["height"]), a.full_tif
+    whole = {"col_off": 0, "row_off": 0, "width": header["width"], "height": header["height"]}
+    a.work_dir.mkdir(parents=True, exist_ok=True)
+    vrt = a.work_dir / f"{item_id}_vv_full.vrt"
+    vrt.write_text(_s1_sparse_vrt_xml(header, whole, str(a.full_tif.resolve())))
     t = time.time()
-    full = _s1_grd_to_window_grid(a.full_tif, prov["radar_windows"][f"{item_id}/vv"]["step1_epsg"],
+    full = _s1_grd_to_window_grid(vrt, prov["radar_windows"][f"{item_id}/vv"]["step1_epsg"],
                                   prov["window_epsg"], tuple(prov["ai2_window_px"]),
                                   tuple(prov["aoi_px"]))
     d = full != port[0]
-    rec.write_json(a.out, {"n_diff": int(d.sum()), "n": int(d.size),
+    rec.write_json(a.out, {"chain_version": prov["chain_version"],
+                           "geocoding": prov["geocoding"],
+                           "n_diff": int(d.sum()), "n": int(d.size),
                            "max_abs": int(np.abs(full.astype(int) - port[0].astype(int)).max()),
                            "seconds_full_chain": round(time.time() - t, 1)})
 

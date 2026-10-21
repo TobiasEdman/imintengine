@@ -35,7 +35,7 @@ def main() -> None:
     from imint.analyzers import ai2_vessels_s1 as s1
 
     ai2_stack, (c0, r0, _, _) = rec.read_ai2_stack(a.record)
-    port, (pc0, pr0), _ = rec.read_port_input(a.port_input)
+    port, (pc0, pr0), _ = rec.read_port_input(a.port_input, chain=rec.AI2_PIXEL_CHAIN)
     if a.run_b:
         sub = port[:, r0 - pr0:r0 - pr0 + ai2_stack.shape[1], c0 - pc0:c0 - pc0 + ai2_stack.shape[2]]
         port, (pc0, pr0) = np.where(ai2_stack > 0, sub, 0).astype(np.uint16), (c0, r0)
