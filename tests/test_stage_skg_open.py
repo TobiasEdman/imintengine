@@ -416,6 +416,7 @@ def _staging(monkeypatch, tmp_path, free_gib=1000.0):
     small = zipfile.ZipInfo("Tradhojd01.tif")
     small.compress_type, small.file_size = st.ZIP_DEFLATE, 3
     monkeypatch.setattr(st, "zip_tif_entry", lambda z: small)
+    monkeypatch.setattr(st, "zip_tiles", lambda z: None)
     return calls, snapshots
 
 
@@ -715,3 +716,134 @@ def test_an_extracted_deflate_entry_is_crc_checked_on_disk(monkeypatch, tmp_path
     with pytest.raises(OSError, match="CRC-32"):
         st.gdal_source(zpath, tmp_path / "work", extract=True)
     assert not any((tmp_path / "work").iterdir())
+
+
+# ── tiled counties (Trädhöjd 24: 689 tiles + a mosaic VRT, read 2026-10-21) ──
+
+_TILE = 40          # px per tile side here; 10000 in the real zip
+_W, _N = 460000, 7360000
+
+
+def _tiled_zip(tmp_path: Path, *, extra_listed: str | None = None, epsg: int = 3006) -> tuple[Path, np.ndarray]:
+    """A zip shaped like sksTradhojd24.zip: ``lan/lan.vrt`` plus tiles with
+    no CRS and no nodata tag, 0 at sea. 2x2 tile grid: (0,0) heights,
+    (0,1) all 0 (sea), (1,0) heights with an all-0 10 m cell and a mixed
+    one, (1,1) missing. Returns the zip and the expected 1 m mosaic (-1 in
+    the gap)."""
+    import rasterio
+    from rasterio.crs import CRS
+    from rasterio.transform import from_origin
+
+    rng = np.random.default_rng(24)
+    land = rng.integers(1, 300, size=(_TILE, _TILE), dtype=np.int16)
+    coast = rng.integers(1, 300, size=(_TILE, _TILE), dtype=np.int16)
+    coast[0:10, 0:10] = 0                                   # a treeless 10 m cell
+    coast[0:10, 10:20][rng.random((10, 10)) < 0.7] = 0      # a mostly treeless one
+    tiles = {(0, 0): land, (0, 1): np.zeros((_TILE, _TILE), np.int16), (1, 0): coast}
+    mosaic = np.full((2 * _TILE, 2 * _TILE), -1, np.int16)
+    src = tmp_path / "tiles"
+    src.mkdir()
+    sources = []
+    for (r, c), a in tiles.items():
+        name = f"{r}_{c}.tif"
+        with rasterio.open(src / name, "w", driver="GTiff", width=_TILE, height=_TILE, count=1, dtype="int16",
+                           transform=from_origin(_W + c * _TILE, _N - r * _TILE, 1, 1)) as d:
+            d.write(a, 1)
+        mosaic[r * _TILE:(r + 1) * _TILE, c * _TILE:(c + 1) * _TILE] = a
+        sources.append((name, r, c))
+    if extra_listed:
+        sources.append((extra_listed, 1, 1))
+    simple = "".join(
+        f'<SimpleSource><SourceFilename relativeToVRT="1">{n}</SourceFilename><SourceBand>1</SourceBand>'
+        f'<SrcRect xOff="0" yOff="0" xSize="{_TILE}" ySize="{_TILE}" />'
+        f'<DstRect xOff="{c * _TILE}" yOff="{r * _TILE}" xSize="{_TILE}" ySize="{_TILE}" /></SimpleSource>'
+        for n, r, c in sources)
+    vrt = (f'<VRTDataset rasterXSize="{2 * _TILE}" rasterYSize="{2 * _TILE}">'
+           f'<SRS dataAxisToSRSAxisMapping="1,2">{CRS.from_epsg(epsg).to_wkt()}</SRS>'
+           f'<GeoTransform>{_W}, 1, 0, {_N}, 0, -1</GeoTransform>'
+           f'<VRTRasterBand dataType="Int16" band="1"><ColorInterp>Gray</ColorInterp>{simple}</VRTRasterBand>'
+           '</VRTDataset>')
+    zpath = tmp_path / "sksTradhojd24.zip"
+    with zipfile.ZipFile(zpath, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("lan/lan.vrt", vrt)
+        for name, _, _ in sources[:len(tiles)]:
+            z.write(src / name, f"lan/{name}")
+    return zpath, mosaic
+
+
+def test_a_tiled_county_is_extracted_and_its_gaps_read_as_nodata(tmp_path):
+    import rasterio
+
+    zpath, mosaic = _tiled_zip(tmp_path)
+    assert [i.filename for i in st.zip_tiles(zpath)][0] == "lan/lan.vrt"
+    src, root = st.gdal_source(zpath, tmp_path / "work")
+    assert src == str(tmp_path / "work/sksTradhojd24/lan/lan.vrt") and root.is_dir()
+    with rasterio.open(src) as ds:
+        assert ds.crs.to_epsg() == 3006 and ds.nodata == -1 and ds.res == (1.0, 1.0)
+        assert np.array_equal(ds.read(1), mosaic)                   # the missing tile reads -1, not 0
+
+
+def test_a_tiled_county_derives_all_zero_cells_as_nodata(tmp_path):
+    import rasterio
+
+    zpath, mosaic = _tiled_zip(tmp_path)
+    item = st.Item(zpath.name, "tradhojd", "tradhojd/tradhojd_10m_24.tif", county="24")
+    out = tmp_path / "m/tradhojd/tradhojd_10m_24.tif"
+    rec = st.convert(item, zpath, out, tmp_path / "work", "p90")
+    assert rec["all_zero_cells_nodata"] is True and "all 0 is nodata" in rec["method"]
+    assert not (tmp_path / "work/sksTradhojd24").exists()
+    with rasterio.open(out) as ds:
+        got = ds.read(1)
+    assert (got[0:4, 4:8] == -1).all()                  # the sea tile
+    assert (got[4:8, 4:8] == -1).all()                  # the missing tile
+    assert got[4, 0] == -1                              # the treeless cell
+    mixed = mosaic[40:50, 10:20].astype(float)
+    assert got[4, 1] == np.rint(np.percentile(mixed, 90))     # zeros still count in a mixed cell
+    cell = mosaic[0:10, 0:10].astype(float)
+    assert got[0, 0] == np.rint(np.percentile(cell, 90))
+    # a one-raster county keeps a treeless cell as 0
+    assert st.block_stat(mosaic[40:50, 0:10], "p90", -1)[0, 0] == 0
+
+    out2 = tmp_path / "m2/tradhojd_10m_24.tif"
+    st.convert(item, zpath, out2, tmp_path / "work", "p90", tradhojd_workers=2)
+    with rasterio.open(out2) as ds:
+        assert np.array_equal(ds.read(1), got)           # the workers apply the same rule
+
+
+def test_a_tiled_vrt_that_does_not_list_the_zips_tiles_is_refused(tmp_path):
+    zpath, _ = _tiled_zip(tmp_path, extra_listed="9_9.tif")
+    with pytest.raises(ValueError, match="lists 4 sources, the zip has 3 tiles"):
+        st.gdal_source(zpath, tmp_path / "work")
+    assert not (tmp_path / "work/sksTradhojd24").exists()
+
+
+def test_a_tiled_vrt_in_another_crs_is_refused(tmp_path):
+    zpath, _ = _tiled_zip(tmp_path, epsg=3021)                     # RT90, the pre-SWEREF grid
+    with pytest.raises(ValueError, match="does not declare EPSG:3006"):
+        st.gdal_source(zpath, tmp_path / "work")
+    assert not (tmp_path / "work/sksTradhojd24").exists()
+
+
+def test_a_corrupt_tile_leaves_no_work_directory(monkeypatch, tmp_path):
+    zpath, _ = _tiled_zip(tmp_path)
+
+    def copy_wrong_bytes(src, out, length):
+        out.write(b"\0" * len(src.read()))
+
+    monkeypatch.setattr(st.shutil, "copyfileobj", copy_wrong_bytes)
+    with pytest.raises(OSError, match="CRC-32"):
+        st.gdal_source(zpath, tmp_path / "work")
+    assert not (tmp_path / "work/sksTradhojd24").exists()
+
+
+def test_the_floor_covers_every_tile_of_a_tiled_county(monkeypatch, tmp_path):
+    calls, _ = _staging(monkeypatch, tmp_path, free_gib=60.0)       # the zip itself fits above 50
+    vrt = zipfile.ZipInfo("lan/lan.vrt")
+    vrt.file_size = 1000
+    tiles = [zipfile.ZipInfo(f"lan/{i}.tif") for i in range(40)]
+    for t in tiles:
+        t.compress_type, t.file_size = st.ZIP_DEFLATE, 2**29           # 40 x 0.5 GiB = 20 GiB to extract
+    monkeypatch.setattr(st, "zip_tiles", lambda z: [vrt, *tiles])
+    code = st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01",
+                    "--drop-raw", "--min-free-gib", "50"])
+    assert code == 3 and calls == [("download", "sksTradhojd01.zip")]
