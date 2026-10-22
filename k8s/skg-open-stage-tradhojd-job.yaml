@@ -49,6 +49,13 @@
 # and stages the listed truncated tile with its gaps recorded
 # (KNOWN_TRUNCATED_TILES; read_tradhojd refuses windows touching them).
 # The next apply backfills county 24's gaps; its raster is unchanged.
+# Run r3 (a7fb028, 2026-10-21 20:02Z) recorded those gaps. A dry run of the
+# NFI top-up aux pass then found county 23 published with 0 (not -1)
+# outside the county, covering counties 20-22 in the mosaic; county 24's
+# tiles also carry heights outside 24. d0307e8 masks every county raster to
+# its county (grunddata ∪ markfukt valid; outside = -1): applied once after
+# a fresh derivation and, for counties already staged, on the next apply,
+# which prints "masked ... cells cleared" per county and rewrites no zip.
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -156,8 +163,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "a7fb02818ab415867a4068c949afa2c8acade9e8"}
-            - {name: IMINT_SCRIPT_SHA256, value: "913e5a63df90187730811c0a65672e38eaad550b5eab2239e5062afa3632aa72"}
+            - {name: IMINT_COMMIT, value: "d0307e86bba404bb6c523a0426f86ac4c055cc33"}
+            - {name: IMINT_SCRIPT_SHA256, value: "dbfbbefe85aaa0090bffd0e9c34e1500034979ea9dc9bbc7d9070d0dcc41df8f"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
