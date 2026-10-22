@@ -545,12 +545,11 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
             tradhojd_workers: int = 1) -> dict:
     """Write the derived COG for ``item``; returns the record for the manifest.
 
-    A tiled Trädhöjd county is derived from its mosaic VRT with
-    ``all_zero_cells_nodata``: its tiles fill the sea and the land outside
-    the county with 0, where every one-raster county has nodata -1, so a
-    10 m cell whose 1 m cells are all 0 becomes nodata. ``read_tradhojd``
-    reads nodata as 0, so readers see the same heights; the county's zeros
-    no longer cover its neighbours in the mosaic."""
+    A tiled Trädhöjd county is derived from its mosaic VRT. Its tiles fill
+    the sea and the land outside the county with 0; ``mask_to_county`` sets
+    those cells to -1 afterwards, as for every county, so they never cover a
+    neighbour in the mosaic and the county's own zeros (treeless land, the
+    product's lakes) stay 0."""
     entries = zip_tiles(zpath)
     tiled = entries is not None
     gaps = [g for k in known_truncated(zpath.name, entries[1:]).values() for g in k["gaps"]] if tiled else []
@@ -561,11 +560,8 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
     partial = out.with_name(out.name + ".part.tif")
     try:
         if item.product == "tradhojd":
-            check = derive_tradhojd_10m(src, partial, tradhojd_method, workers=tradhojd_workers,
-                                        all_zero_cells_nodata=tiled)
+            check = derive_tradhojd_10m(src, partial, tradhojd_method, workers=tradhojd_workers)
             method = f"block {tradhojd_method} of the 1 m cells per 10 m cell, nodata-aware, int16 dm"
-            if tiled:
-                method += "; tiled source: a 10 m cell whose 1 m cells are all 0 is nodata"
             if gaps:
                 method += "; truncated upstream tiles: their unreadable blocks are nodata, the gaps recorded"
         else:
@@ -587,12 +583,10 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
 TRADHOJD_STATS = ("p90", "p95", "average", "max")
 
 
-def block_stat(block, stat: str, nodata: int, all_zero_cells_nodata: bool = False):
+def block_stat(block, stat: str, nodata: int):
     """``stat`` of each 10×10 group of 1 m cells in ``block`` (rows and
     columns multiples of 10), ignoring nodata; a group with no valid cell
-    is nodata, and with ``all_zero_cells_nodata`` so is a group whose valid
-    cells are all 0 (zeros still count in every other group). Returns int16
-    (dm, rounded)."""
+    is nodata. Returns int16 (dm, rounded)."""
     import numpy as np
 
     h, w = block.shape
@@ -609,25 +603,20 @@ def block_stat(block, stat: str, nodata: int, all_zero_cells_nodata: bool = Fals
             v = np.nanpercentile(gf, int(stat[1:]), axis=2)
         else:
             raise ValueError(f"unknown tradhojd statistic {stat!r}")
-    keep = n_valid > 0
-    if all_zero_cells_nodata:
-        keep &= (valid & (g != 0)).any(axis=2)
-    out = np.where(keep, np.rint(v), nodata)
+    out = np.where(n_valid > 0, np.rint(v), nodata)
     return np.clip(out, -1, 32767).astype(np.int16)
 
 
-def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int, all_zero_cells_nodata: bool):
+def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int):
     """``block_stat`` of ``n_rows`` source rows from ``row``; runs in a worker process."""
     import rasterio
     from rasterio.windows import Window
 
     with rasterio.Env(**SERIAL_VRT), rasterio.open(src) as ds:
-        return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata,
-                          all_zero_cells_nodata)
+        return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata)
 
 
-def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1, *,
-                        all_zero_cells_nodata: bool = False) -> dict:
+def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1) -> dict:
     """Reduce the 1 m Trädhöjd raster to the NMD 10 m lattice, one strip of
     640 source rows at a time (memory-bounded; works on a strip TIFF read
     through /vsizip/).
@@ -682,27 +671,25 @@ def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1, *,
         if workers <= 1:
             with rasterio.Env(**SERIAL_VRT), rasterio.open(src) as ds:    # one handle, read in order
                 for r, n in strips:
-                    write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod,
-                                                all_zero_cells_nodata))
+                    write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod))
         else:
             ex = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"))
             try:
                 todo, pending = iter(strips), deque()
                 for r, n in todo:
-                    pending.append((r, n, ex.submit(_reduce_strip, src, r, n, stat, nod, all_zero_cells_nodata)))
+                    pending.append((r, n, ex.submit(_reduce_strip, src, r, n, stat, nod)))
                     if len(pending) == 2 * workers:
                         break
                 while pending:
                     r, n, fut = pending.popleft()
                     nxt = next(todo, None)
                     if nxt is not None:
-                        pending.append((*nxt, ex.submit(_reduce_strip, src, *nxt, stat, nod,
-                                                        all_zero_cells_nodata)))
+                        pending.append((*nxt, ex.submit(_reduce_strip, src, *nxt, stat, nod)))
                     write(dst, r, n, fut.result())
             finally:
                 ex.shutdown(wait=False, cancel_futures=True)   # a SIGTERM or error must not wait for the queue
     rec = {"width": ow, "height": oh, "res_m": 10.0, "nodata": -1, "dtype": "int16",
-           "bounds": src_bounds, "statistic": stat, "all_zero_cells_nodata": all_zero_cells_nodata,
+           "bounds": src_bounds, "statistic": stat,
            "value_min_dm": vmin, "value_max_dm": vmax, "valid_cells": n_valid}
     return {**rec, **verify_tradhojd_10m(out, rec)}
 
@@ -859,6 +846,45 @@ def mask_to_county(item: Item, manifest: dict, dest: Path) -> bool:
 
     counts = _rewrite_county_raster(item, der, dest, sources, clear, suffix=".masked.tif")
     der["county_mask"] = {"sources": [rel for rel, _ in sources], **counts, "masked_at": _now()}
+    return True
+
+
+def restore_tiled_zeros(item: Item, manifest: dict, dest: Path) -> bool:
+    """Give a tiled county derived under the retired all-zero rule its 0 back
+    inside the county.
+
+    County 24 (run r2, 2026-10-21) was derived with ``all_zero_cells_nodata``:
+    a 10 m cell whose 1 m cells were all 0 became -1, which kept the tiles' 0
+    fill off the neighbours in the mosaic. ``mask_to_county`` does that job
+    now. Since 2026-10-22 readers return -1 as NaN (no data), so those
+    treeless cells inside the county, and the product's lakes, must read 0
+    again. Every -1 inside the county mask is such a cell, except cells
+    touching a recorded gap: none of county 24's mask lies outside its 689
+    tiles (probe 2026-10-22). Runs once, after ``mask_to_county`` (record
+    ``tiled_zeros_restored``). Returns whether the record changed."""
+    import numpy as np
+
+    der = manifest["derived"].get(item.derived)
+    if (item.product != "tradhojd" or der is None or not der.get("all_zero_cells_nodata")
+            or "county_mask" not in der or "tiled_zeros_restored" in der):
+        return False
+    sources = _county_mask_sources(item, manifest, dest)
+    gaps = der.get("gaps", [])
+
+    def restore(a, inside, win, transform):
+        res, west = transform.a, transform.c
+        top = transform.f - win.row_off * res
+        in_gap = np.zeros(a.shape, bool)
+        for gw, gs, ge, gn in gaps:                    # every cell touching a gap stays -1
+            r0, r1 = math.floor((top - gn) / res), math.ceil((top - gs) / res)
+            c0, c1 = math.floor((gw - west) / res), math.ceil((ge - west) / res)
+            in_gap[max(r0, 0):max(r1, 0), max(c0, 0):max(c1, 0)] = True
+        back = inside & (a == -1) & ~in_gap
+        a[back] = 0
+        return {"restored_cells": int(back.sum())}
+
+    counts = _rewrite_county_raster(item, der, dest, sources, restore, suffix=".restored.tif")
+    der["tiled_zeros_restored"] = {**counts, "restored_at": _now()}
     return True
 
 
@@ -1089,6 +1115,10 @@ def _main(argv: list[str] | None = None) -> int:
                 save_manifest(dest, manifest)
                 print(f"    masked {it.derived} to its county: "
                       f"{manifest['derived'][it.derived]['county_mask']['cleared_cells']} cells cleared", flush=True)
+            if restore_tiled_zeros(it, manifest, dest):
+                save_manifest(dest, manifest)
+                print(f"    restored the treeless 0 of {it.derived}: "
+                      f"{manifest['derived'][it.derived]['tiled_zeros_restored']['restored_cells']} cells", flush=True)
             skipped += 1
             continue
         t0 = time.time()
