@@ -1075,7 +1075,9 @@ def test_a_county_raster_is_masked_to_its_county(tmp_path):
     np.testing.assert_array_equal(after[inside], before[inside])
     assert (after[~inside] == -1).all()
     rec = manifest["derived"][_ITEM01.derived]
-    assert rec["county_mask"]["sources"] == ["grunddata/omdrev2/volym_01.tif", "markfukt/markfukt_01.tif"]
+    assert rec["county_mask"]["sources"] == {"grunddata/omdrev2/volym_01.tif": "g" * 64,
+                                             "markfukt/markfukt_01.tif": "m" * 64}
+    assert "pending_rewrite" not in rec
     assert rec["county_mask"]["cleared_cells"] == 4600 and rec["county_mask"]["cleared_heights"] == 400
     assert rec["sha256"] == st.sha256_of(dest / _ITEM01.derived) and rec["valid_cells"] == 5400
     assert (rec["value_min_dm"], rec["value_max_dm"]) == (120, 150) and rec["verified"]
@@ -1086,9 +1088,26 @@ def test_a_county_raster_is_masked_to_its_county(tmp_path):
 def test_masking_refuses_a_county_without_a_mask(tmp_path):
     dest, manifest, _ = _masked_dest(tmp_path, masks=False)
     sha = st.sha256_of(dest / _ITEM01.derived)
-    with pytest.raises(ValueError, match="no county mask staged for county 01"):
+    with pytest.raises(ValueError, match="county mask incomplete for county 01"):
         st.mask_to_county(_ITEM01, manifest, dest)
     assert st.sha256_of(dest / _ITEM01.derived) == sha and "county_mask" not in manifest["derived"][_ITEM01.derived]
+
+
+def test_masking_needs_both_mask_sources(tmp_path):
+    """Codex's #96 reproduction: with markfukt's record missing, masking against grunddata alone
+    cleared the 400 heights only markfukt places inside, and county_mask then kept the loss."""
+    import rasterio
+
+    dest, manifest, before = _masked_dest(tmp_path)
+    sha = st.sha256_of(dest / _ITEM01.derived)
+    mf = manifest["derived"].pop("markfukt/markfukt_01.tif")
+    with pytest.raises(ValueError, match="markfukt/markfukt_01.tif"):
+        st.mask_to_county(_ITEM01, manifest, dest)
+    assert st.sha256_of(dest / _ITEM01.derived) == sha and "county_mask" not in manifest["derived"][_ITEM01.derived]
+    manifest["derived"]["markfukt/markfukt_01.tif"] = mf
+    assert st.mask_to_county(_ITEM01, manifest, dest)
+    with rasterio.open(dest / _ITEM01.derived) as ds:
+        assert (ds.read(1)[10:30, 60:80] == before[10:30, 60:80]).all()      # markfukt-only heights kept
 
 
 def test_a_failed_mask_leaves_the_raster_and_its_record(monkeypatch, tmp_path):
@@ -1180,6 +1199,7 @@ def test_a_fresh_derivation_is_masked_before_the_raw_zip_goes(monkeypatch, tmp_p
     def mask(item, manifest, dest):
         calls.append(("mask", item.name))
         manifest["derived"][item.derived]["county_mask"] = {"cleared_cells": 0}
+        st.save_manifest(dest, manifest)                            # as the real mask does
         return True
 
     monkeypatch.setattr(st, "mask_to_county", mask)
@@ -1187,3 +1207,86 @@ def test_a_fresh_derivation_is_masked_before_the_raw_zip_goes(monkeypatch, tmp_p
     assert calls == [("download", "sksTradhojd01.zip"), ("convert", "sksTradhojd01.zip"), ("mask", "sksTradhojd01.zip")]
     deleted = next(i for i, m in enumerate(snaps) if m["files"].get("sksTradhojd01.zip", {}).get("raw_deleted_at"))
     assert "county_mask" in snaps[deleted - 1]["derived"][_ITEM01.derived]
+
+
+
+def _crash_on_save(monkeypatch, nth: int):
+    """save_manifest that raises on its nth call, as if the pod were killed there."""
+    real, n = st.save_manifest, [0]
+
+    def save(dest, manifest):
+        n[0] += 1
+        if n[0] == nth:
+            raise KeyboardInterrupt("killed")
+        real(dest, manifest)
+
+    monkeypatch.setattr(st, "save_manifest", save)
+    return real
+
+
+def _retain_raw(dest: Path) -> Path:
+    """A fresh derivation with --drop-raw that has not dropped its raw zip yet."""
+    m = json.loads((dest / "MANIFEST.json").read_text())
+    del m["files"][_ITEM01.name]["raw_deleted_at"]
+    (dest / "MANIFEST.json").write_text(json.dumps(m))
+    raw = dest / "raw" / _ITEM01.name
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_bytes(b"zip")
+    return raw
+
+
+def test_a_mask_interrupted_after_the_replace_is_finished_on_restart(monkeypatch, tmp_path):
+    """The raster is replaced, the manifest's last save never happens: the restart finishes the
+    record before the raw-deletion check, which then passes and drops the raw zip."""
+    real_mask = st.mask_to_county
+    dest, manifest, _ = _masked_dest(tmp_path)
+    (dest / "MANIFEST.json").write_text(json.dumps(manifest))
+    raw = _retain_raw(dest)
+    manifest = json.loads((dest / "MANIFEST.json").read_text())
+    real_save = _crash_on_save(monkeypatch, 2)                      # 1: pending saved, 2: killed
+    with pytest.raises(KeyboardInterrupt):
+        st.mask_to_county(_ITEM01, manifest, dest)
+    on_disk = json.loads((dest / "MANIFEST.json").read_text())["derived"][_ITEM01.derived]
+    assert "pending_rewrite" in on_disk and st.sha256_of(dest / _ITEM01.derived) == on_disk["pending_rewrite"]["to_sha256"]
+    monkeypatch.setattr(st, "save_manifest", real_save)
+
+    calls, snaps = _staging(monkeypatch, tmp_path / "s")
+    monkeypatch.setattr(st, "mask_to_county", real_mask)
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    rec = snaps[-1]["derived"][_ITEM01.derived]
+    assert "pending_rewrite" not in rec and rec["county_mask"]["cleared_cells"] == 4600
+    assert rec["sha256"] == st.sha256_of(dest / _ITEM01.derived) and not raw.exists() and calls == []
+
+
+def test_a_mask_interrupted_before_the_replace_is_finished_on_restart(monkeypatch, tmp_path):
+    dest, manifest, _ = _masked_dest(tmp_path)
+    sha = st.sha256_of(dest / _ITEM01.derived)
+    real_replace = os.replace
+
+    def replace(src, dst):
+        if str(src).endswith(".masked.tif"):
+            raise KeyboardInterrupt("killed")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(st.os, "replace", replace)
+    with pytest.raises(KeyboardInterrupt):
+        st.mask_to_county(_ITEM01, manifest, dest)
+    monkeypatch.setattr(st.os, "replace", real_replace)
+    manifest = json.loads((dest / "MANIFEST.json").read_text())
+    assert st.sha256_of(dest / _ITEM01.derived) == sha                    # not replaced yet
+    assert st.finish_pending_rewrite(_ITEM01, manifest, dest) is True
+    rec = manifest["derived"][_ITEM01.derived]
+    assert "pending_rewrite" not in rec and rec["county_mask"]["cleared_cells"] == 4600
+    assert rec["sha256"] == st.sha256_of(dest / _ITEM01.derived) != sha
+    assert not list((dest / "tradhojd").glob("*.masked.tif"))
+
+
+def test_an_interrupted_mask_on_a_foreign_raster_is_refused(monkeypatch, tmp_path):
+    dest, manifest, _ = _masked_dest(tmp_path)
+    _crash_on_save(monkeypatch, 2)
+    with pytest.raises(KeyboardInterrupt):
+        st.mask_to_county(_ITEM01, manifest, dest)
+    manifest = json.loads((dest / "MANIFEST.json").read_text())
+    (dest / _ITEM01.derived).write_bytes(b"something else")
+    with pytest.raises(RuntimeError, match="neither side of the interrupted county_mask"):
+        st.finish_pending_rewrite(_ITEM01, manifest, dest)

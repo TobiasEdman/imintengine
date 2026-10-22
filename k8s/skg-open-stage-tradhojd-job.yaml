@@ -56,6 +56,9 @@
 # its county (grunddata ∪ markfukt valid; outside = -1): applied once after
 # a fresh derivation and, for counties already staged, on the next apply,
 # which prints "masked ... cells cleared" per county and rewrites no zip.
+# b92790b (Codex review of #96): masking needs both mask sources, and a mask
+# interrupted between the raster and manifest writes is finished on restart
+# ("finished an interrupted rewrite ...") before the raw-deletion check.
 # a9ee558 (2026-10-22, heights' nodata now reads NaN): the all-zero rule is
 # retired, and county 24, derived under it, gets its treeless 0 back inside
 # the county, except at the recorded gap ("restored the treeless 0 ...").
