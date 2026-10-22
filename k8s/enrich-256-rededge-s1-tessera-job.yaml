@@ -12,7 +12,8 @@ spec:
   # Real-world ETA observed 2026-04-29 audit (post-bttpz deadline crash):
   #   rededge: ~16 h remaining (3156 tiles 0/4 + 1654 with 2017-fails) at
   #            ~250 tiles/h sustained on 4 workers DES openEO.
-  #   S1:      ~6-8 h for 8290 - 54 already-baked tiles via cascade.
+  #   S1:      ~6-8 h for 8290 - 54 already-baked tiles via cascade
+  #            (2026-04 estimate; the cascade is retired, step 2 uses pc-rtc).
   #   tessera: ~25 h for 8290 tiles via geotessera + LRU guard.
   # Total: ~48-50 h sequential. 72h cap (was 12h, which killed bttpz mid-Step 1).
   activeDeadlineSeconds: 259200
@@ -76,12 +77,14 @@ spec:
                 --skip-existing \
                 --retry-empty-frames
 
-              # ── Step 2: S1 SAR via cascade fallback (CDSE → MPC → AWS) ───
+              # ── Step 2: S1 SAR via pc-rtc (RTC γ⁰) ───────────────────────
+              # The CDSE → MPC → AWS σ⁰ cascade is retired (task 0113) and
+              # refused by the script; pc-rtc is its only backend.
               echo ""
-              echo "=== Step 2: S1 SAR enrichment (cascade backend) ==="
+              echo "=== Step 2: S1 SAR enrichment (pc-rtc backend) ==="
               python scripts/enrich_tiles_s1.py \
                 --data-dir /data/unified_v2 \
-                --s1-backend cascade \
+                --s1-backend pc-rtc \
                 --workers 4 \
                 --skip-existing
 
