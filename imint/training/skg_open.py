@@ -281,7 +281,13 @@ def counties_in_window(west: float, south: float, east: float, north: float,
 def read_tradhojd(west: float, south: float, east: float, north: float,
                   *, size_px: int | tuple[int, int]) -> np.ndarray:
     """Tree height in decimetres at 10 m (the staged ``tradhojd_10m`` product),
-    float32, nodata → 0, negatives clipped to 0.
+    float32, negatives clipped to 0, nodata NaN (Tobias 2026-10-22). The
+    product's own values pass through unchanged, including its 0 over most
+    lakes. NaN marks where it has none: outside every county (sea, abroad,
+    the large lakes outside the county polygons) and inside a county without
+    coverage (county 25 lacks a third of its area, rising northwards). No
+    water or land class is inferred here. :func:`county_cells` tells the two
+    apart for a caller that needs it.
 
     Trädhöjd is staged county by county, so its mosaic can lack counties. A
     window is read only when every county it lies in (by the grunddata county
@@ -313,9 +319,26 @@ def read_tradhojd(west: float, south: float, east: float, north: float,
             f"county {hit}: the published data is unreadable there, so its heights are unknown")
     arr = _read_window(path, west, south, east, north, (h_px, w_px),
                        resampling=Resampling.nearest, fill=TRADHOJD_NODATA)
-    data = arr.astype(np.float32)
-    data[arr == TRADHOJD_NODATA] = 0.0
-    return np.clip(data, 0.0, None)
+    data = np.clip(arr.astype(np.float32), 0.0, None)
+    data[arr == TRADHOJD_NODATA] = np.nan
+    return data
+
+
+def county_cells(west: float, south: float, east: float, north: float, out_shape: tuple[int, int],
+                 counties: set[str], manifest: dict) -> np.ndarray:
+    """Boolean ``out_shape`` grid of the bbox: True where any of ``counties``'
+    ``COUNTY_MASKS`` rasters is valid (nearest). Only validity counts, never a
+    class: markfukt's water code 101 is as inside as any index value."""
+    from rasterio.enums import Resampling
+
+    inside = np.zeros(out_shape, bool)
+    for prefix, invalid in COUNTY_MASKS:
+        rasters = _county_rasters(manifest, prefix)
+        for county in sorted(counties & rasters.keys()):
+            a = _read_window(rasters[county], west, south, east, north, out_shape,
+                             resampling=Resampling.nearest, fill=invalid[0])
+            inside |= ~np.isin(a, invalid)
+    return inside
 
 
 def window_provenance(west: float, south: float, east: float, north: float,

@@ -128,6 +128,17 @@ def test_absent_nan_nodata_channel_uses_training_sentinel(
     np.testing.assert_array_equal(got, expected)
 
 
+def test_height_nodata_normalizes_to_the_mean_like_markfukt(tmp_path: Path) -> None:
+    """Height nodata is NaN since 2026-10-22: an absent channel and NaN pixels
+    both normalize to the channel mean (0), never to NaN or to 'no trees'."""
+    assert "height" in AUX_NAN_NODATA_CHANNELS
+    stack = _aux_stack(_tile(tmp_path, drop={"height"}), FULL_NAMES)
+    np.testing.assert_array_equal(stack[FULL_NAMES.index("height")], np.zeros((TILE, TILE), np.float32))
+    part = np.array([np.nan, np.nan, 0.0, 20.0], np.float32)
+    got = normalize_aux_channel("height", part)
+    assert not np.isnan(got).any() and got[0] == got[1] == 0.0 and got[2] < 0 < got[3]
+
+
 def test_every_stored_channel_matches_training_normalization(
     tmp_path: Path,
 ) -> None:

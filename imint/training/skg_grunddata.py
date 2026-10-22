@@ -101,13 +101,15 @@ def fetch_tree_height_tile(
     size_px: int | tuple[int, int] = 256,
     cache_dir: Path | None = None,
 ) -> np.ndarray:
-    """Tree height (trädhöjd) in **metres**, ``(H, W)`` float32, nodata → 0.
+    """Tree height (trädhöjd) in **metres**, ``(H, W)`` float32, NaN where the
+    product has no data (:func:`skg_open.read_tradhojd`).
 
     The mirror and the ``.npy`` cache hold decimetres (the product's unit);
-    the conversion happens here, after the cache, as it always did.
+    the conversion happens here, after the cache, as it always did. The cache
+    prefix names the NaN encoding: arrays cached before it held 0 there.
     """
     dm = _cached(
-        "tree_height", west, south, east, north, size_px, cache_dir,
+        "tree_height_nan", west, south, east, north, size_px, cache_dir,
         lambda: skg_open.read_tradhojd(west, south, east, north, size_px=size_px),
     )
     return dm.astype(np.float32) / 10.0
