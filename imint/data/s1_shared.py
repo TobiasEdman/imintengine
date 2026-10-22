@@ -1,30 +1,28 @@
-"""Shared helpers for Sentinel-1 GRD fetching across providers.
+"""Shared helpers for Sentinel-1 STAC items and projected window reads.
 
-Three S1 backends all consume the same calibration math, STAC item
-filtering, and rasterio window reads — only the asset URLs and auth
-differ. Extracting the common pieces keeps the per-backend modules
-small and locks the σ⁰ definition to one place.
+Users:
+    * ``imint.training.pc_s1_rtc`` — RTC γ⁰ season composites (window read)
+    * ``imint.training.cdse_s1_stac`` — STAC search / orbit helpers
+    * ``imint.fetch`` (vessel chain) — item filtering, footprints, asset URLs
 
-Backends:
-    * ``cdse_s1_stac``  — CDSE STAC, Bearer-token downloads
-    * ``aws_s1``         — Element84 Earth-Search STAC, anonymous S3
-    * ``mpc_s1``         — Planetary Computer STAC, signed Azure URLs
+The σ⁰ path over GCP-referenced GRD (``mpc_s1`` / ``aws_s1`` /
+``cdse_s1_stac`` ``fetch_s1_scene``) is retired (task 0113): its tie points
+sit at ellipsoid height and the calibration lookup was sampled on the warped
+grid. :func:`read_window` refuses such sources.
 
 What lives here
 ---------------
     * STAC item filtering / orbit / footprint helpers
     * Asset URL extraction (VV/VH measurement + calibration)
-    * COG window read at requested EPSG and size
-    * Calibration LUT XML parsing + bilinear interpolation
-    * σ⁰ assembly + dB conversion
+    * Projected COG window read at requested EPSG and size
+    * Calibration LUT XML parsing, σ⁰ assembly + dB conversion (no caller
+      since task 0113)
     * CRS-URI parsing
 
 What does NOT live here
 -----------------------
     * STAC client construction (each backend points at a different root)
     * Asset download (auth differs: Bearer / anonymous / signed URL)
-    * Product caching strategy (CDSE uses /data/s1_cache; AWS/MPC stream
-      directly via rasterio's VSI handlers)
 """
 from __future__ import annotations
 
@@ -240,6 +238,15 @@ def pick_calibration_urls(item: Any) -> tuple[str, str]:
 
 # ── Window read + calibration ─────────────────────────────────────────────
 
+# Message raised for a GCP-referenced source (shared so callers/tests can match it).
+GCP_SIGMA0_RETIRED = (
+    "σ⁰ from GCP-referenced GRD is retired: its tie points sit at ellipsoid "
+    "height (the sea lands 41–56 m toward the satellite) and the calibration "
+    "lookup is misaligned; use imint.training.pc_s1_rtc (RTC) instead "
+    "(ImintEngine task 0113)"
+)
+
+
 def read_window(
     cog_path_or_uri: str | Path,
     west: float, south: float, east: float, north: float,
@@ -247,66 +254,51 @@ def read_window(
     h_px: int, w_px: int,
     resampling: Any | None = None,
 ) -> tuple[np.ndarray, Any]:
-    """Read an H×W window from the COG at the requested bbox.
+    """Read an H×W window from a projected COG at the requested bbox.
 
     Accepts both local Paths and remote URIs (s3://, https://, /vsicurl/…)
     — rasterio's GDAL bindings handle the protocol selection.
 
-    Returns:
-        (dn_array, window) — ``dn_array`` is ``(H, W)`` float32 raw DN
-        values (no calibration applied), ``window`` is the rasterio
-        ``Window`` used to read it.
-    """
-    import contextlib
+    Only sources with a projected ``ds.crs`` (e.g. the RTC COGs of
+    ``imint.training.pc_s1_rtc``) are read. A GCP-referenced GRD raises
+    ``RuntimeError`` (:data:`GCP_SIGMA0_RETIRED`): warping it over its own
+    ellipsoid-height tie points displaced the sea toward the satellite.
 
+    Returns:
+        (dn_array, window) — ``dn_array`` is ``(H, W)`` float32 raw values
+        (no calibration applied), ``window`` is the rasterio ``Window``
+        used to read it.
+    """
     import rasterio
+    from rasterio.enums import Resampling
     from rasterio.warp import transform_bounds
     from rasterio.windows import from_bounds as window_from_bounds
-    from rasterio.enums import Resampling
-    from rasterio.vrt import WarpedVRT
 
     if resampling is None:
         resampling = Resampling.bilinear
 
     with rasterio.open(str(cog_path_or_uri)) as ds:
-        # S1 GRD COGs (MPC, and CDSE's *-COG products) are GCP-referenced:
-        # no projected ``ds.crs``/``ds.transform``, just a grid of GCPs in
-        # EPSG:4326 describing a ROTATED swath. A plain from_gcps affine +
-        # window read raised "CRS is invalid: None" then "Bounds and
-        # transform are inconsistent" (2026-08-04) because the swath grid is
-        # not north-up. Warp the GCP-referenced source onto a regular grid in
-        # its GCP CRS via WarpedVRT, then window-read that (mirrors how a
-        # projected COG is read). Projected COGs skip the VRT entirely.
-        with contextlib.ExitStack() as stack:
-            if ds.crs is not None:
-                reader = ds
-            else:
-                _, gcp_crs = ds.gcps
-                if gcp_crs is None:
-                    raise RuntimeError(
-                        f"{cog_path_or_uri}: no projected CRS and no GCP CRS "
-                        "— cannot georeference the window read")
-                reader = stack.enter_context(WarpedVRT(ds, src_crs=gcp_crs,
-                                                       crs=gcp_crs))
-            dst_bounds = transform_bounds(
-                f"EPSG:{src_epsg}", reader.crs,
-                west, south, east, north,
-                densify_pts=21,
-            )
-            window = window_from_bounds(*dst_bounds, transform=reader.transform)
-            # WarpedVRT rejects boundless reads; a training-tile window sits
-            # well inside a ~250 km GRD swath so clamping is a no-op in
-            # practice (a swath-edge tile clips, and nodata_threshold catches
-            # it). Projected COGs keep the boundless+fill path.
-            boundless = reader is ds
-            dn = reader.read(
-                1,
-                window=window,
-                out_shape=(h_px, w_px),
-                resampling=resampling,
-                boundless=boundless,
-                fill_value=0,
-            ).astype(np.float32)
+        if ds.crs is None:
+            _, gcp_crs = ds.gcps
+            if gcp_crs is not None:
+                raise RuntimeError(f"{cog_path_or_uri}: {GCP_SIGMA0_RETIRED}")
+            raise RuntimeError(
+                f"{cog_path_or_uri}: no projected CRS and no GCP CRS "
+                "— cannot georeference the window read")
+        dst_bounds = transform_bounds(
+            f"EPSG:{src_epsg}", ds.crs,
+            west, south, east, north,
+            densify_pts=21,
+        )
+        window = window_from_bounds(*dst_bounds, transform=ds.transform)
+        dn = ds.read(
+            1,
+            window=window,
+            out_shape=(h_px, w_px),
+            resampling=resampling,
+            boundless=True,
+            fill_value=0,
+        ).astype(np.float32)
     return dn, window
 
 
@@ -374,45 +366,6 @@ def load_cal_grid(
         per_prod = _lut_cache.setdefault(product_id, {})
         per_prod[pol] = entry
     return entry
-
-
-def interp_lut(
-    cal_xml_source: str | Path | bytes,
-    window: Any,
-    product_id: str,
-    pol: str,
-    h_px: int, w_px: int,
-) -> np.ndarray:
-    """Interpolate the σ⁰ calibration LUT onto the window's pixel grid."""
-    grid = load_cal_grid(cal_xml_source, product_id, pol)
-    lines_ax = grid["lines"]
-    pixels_ax = grid["pixels"]
-    values = grid["values"]
-
-    col_off = float(window.col_off)
-    row_off = float(window.row_off)
-    width = float(window.width)
-    height = float(window.height)
-
-    out_cols = np.linspace(col_off, col_off + width, w_px, endpoint=False) + (width / w_px) / 2.0
-    out_rows = np.linspace(row_off, row_off + height, h_px, endpoint=False) + (height / h_px) / 2.0
-
-    out_cols = np.clip(out_cols, pixels_ax[0], pixels_ax[-1])
-    out_rows = np.clip(out_rows, lines_ax[0], lines_ax[-1])
-
-    try:
-        from scipy.interpolate import RegularGridInterpolator
-    except ImportError as e:
-        raise ImportError("s1_shared requires scipy for LUT interpolation.") from e
-
-    rgi = RegularGridInterpolator(
-        (lines_ax, pixels_ax), values,
-        method="linear", bounds_error=False, fill_value=None,
-    )
-
-    rr, cc = np.meshgrid(out_rows, out_cols, indexing="ij")
-    lut = rgi(np.stack([rr.ravel(), cc.ravel()], axis=-1))
-    return lut.reshape(h_px, w_px).astype(np.float32)
 
 
 def compute_sigma0(
