@@ -107,26 +107,39 @@ def _rtc_like(tmp_path):
     return _projected(tmp_path / "rtc.tif", "EPSG:32632", 657000, 6403000, a, -32768)
 
 
-# (bbox in EPSG:3006, window, sum, {pixel: value}) recorded with the pre-retirement read_window.
-_RTC_PINS = [
-    ((302270, 6401337, 302910, 6401977),
-     (265.27621927138534, 265.34812356729526, 69.39783480241022, 69.39783479226753),
-     2249.9437180757523,
-     {(0, 0): 0.50357586145401, (10, 20): 0.5118050575256348,
-      (32, 32): 0.5748937726020813, (63, 63): 0.588545560836792}),
-    ((302270, 6404157, 302910, 6404797),
-     (240.3368806792132, -15.501118818297982, 69.39919943884888, 69.39919942850247),
-     -37748163.615686074,
-     {(0, 0): 0.0, (10, 20): 0.0, (32, 32): 0.24534662067890167,
-      (63, 63): 0.30763116478919983}),
-]
+def _pre_retirement_read_window(path, west, south, east, north, src_epsg, h_px, w_px):
+    """The projected branch of ``s1_shared.read_window`` as it was on main
+    f5fefde, before task 0113 (verbatim but for the removed GCP branch).
+
+    Run on the same machine as the code under test, it is a portable
+    baseline: pixel values recorded on one rasterio/GDAL build do not hold
+    on another (CI's rasterio 1.5.2 resamples the nodata edge differently
+    from a local 1.4.4), but old and new code on one build must agree
+    exactly.
+    """
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.warp import transform_bounds
+    from rasterio.windows import from_bounds as window_from_bounds
+
+    with rasterio.open(str(path)) as ds:
+        dst_bounds = transform_bounds(f"EPSG:{src_epsg}", ds.crs, west, south, east, north,
+                                      densify_pts=21)
+        window = window_from_bounds(*dst_bounds, transform=ds.transform)
+        dn = ds.read(1, window=window, out_shape=(h_px, w_px), resampling=Resampling.bilinear,
+                     boundless=True, fill_value=0).astype(np.float32)
+    return dn, window
 
 
-@pytest.mark.parametrize("bbox, window, total, pixels", _RTC_PINS)
-def test_projected_rtc_like_read_is_unchanged(tmp_path, bbox, window, total, pixels):
-    dn, win = s1_shared.read_window(_rtc_like(tmp_path), *bbox, 3006, 64, 64)
-    np.testing.assert_allclose(_window(win), window, rtol=0, atol=1e-6)
+# Inside the raster, and across its -32768 nodata strip.
+_RTC_BBOXES = [(302270, 6401337, 302910, 6401977), (302270, 6404157, 302910, 6404797)]
+
+
+@pytest.mark.parametrize("bbox", _RTC_BBOXES)
+def test_projected_rtc_like_read_is_unchanged(tmp_path, bbox):
+    path = _rtc_like(tmp_path)
+    dn, win = s1_shared.read_window(path, *bbox, 3006, 64, 64)
+    ref, ref_win = _pre_retirement_read_window(path, *bbox, 3006, 64, 64)
     assert dn.dtype == np.float32 and dn.shape == (64, 64)
-    np.testing.assert_allclose(float(dn.astype(np.float64).sum()), total, rtol=1e-9)
-    for ij, value in pixels.items():
-        assert float(dn[ij]) == pytest.approx(value, abs=1e-6)
+    assert _window(win) == _window(ref_win)
+    np.testing.assert_array_equal(dn, ref)
