@@ -315,3 +315,264 @@ def test_real_enricher_rewrites_only_the_s1(real_dir, tmp_path, rtc_calls):
         assert (real_dir / name).read_bytes() == others[name]
     assert (backup / _REAL_TILE).read_bytes() == original
     assert repair.select(str(real_dir)) == []
+
+
+# --- --strip: tiles RTC cannot re-enrich lose their S1 (owner 2026-10-22).
+
+
+def test_s1_keys_are_exactly_what_the_producer_owns(tmp_path, rtc_calls):
+    """S1_KEYS == keys the real enrich_one_tile writes + the stale it drops."""
+    path = tmp_path / _REAL_TILE
+    np.savez(path, spectral=np.full((6, 256, 256), 0.3, np.float32),
+             label=np.full((256, 256), 7, np.int16),
+             lpis_year=np.int32(2023), has_frame_2016=np.int32(1),
+             s1_temporal_mask=np.ones(4, np.uint8))
+    with np.load(path) as z:
+        before = set(z.files)
+    r = enricher.enrich_one_tile(str(path), skip_existing=True,
+                                 backend="pc-rtc")
+    assert r["status"] == "ok" and r["has_2016"], r
+    with np.load(path, allow_pickle=True) as z:
+        after = set(z.files)
+    written, dropped = after - before, before - after
+    assert dropped == {"s1_temporal_mask"}
+    assert written | dropped == set(repair.S1_KEYS)
+    assert len(repair.S1_KEYS) == len(set(repair.S1_KEYS))
+
+
+def _full_tile(path, *, compressed=True, extra=()):
+    """A stale tile holding every S1 key plus non-S1 keys of mixed dtypes."""
+    rng = np.random.default_rng(len(str(path)))
+    data = {
+        "spectral": rng.random((6, 16, 16), dtype=np.float32),
+        "label": rng.integers(0, 9, (16, 16)).astype(np.int16),
+        "lpis_year": np.int32(2021),
+        "dates": np.array(["2021-05-01", "2021-06-11"]),
+        "frame_2016": np.asfortranarray(rng.random((6, 16, 16))),
+        "meta": np.array([{"src": "x"}, None], dtype=object),
+        "has_frame_2016": np.int32(1),
+        # every S1 key, as a v1 GCP-warp tile might hold them
+        "s1_vv_vh": rng.random((2, 16, 16), dtype=np.float32),
+        "s1_vv_vh_2016": rng.random((2, 16, 16), dtype=np.float32),
+        "s1_dates": np.array(["2021-06-01"]),
+        "s1_dates_2016": np.array(["2016-06-03"]),
+        "s1_orbit": np.bytes_("DESCENDING"),
+        "s1_temporal_mask": np.ones(3, np.uint8),
+        "has_s1": np.int32(1),
+    }
+    data.update({k: np.int32(1) for k in extra})
+    (np.savez_compressed if compressed else np.savez)(path, **data)
+    return str(path)
+
+
+_STRIP = ["tile_a.npz", "tile_b.npz"]  # stale: selected and stripped
+
+
+@pytest.fixture
+def strip_dir(tmp_path):
+    d = tmp_path / "tiles"
+    d.mkdir()
+    _full_tile(d / _STRIP[0], compressed=True)
+    _full_tile(d / _STRIP[1], compressed=False)
+    _tile(d / "usable.npz", version=S1_ENRICH_VERSION, source=S1_SOURCE)
+    _tile(d / "no_s1.npz", s1=False)
+    (d / "notes.txt").write_bytes(b"not a tile")
+    return d
+
+
+def _members(path):
+    import zipfile
+
+    with zipfile.ZipFile(path) as zf:
+        return {i.filename: (zf.read(i), i.compress_type)
+                for i in zf.infolist()}
+
+
+def _strip(d, backup, *extra):
+    return repair.main(["--data-dir", str(d), "--strip",
+                        "--backup-dir", str(backup), *extra])
+
+
+def test_strip_removes_exactly_s1_keys_and_keeps_others(strip_dir, tmp_path,
+                                                        capsys):
+    backup = tmp_path / "backup"
+    originals = _snapshot(strip_dir)
+    members = {n: _members(strip_dir / n) for n in _STRIP}
+
+    assert _strip(strip_dir, backup, "--expect", "2") == 0
+
+    for name in _STRIP:
+        before, after = members[name], _members(strip_dir / name)
+        s1 = {m for m in before if m[:-4] in repair.S1_KEYS}
+        assert {m[:-4] for m in s1} == set(repair.S1_KEYS) - {"s1_enrich_v",
+                                                               "s1_source"}
+        # Exactly the S1 members are gone; every other member keeps its
+        # bytes and compression.
+        assert after == {m: v for m, v in before.items() if m not in s1}
+        with np.load(strip_dir / name, allow_pickle=True) as z:
+            assert not set(z.files) & set(repair.S1_KEYS)
+            assert z["frame_2016"].flags.f_contiguous
+            assert z["meta"][0] == {"src": "x"}
+        assert (backup / name).read_bytes() == originals[name]
+    # Unselected files untouched, no file added or removed (no stage left).
+    assert sorted(os.listdir(strip_dir)) == sorted(originals)
+    for name in set(originals) - set(_STRIP):
+        assert (strip_dir / name).read_bytes() == originals[name]
+    assert sorted(os.listdir(backup)) == _STRIP
+    assert repair.select(str(strip_dir)) == []
+
+    out = capsys.readouterr().out
+    results = _lines(out, "  result ")
+    assert [r["status"] for r in results] == ["ok", "ok"]
+    full = sorted(set(repair.S1_KEYS) - {"s1_enrich_v", "s1_source"})
+    assert [r["removed"] for r in results] == [full, full]
+    after = _lines(out, "AFTER ")[0]
+    assert after["after_count"] == 0 and after["strip_failed"] == 0
+    assert after["still_holding_s1"] == [] and after["backed_up"] == 2
+    assert repair.main(["--data-dir", str(strip_dir), "--expect", "0"]) == 0
+
+
+def test_strip_on_the_unstamped_fixture(tile_dir, tmp_path):
+    """The 0114 shapes (unstamped / v3 / v4 without or retired source)."""
+    originals = _snapshot(tile_dir)
+    assert _strip(tile_dir, tmp_path / "backup",
+                  "--expect", str(len(_SELECTED))) == 0
+    assert repair.select(str(tile_dir)) == []
+    assert sorted(os.listdir(tile_dir)) == sorted(originals)
+    for n in _SELECTED:
+        with np.load(tile_dir / f"{n}.npz") as z:
+            assert sorted(z.files) == ["label", "spectral"]
+
+
+def test_strip_reuses_an_identical_existing_backup(strip_dir, tmp_path,
+                                                   capsys):
+    import shutil
+
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    shutil.copy2(strip_dir / _STRIP[0], backup / _STRIP[0])
+    kept = os.stat(backup / _STRIP[0])
+    original = (strip_dir / _STRIP[0]).read_bytes()
+
+    assert _strip(strip_dir, backup, "--expect", "2") == 0
+    assert (backup / _STRIP[0]).read_bytes() == original
+    assert os.stat(backup / _STRIP[0]).st_ino == kept.st_ino  # not rewritten
+    out = capsys.readouterr().out
+    assert f"backup {_STRIP[0]} = existing identical" in out
+    after = _lines(out, "AFTER ")[0]
+    assert (after["backed_up"], after["backup_reused"]) == (1, 1)
+
+
+@pytest.mark.parametrize("kind", ["different", "directory", "symlink"])
+def test_strip_refuses_a_backup_that_is_not_identical(strip_dir, tmp_path,
+                                                      kind, capsys):
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    dst = backup / _STRIP[1]
+    if kind == "different":
+        dst.write_bytes(b"earlier backup")
+    elif kind == "directory":
+        dst.mkdir()
+    else:  # identical bytes, but would follow the tile when it is replaced
+        dst.symlink_to(strip_dir / _STRIP[1])
+    before, before_backup = _snapshot(tmp_path), sorted(os.listdir(backup))
+
+    assert _strip(strip_dir, backup) == repair.EXIT_REFUSED
+    assert "REFUSED" in capsys.readouterr().out
+    assert _snapshot(tmp_path) == before  # tiles and backup dir untouched
+    assert sorted(os.listdir(backup)) == before_backup
+
+
+def test_strip_refuses_a_staging_conflict(strip_dir, tmp_path, capsys):
+    staging = strip_dir / f"{_STRIP[0]}.tmp.npz"
+    assert enricher.tile_staging_path(str(strip_dir / _STRIP[0])) == \
+        str(staging)
+    staging.write_bytes(b"pre-existing stage that must remain untouched")
+    backup = tmp_path / "backup"
+    before = _snapshot(tmp_path)
+
+    assert _strip(strip_dir, backup, "--expect", "2") == repair.EXIT_REFUSED
+    assert "REFUSED" in capsys.readouterr().out
+    assert _snapshot(tmp_path) == before
+    assert not backup.exists()
+
+
+def test_strip_tile_never_removes_a_stage_it_did_not_create(strip_dir,
+                                                            tmp_path):
+    """A stage that appears after the up-front check is left alone."""
+    path = str(strip_dir / _STRIP[0])
+    staging = strip_dir / f"{_STRIP[0]}.tmp.npz"
+    staging.write_bytes(b"someone else's stage")
+    original = (strip_dir / _STRIP[0]).read_bytes()
+    with pytest.raises(FileExistsError):
+        repair.strip_tile(path, path)
+    assert staging.read_bytes() == b"someone else's stage"
+    assert (strip_dir / _STRIP[0]).read_bytes() == original
+
+
+def test_strip_failed_verification_leaves_the_tile(strip_dir, tmp_path,
+                                                   monkeypatch, capsys):
+    def bad(original, stripped):
+        raise ValueError("member spectral.npy differs from the original")
+
+    monkeypatch.setattr(repair, "verify_stripped", bad)
+    originals = _snapshot(strip_dir)
+    assert _strip(strip_dir, tmp_path / "backup") == repair.EXIT_FAILED
+    assert _snapshot(strip_dir) == originals  # no stage left, tiles intact
+    out = capsys.readouterr().out
+    assert [r["status"] for r in _lines(out, "  result ")] == ["failed"] * 2
+    assert len(_lines(out, "AFTER ")[0]["still_holding_s1"]) == 2
+
+
+def test_strip_refuses_unknown_s1_keys(strip_dir, tmp_path, capsys):
+    _full_tile(strip_dir / _STRIP[0], extra=("s1_mean",))
+    backup = tmp_path / "backup"
+
+    assert repair.main(["--data-dir", str(strip_dir)]) == 0
+    report = _lines(capsys.readouterr().out, "SELECTION ")[0]
+    assert report["unknown_s1_keys"] == {_STRIP[0]: ["s1_mean"]}
+
+    before = _snapshot(tmp_path)
+    assert _strip(strip_dir, backup) == repair.EXIT_REFUSED
+    assert _snapshot(tmp_path) == before and not backup.exists()
+
+
+def test_strip_dry_run_and_expect_write_nothing(strip_dir, tmp_path):
+    backup = tmp_path / "backup"
+    before = _snapshot(tmp_path)
+    # Default is the dry run, even with a backup dir given.
+    assert repair.main(["--data-dir", str(strip_dir),
+                        "--backup-dir", str(backup)]) == 0
+    with pytest.raises(SystemExit):  # modes are exclusive
+        repair.main(["--data-dir", str(strip_dir), "--strip", "--dry-run",
+                     "--backup-dir", str(backup)])
+    with pytest.raises(SystemExit):  # --strip needs a backup dir
+        repair.main(["--data-dir", str(strip_dir), "--strip"])
+    assert _strip(strip_dir, backup, "--expect", "23") == repair.EXIT_REFUSED
+    assert _snapshot(tmp_path) == before
+    assert not backup.exists()
+
+
+@pytest.mark.parametrize("damage, match", [
+    ("bytes", "differs"),         # a kept member's content changed
+    ("keep_s1", "members"),       # an S1 member survived
+    ("drop_other", "members"),    # a non-S1 member went missing
+])
+def test_verify_stripped_rejects_a_wrong_strip(strip_dir, damage, match):
+    import zipfile
+
+    original = strip_dir / _STRIP[0]
+    bad = strip_dir / "bad.npz"
+    with zipfile.ZipFile(original) as zin, zipfile.ZipFile(bad, "w") as zout:
+        for info in zin.infolist():
+            key, body = info.filename[:-4], zin.read(info)
+            if key in repair.S1_KEYS and not (damage == "keep_s1"
+                                              and key == "has_s1"):
+                continue
+            if damage == "drop_other" and key == "label":
+                continue
+            if damage == "bytes" and key == "spectral":
+                body = body[:-1] + bytes([body[-1] ^ 1])
+            zout.writestr(info, body)
+    with pytest.raises(ValueError, match=match):
+        repair.verify_stripped(str(original), str(bad))
