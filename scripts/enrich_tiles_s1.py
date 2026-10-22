@@ -33,13 +33,13 @@ Backends (``--s1-backend``)
         reads (no product download → ~MB/tile, no PVC cache). Stores
         **linear** γ⁰ (the SAR normalizers log-transform internally). Free,
         anonymous. ``imint.training.pc_s1_rtc``.
-    ``cdse-stac`` — the legacy CDSE STAC + full-GRD-download + local-σ⁰ path
-        (``imint.training.cdse_s1_stac``), kept as a fallback. σ⁰ on the
-        ellipsoid (no terrain correction), ~2 GB/product cached on the PVC,
-        stores dB. Bills OData bandwidth + COG requests, NOT the PU pool.
+    ``cdse-stac`` — RETIRED (task 0113, 2026-10-22). The CDSE full-GRD σ⁰
+        path warped the GRD over its ellipsoid-height tie points (sea shifted
+        41–56 m toward the satellite) and sampled the calibration LUT on the
+        warped grid. Passing it is refused (the 2026-10-22 PVC count found
+        no tile made by it).
 
-Both need pystac-client + rasterio; pc-rtc also needs planetary-computer;
-cdse-stac also needs scipy (calibration LUT) + CDSE creds.
+pc-rtc needs pystac-client + rasterio + planetary-computer.
 
 Atomicity
     Writes go to ``<tile>.npz.tmp.npz`` and are atomically renamed on
@@ -47,12 +47,13 @@ Atomicity
 
 Keys written (v3)
     s1_vv_vh        (2, H, W) float32 — label-year median composite
-                      (pc-rtc: LINEAR γ⁰; cdse-stac: dB σ⁰)
+                      (LINEAR γ⁰)
     s1_vv_vh_2016   (2, H, W) float32 — 2016 median composite (if has_frame_2016)
     s1_dates        (K,) str  — contributing scene dates, label year
     s1_dates_2016   (K,) str  — contributing scene dates, 2016
     s1_orbit        str        — chosen orbit ("ASCENDING"/"DESCENDING")
-    s1_source       str        — "pc-rtc-gamma0" or "cdse-grd-sigma0"
+    s1_source       str        — S1_SOURCE ("pc-rtc-gamma0"); the dataset
+                                 gate requires it next to s1_enrich_v
     has_s1          int32      — 1 if the label-year composite was written
     s1_enrich_v     int32      — 4 (version marker; --skip-existing keys on ==4)
 
@@ -93,25 +94,37 @@ NODATA_THRESHOLD = 0.10
 # imint/training/s1_enrichment.py (version history documented there). The
 # skip below keys on this value, so older tiles are re-enriched rather than
 # kept, and the CROMA/TerraMind dataset gate refuses tiles that predate it.
-from imint.training.s1_enrichment import S1_ENRICH_VERSION
+# The provenance stamp is shared the same way: the gate accepts a tile's S1
+# only when s1_source == S1_SOURCE.
+from imint.training.s1_enrichment import S1_ENRICH_VERSION, S1_SOURCE
 
 # Per-backend module + stored-units + provenance. pc-rtc stores LINEAR γ⁰
 # (the CROMA/TerraMind normalizers apply 10*log10 internally — storing dB
-# would double-log); cdse-stac keeps its historical dB σ⁰ output. Default is
-# pc-rtc: RTC gamma0, windowed, no product download.
+# would double-log): RTC gamma0, windowed, no product download.
 _BACKENDS = {
     "pc-rtc": {
         "module": "imint.training.pc_s1_rtc",
         "output_db": False,
-        "source": "pc-rtc-gamma0",
-    },
-    "cdse-stac": {
-        "module": "imint.training.cdse_s1_stac",
-        "output_db": True,
-        "source": "cdse-grd-sigma0",
+        "source": S1_SOURCE,
     },
 }
 _DEFAULT_BACKEND = "pc-rtc"
+# Backends that once existed and are refused by name, with the reason.
+_RETIRED_BACKENDS = {
+    "cdse-stac": "CDSE GRD σ⁰ is retired (task 0113): its tie points sit at "
+                 "ellipsoid height and the calibration lookup is misaligned",
+    "cascade": "the CDSE → MPC → AWS σ⁰ cascade is retired (task 0113)",
+}
+
+
+def _backend_config(backend: str) -> dict:
+    """The config of ``backend``; a retired or unknown name raises ValueError."""
+    if backend in _RETIRED_BACKENDS:
+        raise ValueError(f"--s1-backend {backend!r}: {_RETIRED_BACKENDS[backend]}; "
+                         f"use {_DEFAULT_BACKEND!r}")
+    if backend not in _BACKENDS:
+        raise ValueError(f"unknown --s1-backend {backend!r}; known: {sorted(_BACKENDS)}")
+    return _BACKENDS[backend]
 
 # Latitude-scaled May–Sep fallback window when VPP phenology is unavailable.
 # Sweden spans ~55.3°N (Smygehuk) to ~69.1°N (Treriksröset). Green-up is later
@@ -206,16 +219,15 @@ def enrich_one_tile(
     grid constants). Writes atomically via ``<tile>.npz.tmp.npz`` →
     ``os.replace`` so a killed job leaves the original tile intact.
 
-    ``backend`` selects the source module (``pc-rtc`` default → RTC γ⁰
-    windowed reads; ``cdse-stac`` → legacy full-GRD σ⁰). Both expose the same
-    ``probe_orbits_with_items`` / ``fetch_s1_season_composite`` contract.
+    ``backend`` selects the source module (``pc-rtc``, the only one: RTC γ⁰
+    windowed reads). A retired backend (``cdse-stac``) raises ValueError.
     """
     import importlib
 
     from imint.training.tile_config import TileConfig
     from imint.training.tile_bbox import resolve_tile_bbox
 
-    cfg = _BACKENDS[backend]
+    cfg = _backend_config(backend)
     mod = importlib.import_module(cfg["module"])
     fetch_s1_season_composite = mod.fetch_s1_season_composite
     probe_orbits_with_items = mod.probe_orbits_with_items
@@ -259,8 +271,8 @@ def enrich_one_tile(
     w0, s0, e0, n0 = bbox["west"], bbox["south"], bbox["east"], bbox["north"]
 
     # pc-rtc reuses ONE signed STAC client across the probe + both composites
-    # (connection reuse + consistent SAS signing). cdse-stac takes no client
-    # kwarg, so pass it only when the backend exposes an _open_client.
+    # (connection reuse + consistent SAS signing); passed only when the
+    # backend exposes an _open_client.
     client_kw: dict = {}
     if hasattr(mod, "_open_client"):
         try:
@@ -364,10 +376,10 @@ def main():
         description="Enrich tiles with S1 SAR season composites (v3)")
     parser.add_argument("--data-dir", required=True)
     parser.add_argument(
-        "--s1-backend", choices=sorted(_BACKENDS), default=_DEFAULT_BACKEND,
-        help="Source backend. 'pc-rtc' (default): Planetary Computer RTC γ⁰, "
-             "windowed reads, linear γ⁰, no download. 'cdse-stac': legacy "
-             "CDSE full-GRD σ⁰ (dB), cached on PVC.",
+        "--s1-backend", default=_DEFAULT_BACKEND,
+        help="Source backend. 'pc-rtc' (default, the only one): Planetary "
+             "Computer RTC γ⁰, windowed reads, linear γ⁰, no download. "
+             "'cdse-stac' and 'cascade' are retired (task 0113) and refused.",
     )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--skip-existing", action="store_true", default=True)
@@ -380,6 +392,10 @@ def main():
              "(use for cluster smoke runs, e.g. --limit 5).",
     )
     args = parser.parse_args()
+    try:
+        _backend_config(args.s1_backend)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     # Clean before listing: the reverse order left the deleted temps in the
     # work list, where they failed to open and inflated `failed`.

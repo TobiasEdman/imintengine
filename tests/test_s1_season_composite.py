@@ -24,7 +24,7 @@ import pytest
 
 from imint.training import cdse_s1_stac as stac
 from imint.data import s1_shared
-from imint.training.s1_enrichment import S1_ENRICH_VERSION
+from imint.training.s1_enrichment import S1_ENRICH_VERSION, S1_SOURCE
 
 
 # ── Fake STAC item ────────────────────────────────────────────────────────
@@ -415,6 +415,7 @@ def test_dataset_reads_current_composite():
         # Linear γ⁰ (RTC) — the normalizer log-transforms this internally.
         "s1_vv_vh": np.full((2, 32, 32), 0.05, dtype=np.float32),
         "s1_enrich_v": np.int32(S1_ENRICH_VERSION),
+        "s1_source": np.bytes_(S1_SOURCE),
     }
     ds = UnifiedDataset.__new__(UnifiedDataset)
     ds.model_keys = ("terramind_v1_base",)

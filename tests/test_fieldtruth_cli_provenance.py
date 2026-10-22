@@ -19,7 +19,10 @@ def load(name):
 nfi = load('validate_against_nfi')
 lucas = load('validate_against_lucas')
 inf = load('inference_comparison')
+from imint.training.s1_enrichment import S1_SOURCE
 from imint.training.unified_dataset import TilePrerequisiteError
+
+RTC = np.bytes_(S1_SOURCE)  # every current (v4) tile carries this stamp (task 0113)
 
 
 def tile(path, **overrides):
@@ -78,8 +81,8 @@ def test_real_config_failure_not_skipped(tmp_path,kind):
         score(index(kind,[path]),predictor(config_mismatch=True),skip_unscoreable=True)
 
 @pytest.mark.parametrize('family,overrides,error',[('croma',{'b08':None},KeyError),
-    ('terramind',{'s1_enrich_v':4},KeyError),
-    ('terramind',{'s1_enrich_v':4,'s1_vv_vh':np.ones((8,8))},ValueError),
+    ('terramind',{'s1_enrich_v':4,'s1_source':RTC},KeyError),
+    ('terramind',{'s1_enrich_v':4,'s1_source':RTC,'s1_vv_vh':np.ones((8,8))},ValueError),
     ('tessera',{},KeyError)])
 def test_other_tile_failures_remain_ineligible(tmp_path,family,overrides,error):
     path=tile(tmp_path/'bad.npz',**overrides)
@@ -94,7 +97,7 @@ def test_real_cli_disk_output(tmp_path,monkeypatch,kind,mixed):
     mod={'nfi':nfi,'lucas':lucas}[kind]
     paths=[tile(tmp_path/'bad.npz')]
     if mixed:
-        paths.insert(0,tile(tmp_path/'good.npz',s1_enrich_v=4,
+        paths.insert(0,tile(tmp_path/'good.npz',s1_enrich_v=4,s1_source=RTC,
                            s1_vv_vh=np.full((2,8,8),.05,dtype=np.float32),has_s1=1))
     idx=tmp_path/'index.parquet'; index(kind,paths).to_parquet(idx,index=False)
     out=tmp_path/'result.json'; dump=tmp_path/'observations.parquet'
