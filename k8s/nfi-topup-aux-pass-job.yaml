@@ -46,7 +46,9 @@
 # than a quarter of its in-county cells are NaN. That separates county 25's
 # coverage gaps (9 top-up tiles at 100 %, 1 at 61 %) from coastal tiles whose
 # county polygon includes sea (12-16 %). NaN at sea or abroad outside every
-# county never counts. The preflight also requires every staged Trädhöjd county to be
+# county never counts.
+# 0f3fd26 (Codex review of #101): a valid all-0 height (no trees) is written,
+# not dropped as empty; only a window without a finite height is a gap. The preflight also requires every staged Trädhöjd county to be
 # masked to its county (#96: county 23's zeros covered 20-22) and county 24's
 # treeless zeros restored, which the Trädhöjd Job does on its next apply.
 apiVersion: batch/v1
@@ -124,8 +126,8 @@ spec:
               echo "=== done (exit ${RC}): $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "a9ee558a6664ea06f21d9f80940a2098d278cfdf"}
-            - {name: IMINT_SCRIPT_SHA256, value: "da4ed8de24896f357a99ca10eaf78b864fd88f75f55fabc76c4b910856a9135f"}
+            - {name: IMINT_COMMIT, value: "0f3fd26147c0b0546865f4b796bdd1576a714fdd"}
+            - {name: IMINT_SCRIPT_SHA256, value: "793f67648455571873b7d4afecee581238de9067c464ba0bbe8d0cb9f1e89330"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
             - {name: GDAL_CACHEMAX, value: "512"}
           resources:
