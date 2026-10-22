@@ -19,8 +19,13 @@ PX = 64
 GRUND = {"volym": 300, "grundyta": 25, "medeldiameter": 22}
 
 
-def _mirror(root: Path, *, height_staged: bool = True, markfukt_value: int = 40) -> None:
+def _mirror(root: Path, *, height_staged: bool = True, markfukt_value: int = 40,
+            height_hole_rows: int = 0, outside_cols: int = 0) -> None:
+    """``height_hole_rows``: the tile's first rows x 20 columns have no height (-1) inside
+    county 01. ``outside_cols``: the tile's last columns lie outside every county (all masks
+    nodata, height -1), like sea."""
     files, derived = {}, {}
+    out = 10 + outside_cols                               # the raster's 10-cell east margin + the tile's columns
 
     def add(rel, data, res, nodata, source, **extra):
         write_raster(root / rel, data, W - 100, N + 100, res, nodata=nodata)
@@ -29,12 +34,19 @@ def _mirror(root: Path, *, height_staged: bool = True, markfukt_value: int = 40)
 
     for var, v in GRUND.items():
         data = np.full((PX + 20, PX + 20), v, dtype=np.int16)
+        if outside_cols:
+            data[:, -out:] = -1
         add(f"grunddata/omdrev2/{var}_01.tif", data, 10.0, -1, f"sks_{var}_omdrev2_01.zip")
         write_raster(root / f"grunddata/{var}_omdrev2.vrt", data, W - 100, N + 100, 10.0, nodata=-1)
     mf = np.full(((PX + 20) * 5, (PX + 20) * 5), markfukt_value, dtype=np.uint16)
+    if outside_cols:
+        mf[:, -out * 5:] = 255
     add("markfukt/markfukt_01.tif", mf, 2.0, 65535, "sksSLUMarkfuktighet01.zip")
     write_raster(root / "markfukt/markfukt.vrt", mf, W - 100, N + 100, 2.0, nodata=65535)
     th = np.full((PX + 20, PX + 20), 183, dtype=np.int16)
+    th[10:10 + height_hole_rows, 10:30] = -1
+    if outside_cols:
+        th[:, -out:] = -1
     add("tradhojd/tradhojd_10m_01.tif", th, 10.0, -1, "sksTradhojd01.zip", statistic="p90")
     write_raster(root / "tradhojd/tradhojd_10m.vrt", th, W - 100, N + 100, 10.0, nodata=-1)
     vrt = {"tradhojd/tradhojd_10m.vrt": {"sources": ["tradhojd/tradhojd_10m_01.tif"] if height_staged else []}}
@@ -62,8 +74,9 @@ def _load(p: Path) -> dict:
         return dict(z)
 
 
-def _run(env, *extra) -> int:
-    return ap.main(["--data-dir", str(env / "tiles"), "--report", str(env / "report.json"), "--workers", "1", *extra])
+def _run(env, *extra, limit: str = "0") -> int:
+    return ap.main(["--data-dir", str(env / "tiles"), "--report", str(env / "report.json"), "--workers", "1",
+                    "--max-missing-share", limit, *extra])
 
 
 def test_all_five_are_written_and_the_tile_is_unmarked(env, capsys):
@@ -193,3 +206,38 @@ def test_a_recorded_upstream_gap_is_named_as_such(env):
     d = _load(t)
     assert "height" not in d and list(d["aux_missing"]) == ["height"]
     assert "height: county ['01'] has a recorded upstream gap in the window" in str(d["aux_gap_reason"])
+
+
+def test_height_without_data_inside_its_county_is_a_gap_above_the_limit(env):
+    _mirror(env / "mirror", height_hole_rows=8)          # 8 x 20 of 64 x 64 cells: 3.9 % unknown
+    t = _tile(env / "tiles/nfi2025_a.npz")
+    assert _run(env, limit="0") == 0
+    d = _load(t)
+    assert "height" not in d and list(d["aux_missing"]) == ["height"] and int(d["aux_complete"]) == 0
+    assert "3.9% of the window inside its counties has no data in the mirror (limit 0.0%)" in str(d["aux_gap_reason"])
+
+    t = _tile(env / "tiles/nfi2025_a.npz")
+    assert _run(env, limit="0.05") == 0
+    d = _load(t)
+    assert int(d["aux_complete"]) == 1 and np.isnan(d["height"][:8, :20]).all()
+    assert not np.isnan(d["height"][8:]).any() and float(d["height"][20, 20]) == pytest.approx(18.3)
+    (prov,) = json.loads(str(d["aux_provenance"]))
+    assert prov["missing_share"] == {"height": 0.0391} and prov["max_missing_share"] == 0.05
+
+
+def test_height_nan_outside_every_county_does_not_count(env):
+    _mirror(env / "mirror", outside_cols=16)             # the east quarter is sea: no county, no height
+    t = _tile(env / "tiles/nfi2025_a.npz")
+    assert _run(env, limit="0") == 0
+    d = _load(t)
+    assert int(d["aux_complete"]) == 1 and np.isnan(d["height"][:, 48:]).all()
+    assert not np.isnan(d["height"][:, :48]).any()
+    (prov,) = json.loads(str(d["aux_provenance"]))
+    assert prov["missing_share"] == {} and prov["gaps"] == {}
+
+
+def test_the_limit_must_be_stated(env):
+    _mirror(env / "mirror")
+    _tile(env / "tiles/nfi2025_a.npz")
+    with pytest.raises(SystemExit):
+        ap.main(["--data-dir", str(env / "tiles"), "--report", str(env / "report.json")])

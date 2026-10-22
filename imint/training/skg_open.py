@@ -325,12 +325,13 @@ def read_tradhojd(west: float, south: float, east: float, north: float,
 
 
 def county_cells(west: float, south: float, east: float, north: float, out_shape: tuple[int, int],
-                 counties: set[str], manifest: dict) -> np.ndarray:
+                 counties: set[str], manifest: dict | None = None) -> np.ndarray:
     """Boolean ``out_shape`` grid of the bbox: True where any of ``counties``'
     ``COUNTY_MASKS`` rasters is valid (nearest). Only validity counts, never a
     class: markfukt's water code 101 is as inside as any index value."""
     from rasterio.enums import Resampling
 
+    manifest = manifest or _manifest()
     inside = np.zeros(out_shape, bool)
     for prefix, invalid in COUNTY_MASKS:
         rasters = _county_rasters(manifest, prefix)
