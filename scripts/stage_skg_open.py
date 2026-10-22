@@ -808,8 +808,10 @@ def vrt_nodata(vrt: str) -> tuple[int, int]:
     """``(srcnodata, vrtnodata)`` for a product mosaic.
 
     The county rasters are rectangles that overlap their neighbours. Grunddata
-    and Trädhöjd pad the area outside the county polygon with their nodata
-    value (-1), so overlapping sources compose correctly. The markfukt
+    pads the area outside the county polygon with its nodata value (-1), and
+    so does every Trädhöjd county raster once ``mask_to_county`` has run
+    (as published, county 23 pads it with 0 and county 24 carries heights
+    there), so overlapping sources compose correctly. The markfukt
     rasters pad it with the *fill code 255* (their nodata 65535 does not
     occur), so 255 must be the transparent value when the counties are
     mosaicked; it is nodata to every reader anyway (0 and 255 both map to
@@ -822,6 +824,82 @@ def vrt_nodata(vrt: str) -> tuple[int, int]:
 
 
 MARKFUKT_NODATA = 65535
+
+#: Rasters whose valid cells mark a county's polygon, with the values outside
+#: it: ``skg_open.COUNTY_MASKS``, which this script does not import. Neither
+#: alone covers every NFI top-up tile (grunddata misses tiles in 01 and 03,
+#: markfukt one in 25); their union does.
+COUNTY_MASKS = (("grunddata/omdrev2/volym_", (-1,)), ("markfukt/markfukt_", (255, MARKFUKT_NODATA)))
+
+
+def mask_to_county(item: Item, manifest: dict, dest: Path) -> bool:
+    """Set a derived Trädhöjd county raster to nodata outside its county.
+
+    The county rasters overlap their neighbours, and in the mosaic a later
+    source wins wherever it is valid. As published, county 23 pads the area
+    outside the county with 0 and county 24's tiles carry heights there
+    (measured 2026-10-22: 92 % 0 and 8 % heights outside 23, 6 % heights
+    outside 24), so 23's zeros covered counties 20-22. A cell is inside when
+    any of the county's ``COUNTY_MASKS`` rasters is valid there, read onto
+    the 10 m grid (nearest); every other cell becomes -1.
+
+    Runs once per raster (record ``county_mask``). The rewrite goes to a
+    sibling file, is re-verified, then replaces the raster, and the record's
+    sha256, bytes and value statistics follow. Raises when the county has no
+    mask raster staged. Returns whether the record changed."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.windows import Window, bounds as window_bounds, from_bounds
+
+    der = manifest["derived"].get(item.derived)
+    if item.product != "tradhojd" or der is None or "county_mask" in der:
+        return False
+    sources = [(f"{prefix}{item.county}.tif", invalid) for prefix, invalid in COUNTY_MASKS
+               if f"{prefix}{item.county}.tif" in manifest["derived"]
+               and (dest / f"{prefix}{item.county}.tif").exists()]
+    if not sources:
+        raise ValueError(f"{item.derived}: no county mask staged for county {item.county} "
+                         f"({', '.join(p for p, _ in COUNTY_MASKS)})")
+    out = dest / item.derived
+    partial = out.with_name(out.name + ".masked.tif")
+    cleared = cleared_heights = n_valid = 0
+    vmin = vmax = None
+    try:
+        with rasterio.Env(**SERIAL_VRT), rasterio.open(out) as src, contextlib.ExitStack() as stack:
+            masks = [(stack.enter_context(rasterio.open(dest / rel)), invalid) for rel, invalid in sources]
+            with rasterio.open(partial, "w", **{**src.profile, "BIGTIFF": "IF_SAFER"}) as dst:
+                for row in range(0, src.height, 512):
+                    win = Window(0, row, src.width, min(512, src.height - row))
+                    a = src.read(1, window=win)
+                    inside = np.zeros(a.shape, bool)
+                    for m, invalid in masks:
+                        v = m.read(1, window=from_bounds(*window_bounds(win, src.transform), m.transform),
+                                   out_shape=a.shape, boundless=True, fill_value=invalid[0],
+                                   resampling=Resampling.nearest)
+                        inside |= ~np.isin(v, invalid)
+                    drop = ~inside & (a != -1)
+                    cleared += int(drop.sum())
+                    cleared_heights += int((drop & (a > 0)).sum())
+                    a[~inside] = -1
+                    dst.write(a, 1, window=win)
+                    valid = a[a != -1]
+                    if valid.size:
+                        n_valid += int(valid.size)
+                        vmin = int(valid.min()) if vmin is None else min(vmin, int(valid.min()))
+                        vmax = int(valid.max()) if vmax is None else max(vmax, int(valid.max()))
+        check = verify_tradhojd_10m(partial, {"width": der["width"], "height": der["height"],
+                                              "bounds": der["bounds"], "valid_cells": n_valid,
+                                              "value_min_dm": vmin, "value_max_dm": vmax})
+        os.replace(partial, out)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    der.update(valid_cells=n_valid, value_min_dm=vmin, value_max_dm=vmax,
+               bytes=out.stat().st_size, sha256=sha256_of(out), **check)
+    der["county_mask"] = {"sources": [rel for rel, _ in sources], "cleared_cells": cleared,
+                          "cleared_heights": cleared_heights, "masked_at": _now()}
+    return True
 
 
 def build_vrt(dest: Path, vrt: str, rasters: list[str], srcnodata: int, vrtnodata: int) -> dict:
@@ -981,6 +1059,10 @@ def _main(argv: list[str] | None = None) -> int:
             if record_known_gaps(it, manifest, dest):
                 save_manifest(dest, manifest)
                 print(f"    recorded the known upstream gaps of {it.derived}", flush=True)
+            if mask_to_county(it, manifest, dest):
+                save_manifest(dest, manifest)
+                print(f"    masked {it.derived} to its county: "
+                      f"{manifest['derived'][it.derived]['county_mask']['cleared_cells']} cells cleared", flush=True)
             skipped += 1
             continue
         t0 = time.time()
@@ -1035,6 +1117,8 @@ def _main(argv: list[str] | None = None) -> int:
         manifest["derived"][it.derived] = convert(it, raw, dest / it.derived, work, args.tradhojd_method,
                                                   tradhojd_workers=args.tradhojd_workers)
         save_manifest(dest, manifest)              # the verified derivation is on record first
+        if mask_to_county(it, manifest, dest):     # before the raw zip goes: a failed mask can be redone
+            save_manifest(dest, manifest)
         if args.drop_raw and it.product == "tradhojd":
             raw.unlink()
             manifest["files"][it.name]["raw_deleted_at"] = _now()

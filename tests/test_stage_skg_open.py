@@ -418,6 +418,7 @@ def _staging(monkeypatch, tmp_path, free_gib=1000.0):
     small.compress_type, small.file_size = st.ZIP_DEFLATE, 3
     monkeypatch.setattr(st, "zip_tif_entry", lambda z: small)
     monkeypatch.setattr(st, "zip_tiles", lambda z: None)
+    monkeypatch.setattr(st, "mask_to_county", lambda *a: False)     # the fake conversion writes no raster
     return calls, snapshots
 
 
@@ -1010,3 +1011,119 @@ def test_known_gaps_are_not_recorded_over_valid_cells_or_another_zip(monkeypatch
     _known01(monkeypatch, gap)
     assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
     assert "gaps" not in snaps[-1]["derived"]["tradhojd/tradhojd_10m_01.tif"]
+
+
+# ── county mask (county 23's zeros covered counties 20-22 in the mosaic, 2026-10-22) ──
+
+_ITEM01 = st.Item("sksTradhojd01.zip", "tradhojd", "tradhojd/tradhojd_10m_01.tif", county="01")
+
+
+def _masked_dest(tmp_path: Path, *, masks: bool = True) -> tuple[Path, dict, np.ndarray]:
+    """County 01 derived (100 x 100 cells at 10 m) the way county 23 is published: 0 outside the
+    county and a neighbour's heights in its south-east corner. Grunddata (20 m, nodata -1) marks
+    the west half, markfukt (2 m, fill 255) a 20 x 20-cell block in the east half."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    dest = tmp_path / "m"
+    a = np.zeros((100, 100), np.int16)
+    a[:, :50] = 120                                    # the county's heights
+    a[10:30, 60:80] = 150                              # inside too, by markfukt only
+    a[80:, 80:] = 90                                   # a neighbour's heights, outside the county
+    prof = dict(driver="GTiff", count=1, crs="EPSG:3006", tiled=True, blockxsize=16, blockysize=16)
+    (dest / "tradhojd").mkdir(parents=True)
+    with rasterio.open(dest / _ITEM01.derived, "w", width=100, height=100, dtype="int16", nodata=-1,
+                       transform=from_origin(_W, _N, 10, 10), **prof) as d:
+        d.write(a, 1)
+    derived = {_ITEM01.derived: {"sha256": st.sha256_of(dest / _ITEM01.derived), "bytes": 1, "nodata": -1,
+                                 "width": 100, "height": 100, "bounds": [_W, _N - 1000.0, _W + 1000.0, float(_N)],
+                                 "valid_cells": 10000, "value_min_dm": 0, "value_max_dm": 150}}
+    if masks:
+        g = np.full((50, 50), -1, np.float32)
+        g[:, :25] = 100.0
+        (dest / "grunddata/omdrev2").mkdir(parents=True)
+        with rasterio.open(dest / "grunddata/omdrev2/volym_01.tif", "w", width=50, height=50, dtype="float32",
+                           nodata=-1, transform=from_origin(_W, _N, 20, 20), **prof) as d:
+            d.write(g, 1)
+        mf = np.full((500, 500), 255, np.uint16)
+        mf[50:150, 300:400] = 3                        # 10 m cells: rows 10-29, cols 60-79
+        (dest / "markfukt").mkdir()
+        with rasterio.open(dest / "markfukt/markfukt_01.tif", "w", width=500, height=500, dtype="uint16",
+                           nodata=st.MARKFUKT_NODATA, transform=from_origin(_W, _N, 2, 2), **prof) as d:
+            d.write(mf, 1)
+        derived["grunddata/omdrev2/volym_01.tif"] = {"sha256": "g" * 64, "bytes": 1}
+        derived["markfukt/markfukt_01.tif"] = {"sha256": "m" * 64, "bytes": 1}
+    manifest = {"schema": st.MANIFEST_SCHEMA, "source_url": st.SOURCE_URL, "vrt": {}, "history": [],
+                "files": {_ITEM01.name: {"sha256": "z" * 64, "raw_deleted_at": "2026-10-21T16:13:50Z"}},
+                "derived": derived}
+    (dest / "MANIFEST.json").write_text(json.dumps(manifest))
+    return dest, manifest, a
+
+
+def test_a_county_raster_is_masked_to_its_county(tmp_path):
+    import rasterio
+
+    dest, manifest, before = _masked_dest(tmp_path)
+    assert st.mask_to_county(_ITEM01, manifest, dest) is True
+    with rasterio.open(dest / _ITEM01.derived) as ds:
+        after = ds.read(1)
+        assert ds.nodata == -1 and ds.profile["tiled"] and ds.res == (10.0, 10.0)
+    inside = np.zeros((100, 100), bool)
+    inside[:, :50] = True
+    inside[10:30, 60:80] = True
+    np.testing.assert_array_equal(after[inside], before[inside])
+    assert (after[~inside] == -1).all()
+    rec = manifest["derived"][_ITEM01.derived]
+    assert rec["county_mask"]["sources"] == ["grunddata/omdrev2/volym_01.tif", "markfukt/markfukt_01.tif"]
+    assert rec["county_mask"]["cleared_cells"] == 4600 and rec["county_mask"]["cleared_heights"] == 400
+    assert rec["sha256"] == st.sha256_of(dest / _ITEM01.derived) and rec["valid_cells"] == 5400
+    assert (rec["value_min_dm"], rec["value_max_dm"]) == (120, 150) and rec["verified"]
+    assert st.mask_to_county(_ITEM01, manifest, dest) is False              # once per raster
+    assert not list((dest / "tradhojd").glob("*.masked.tif"))
+
+
+def test_masking_refuses_a_county_without_a_mask(tmp_path):
+    dest, manifest, _ = _masked_dest(tmp_path, masks=False)
+    sha = st.sha256_of(dest / _ITEM01.derived)
+    with pytest.raises(ValueError, match="no county mask staged for county 01"):
+        st.mask_to_county(_ITEM01, manifest, dest)
+    assert st.sha256_of(dest / _ITEM01.derived) == sha and "county_mask" not in manifest["derived"][_ITEM01.derived]
+
+
+def test_a_failed_mask_leaves_the_raster_and_its_record(monkeypatch, tmp_path):
+    dest, manifest, _ = _masked_dest(tmp_path)
+    sha = st.sha256_of(dest / _ITEM01.derived)
+
+    def fail(out, expected):
+        raise ValueError("verification failed")
+
+    monkeypatch.setattr(st, "verify_tradhojd_10m", fail)
+    with pytest.raises(ValueError, match="verification failed"):
+        st.mask_to_county(_ITEM01, manifest, dest)
+    assert st.sha256_of(dest / _ITEM01.derived) == sha and "county_mask" not in manifest["derived"][_ITEM01.derived]
+    assert not list((dest / "tradhojd").glob("*.masked.tif"))
+
+
+def test_main_masks_a_county_staged_before_the_mask(monkeypatch, tmp_path):
+    real = st.mask_to_county
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    monkeypatch.setattr(st, "mask_to_county", real)
+    dest, _, _ = _masked_dest(tmp_path)
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert calls == []                                              # nothing downloaded or derived again
+    assert snaps[-1]["derived"][_ITEM01.derived]["county_mask"]["cleared_cells"] == 4600
+
+
+def test_a_fresh_derivation_is_masked_before_the_raw_zip_goes(monkeypatch, tmp_path):
+    calls, snaps = _staging(monkeypatch, tmp_path)
+
+    def mask(item, manifest, dest):
+        calls.append(("mask", item.name))
+        manifest["derived"][item.derived]["county_mask"] = {"cleared_cells": 0}
+        return True
+
+    monkeypatch.setattr(st, "mask_to_county", mask)
+    assert st.main(["--dest", str(tmp_path / "m"), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert calls == [("download", "sksTradhojd01.zip"), ("convert", "sksTradhojd01.zip"), ("mask", "sksTradhojd01.zip")]
+    deleted = next(i for i, m in enumerate(snaps) if m["files"].get("sksTradhojd01.zip", {}).get("raw_deleted_at"))
+    assert "county_mask" in snaps[deleted - 1]["derived"][_ITEM01.derived]
