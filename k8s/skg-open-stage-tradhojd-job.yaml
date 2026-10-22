@@ -56,6 +56,9 @@
 # its county (grunddata ∪ markfukt valid; outside = -1): applied once after
 # a fresh derivation and, for counties already staged, on the next apply,
 # which prints "masked ... cells cleared" per county and rewrites no zip.
+# b92790b (Codex review of #96): masking needs both mask sources, and a mask
+# interrupted between the raster and manifest writes is finished on restart
+# ("finished an interrupted rewrite ...") before the raw-deletion check.
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -163,8 +166,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "d0307e86bba404bb6c523a0426f86ac4c055cc33"}
-            - {name: IMINT_SCRIPT_SHA256, value: "dbfbbefe85aaa0090bffd0e9c34e1500034979ea9dc9bbc7d9070d0dcc41df8f"}
+            - {name: IMINT_COMMIT, value: "b92790bf0d75aa54c9d11913ed15171b0c5defb3"}
+            - {name: IMINT_SCRIPT_SHA256, value: "6248d4f9b4fc2e755ceabe94f754b050c5b717387e306296951d375fe546f9cb"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
