@@ -1,0 +1,127 @@
+---
+# Strip the stale S1 from the 23 tiles RTC cannot re-enrich (task 0114).
+#
+# Owner decision 2026-10-22. The first 0114 Job (repair-s1-unstamped-0114)
+# selected the expected 23 tiles of /data/unified_v2_512 that hold s1_vv_vh
+# but fail s1_usable, byte-copied each to
+# /data/repair_backups/s1_0114_20261022/, and then failed every re-enrich
+# with no_composite_<DIRECTION>_<YEAR> (2018, 2021, 2022): pc-rtc has no
+# season composite there. The originals were left untouched. Their S1 is
+# unusable and cannot be rebuilt, so it is removed; the tiles, their other
+# bands and labels stay.
+#
+# What it does: scripts/repair_s1_unstamped.py --strip --expect 23 (refuses
+# on any other count, before writing) removes exactly S1_KEYS (s1_vv_vh,
+# s1_vv_vh_2016, s1_dates, s1_dates_2016, s1_orbit, s1_source, has_s1,
+# s1_enrich_v, s1_temporal_mask: what enrich_one_tile writes or drops) from
+# each selected tile. Every other zip member is copied byte for byte to the
+# enricher's staging name <tile>.npz.tmp.npz, verified, and renamed over the
+# tile; the result is verified again against the backup. No network.
+#
+# Backups: the 0114 backup dir is reused. A backup of the same name is
+# accepted only if byte-identical to the current tile, otherwise the run
+# refuses (exit 3) before writing anything; a missing one is created. It
+# also refuses on an existing staging file of a selected tile and on any
+# s1_* / has_s1* key outside S1_KEYS (the dry run lists both).
+#
+# Reversible: each backup is the full original tile. To undo, copy
+# /data/repair_backups/s1_0114_20261022/<tile>.npz back over
+# /data/unified_v2_512/<tile>.npz (its S1 is the stale one again).
+#
+# Run ONLY on the owner's go, after review, and not concurrently with any
+# other Job writing /data/unified_v2_512 (in particular not with
+# repair-s1-unstamped-0114). Before applying, replace PINNED_SHA below with
+# the full sha of the integrated main commit that holds the --strip mode;
+# the pod refuses the placeholder.
+#
+# Verify: the strip step's "AFTER {...}" line shows strip_failed 0,
+# still_holding_s1 [] and after_count 0; the final SELECTION count is 0
+# (checked with --expect 0); tiles before == after; the Job exits 0. Then
+# re-run the read-only S1 count: expect 7854 at v4 + pc-rtc-gamma0,
+# 0 unstamped, 0 at v3, 28 without S1, 7882 in total.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: repair-s1-strip-0114
+  namespace: prithvi-training-default
+  labels: {app: s1-repair, task: '0114'}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600  # 1h
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: s1-repair, task: '0114'}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # srv04/srv06 = runc pod-sandbox bug + observed OOM host
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: strip
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== repair-s1-strip-0114 — $(date -u) ==="
+              if [ "${IMINT_COMMIT}" = "PINNED_SHA" ]; then
+                echo "REFUSED: IMINT_COMMIT is still the PINNED_SHA placeholder"
+                exit 1
+              fi
+              [[ "${IMINT_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "REFUSED: IMINT_COMMIT is not a full 40-hex sha"; exit 1; }
+
+              # --strip needs numpy only (no enrich, no network reads).
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy
+
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "${IMINT_COMMIT}"
+              grep -q -- '"--strip"' scripts/repair_s1_unstamped.py
+              echo "HEAD: $(git rev-parse HEAD)"
+              export PYTHONPATH="${PWD}"
+
+              count_tiles() { find "${DATA_DIR}" -maxdepth 1 -type f -name '*.npz' ! -name '*.tmp.npz' | wc -l; }
+              BEFORE=$(count_tiles)
+              echo "tiles before: ${BEFORE}"
+
+              echo ""; echo "######## dry run ########"
+              python scripts/repair_s1_unstamped.py --data-dir "${DATA_DIR}"
+
+              echo ""; echo "######## strip ########"
+              RC=0
+              python scripts/repair_s1_unstamped.py --data-dir "${DATA_DIR}" \
+                --strip --expect 23 \
+                --backup-dir /data/repair_backups/s1_0114_20261022 || RC=$?
+
+              echo ""; echo "######## after ########"
+              python scripts/repair_s1_unstamped.py --data-dir "${DATA_DIR}" --expect 0 || RC=1
+              AFTER=$(count_tiles)
+              echo "tiles after: ${AFTER}"
+              [ "${BEFORE}" = "${AFTER}" ] || { echo "FAIL: tile count changed"; RC=1; }
+              echo "=== done (exit ${RC}): $(date -u) ==="
+              exit ${RC}
+          env:
+            # Replace with the integrated main commit before applying.
+            - {name: IMINT_COMMIT, value: "PINNED_SHA"}
+            - {name: DATA_DIR, value: "/data/unified_v2_512"}
+          resources:
+            requests: {cpu: "1", memory: "4Gi"}
+            limits: {cpu: "1", memory: "4Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
