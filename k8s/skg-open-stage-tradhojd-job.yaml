@@ -59,7 +59,7 @@
 # b92790b (Codex review of #96): masking needs both mask sources, and a mask
 # interrupted between the raster and manifest writes is finished on restart
 # ("finished an interrupted rewrite ...") before the raw-deletion check.
-# a9ee558 (2026-10-22, heights' nodata now reads NaN): the all-zero rule is
+# The NaN-height change (2026-10-22, heights' nodata now reads NaN): the all-zero rule is
 # retired, and county 24, derived under it, gets its treeless 0 back inside
 # the county, except at the recorded gap ("restored the treeless 0 ...").
 # No cell of its mask lies outside its 689 tiles (probe).
@@ -170,8 +170,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "a9ee558a6664ea06f21d9f80940a2098d278cfdf"}
-            - {name: IMINT_SCRIPT_SHA256, value: "68df25c2c76bac7ea5fd5e5b0f12dba541b9c336c6ab18894f6509369f44a76d"}
+            - {name: IMINT_COMMIT, value: "4e8a80ca52b680041b89814cf5817b076d7d57a9"}
+            - {name: IMINT_SCRIPT_SHA256, value: "1bf3fdbd4e5ecd4d680eb31a1c493111eaa7499c1a4c49027a7caf46c01e1dd7"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
