@@ -89,7 +89,7 @@ def test_empty_tessera_positive_flag_fails_on_actual_npz(tmp_path):
     path = tmp_path / "tile.npz"
     np.savez(path, spectral=np.ones((24, 8, 8)), tessera=np.zeros((128, 8, 8)),
              has_tessera=1, tessera_source="geotessera-0.10.2",
-             s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, has_s1=1,
+             s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, s1_source="pc-rtc-gamma0", has_s1=1,
              b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)), year=2024)
     with pytest.raises(ValueError, match="positive has_tessera"):
         prep.tile_readiness(path)
@@ -178,7 +178,7 @@ def test_readiness_resolves_dates_without_model_year_fallback(tmp_path):
     path = tmp_path / "tile.npz"
     data = dict(spectral=np.ones((24, 8, 8)), tessera=np.ones((128, 8, 8)),
                 has_tessera=1, tessera_source="geotessera-0.10.2",
-                s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, has_s1=1,
+                s1_vv_vh=np.ones((2, 8, 8)), s1_enrich_v=4, s1_source="pc-rtc-gamma0", has_s1=1,
                 b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)),
                 easting=500000., northing=6500000., doy=np.array([280,150,180,210]))
     dates=np.array(["2023-10-01", "2024-05-01", "2024-07-01", "2024-08-01"])
@@ -199,7 +199,7 @@ def test_readiness_resolves_dates_without_model_year_fallback(tmp_path):
 def test_readiness_rejects_missing_location_or_frame_metadata(tmp_path):
     path = tmp_path / "tile.npz"
     data = dict(spectral=np.ones((24,8,8)), tessera=np.ones((128,8,8)), has_tessera=1,
-                tessera_source="geotessera-0.10.2", s1_vv_vh=np.ones((2,8,8)), s1_enrich_v=4,
+                tessera_source="geotessera-0.10.2", s1_vv_vh=np.ones((2,8,8)), s1_enrich_v=4, s1_source="pc-rtc-gamma0",
                 has_s1=1, b08=np.ones((4,8,8)), rededge=np.ones((12,8,8)), year=2024,
                 easting=500000., northing=6500000., doy=np.array([280,150,180,210]))
     for key in ("easting", "northing", "doy"):

@@ -89,7 +89,7 @@ def test_mandatory_arrays_must_share_grid_and_frame_count(tmp_path, key, shape):
     data = {"spectral": np.ones((24,8,8)), "tessera": np.ones((128,8,8)),
             "s1_vv_vh": np.ones((2,8,8)), "b08": np.ones((4,8,8)),
             "rededge": np.ones((12,8,8)), "has_tessera": 1, "has_s1": 1,
-            "s1_enrich_v": 4, "tessera_source": "geotessera-0.10.2", "year": 2024}
+            "s1_enrich_v": 4, "s1_source": "pc-rtc-gamma0", "tessera_source": "geotessera-0.10.2", "year": 2024}
     data[key] = np.ones(shape)
     np.savez(path, **data)
     assert tile_readiness(path)[1] == "mandatory_input_shape:" + key

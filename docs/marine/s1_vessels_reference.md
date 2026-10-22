@@ -952,7 +952,8 @@ tiles of `imint/training/aws_s1.py` and `imint/training/cdse_s1_stac.py`. By the
 geometry, the sea in those tiles sits (N − z) / tan θ toward the satellite, 41–56 m off
 Skagen; this is the expected offset from the vessel chain's analysis, not a measurement
 on the tiles. Projected COGs (`imint/training/pc_s1_rtc.py`, RTC) skip that warp and are
-not covered here. The fix is tracked as ImintEngine task 0113.
+not covered here. Task 0113 retired the path instead of fixing it (2026-10-22): see
+`docs/training/s1_fetch.md`.
 
 **Provenance and cache.** `S1_VESSEL_CHAIN_VERSION` = 2. `provenance["geocoding"]`
 records the tie-point model, the geoid grid and its sha256, and the GCP pixel convention;
@@ -1042,12 +1043,12 @@ A review of the port (verdict approve-with-fixes) led to these changes, each ver
 ### Tests
 
 `tests/test_ai2_vessels_s1.py`, `tests/test_s1_geocoding.py`, `tests/test_geoid.py` and
-`tests/test_mpc_s1.py`, with the synthetic GRD writer shared in `tests/s1_synthetic.py`
+`tests/test_s1_shared_read_window.py` (formerly `tests/test_mpc_s1.py`), with the synthetic GRD writer shared in `tests/s1_synthetic.py`
 and the range-Doppler oracle in `tests/s1_rd_oracle.py`; run with the repo `.venv`:
 
 ```bash
 .venv/bin/python -m pytest tests/test_ai2_vessels_s1.py tests/test_s1_geocoding.py \
-    tests/test_geoid.py tests/test_mpc_s1.py -q
+    tests/test_geoid.py tests/test_s1_shared_read_window.py -q
 ```
 
 **Geocoding** (`tests/test_s1_geocoding.py`, `tests/test_geoid.py`; § Geocoding): the
@@ -1098,7 +1099,8 @@ GCPs (`sea_surface_copy`).
 - chain 2: the provenance's geocoding model and per-window GCP shifts, and a cache key and
   window file names that change with the geocoding model.
 
-**σ⁰ path** (`tests/test_mpc_s1.py`): `mpc_s1.fetch_s1_scene` offline after the
+**σ⁰ path** (`tests/test_mpc_s1.py`; replaced by `tests/test_s1_shared_read_window.py`
+when the path was retired, task 0113): `mpc_s1.fetch_s1_scene` offline after the
 STAC-helper refactor: the search
 request, signed `/vsicurl/` reads, σ⁰ = DN² / LUT² (and dB), nodata rejection, and which
 failures return `None` and which raise.

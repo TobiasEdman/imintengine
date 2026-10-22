@@ -117,10 +117,13 @@ spec:
           # --- PREFLIGHT: fail loud on a PARTIAL S1 v3 enrichment ---
           # Never train the ΔSAR retrain on a half-enriched dataset: the delta
           # channels would be zero on every not-yet-v3 tile, poisoning the
-          # anchor. Require >=95% of tiles to carry s1_enrich_v==4.
+          # anchor. Require >=95% of tiles to pass the shared S1 rule
+          # (imint.training.s1_enrichment.s1_usable: s1_enrich_v==4 AND
+          # s1_source=="pc-rtc-gamma0") — the same rule the dataset gates on.
           python - <<'PY'
           import glob, sys
           import numpy as np
+          from imint.training.s1_enrichment import s1_usable
           roots = ["/cephfs/unified_v2_512/tiles", "/cephfs/unified_v2_512"]
           tiles = []
           for r in roots:
@@ -133,17 +136,17 @@ spec:
           for p in tiles:
               try:
                   with np.load(p, allow_pickle=True) as z:
-                      if "s1_enrich_v" in z.files and int(z["s1_enrich_v"].item()) == 4:
+                      if s1_usable(z):
                           v3 += 1
                       if "s1_vv_vh_2016" in z.files:
                           with2016 += 1
               except Exception:
                   pass
           frac = v3 / n
-          print(f"S1 enrichment: {v3}/{n} tiles s1_enrich_v==4 ({frac:.1%}); "
+          print(f"S1 enrichment: {v3}/{n} tiles with usable S1 (v4 RTC) ({frac:.1%}); "
                 f"{with2016}/{n} carry s1_vv_vh_2016 ({with2016/n:.1%})")
           if frac < 0.95:
-              print(f"PREFLIGHT FAILED — only {frac:.1%} of tiles are s1_enrich_v==4 "
+              print(f"PREFLIGHT FAILED — only {frac:.1%} of tiles have usable S1 (v4 RTC) "
                     f"(<95%). Wait for enrich-s1-season to finish before training.")
               sys.exit(5)
           print("enrichment coverage OK")

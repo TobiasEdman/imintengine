@@ -1,5 +1,25 @@
 # Sentinel-1 GRD fetch — STAC + direct COG path
 
+> **Retired 2026-10-22 (task 0113).** The σ⁰ path described below is gone:
+> `fetch_s1_scene` (CDSE / MPC / AWS), the `s1_fetch` cascade, the product
+> cache (`$S1_CACHE_DIR`, `clear_cache`) and the LUT/σ⁰ helpers are removed,
+> `s1_shared.read_window` refuses GCP-referenced GRD, and
+> `scripts/enrich_tiles_s1.py` refuses `--s1-backend cdse-stac` / `cascade`.
+> Why: the window was warped over the product's own tie points, which sit at
+> ellipsoid height, so by the vessel chain's geometry the sea sits 41–56 m
+> toward the satellite off Skagen (expected, not measured on the tiles); and the
+> calibration LUT was sampled at warped-grid offsets, not radar line/pixel.
+> It was retired rather than fixed because the v4 training tiles come from
+> `imint/training/pc_s1_rtc.py` (RTC γ⁰, projected COGs, unaffected), and per
+> that module no S1 training ran before RTC. A read-only count of
+> `training-data-cephfs` on 2026-10-22 found every v4 tile stamped
+> `pc-rtc-gamma0`; it cannot say where 22 unstamped tiles in
+> `unified_v2_512` came from, nor read 217 files in
+> `unified_v2_512_corrupted` (tickets 0114, 0115). The unstamped tiles fail
+> the gate below; the corrupted directory is outside the dataset. The dataset gate now also requires
+> `s1_source == "pc-rtc-gamma0"` (`imint/training/s1_enrichment.py`). The
+> page is kept as history.
+
 ## Why we switched
 
 The original fetcher (`imint/training/cdse_s1.py`) posts one request per tile
