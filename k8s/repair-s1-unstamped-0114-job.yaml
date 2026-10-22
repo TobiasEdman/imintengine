@@ -1,0 +1,126 @@
+---
+# Re-enrich the S1 of tiles whose S1 the SAR gates reject (task 0114).
+#
+# A read-only count of /data/unified_v2_512 on 2026-10-22 found 23 tiles
+# that hold s1_vv_vh but fail s1_usable: 22 with no s1_enrich_v and no
+# s1_source (likely v1 S1 from the retired GCP warp, task 0113) and 1 at v3.
+# Their other bands and labels are valid and in use: only the S1 is rebuilt,
+# from pc-rtc, by scripts/repair_s1_unstamped.py, which calls
+# enrich_one_tile on exactly those tiles (atomic rewrite, other keys kept).
+# The 5 tiles without S1 are left alone.
+#
+# Steps in the pod: dry run (prints the selection as JSON), then --apply
+# with --expect 23 (refuses on any other count, before writing), which first
+# byte-copies each selected tile to /data/repair_backups/s1_0114_20261022/
+# (refuses an existing name, never overwrites), re-enriches, and re-checks.
+# Then the selection is printed again. Nothing is deleted. The tile count of
+# the directory must not change.
+#
+# Run ONLY on the owner's go, after review, and not concurrently with any
+# other Job writing /data/unified_v2_512. Before applying, replace
+# PINNED_SHA below with the full sha of the integrated main commit that
+# holds scripts/repair_s1_unstamped.py; the pod refuses the placeholder.
+# A re-run must use a new backup dir: the first one holds the originals.
+#
+# The apply step also refuses (exit 3, nothing written, no backup dir
+# created) if a selected tile's staging file <tile>.npz.tmp.npz already
+# exists: the enricher would overwrite it and rename it away. The dry run
+# lists them as "staging_conflicts". If it fires, do not delete them from
+# the Job: confirm no other writer is active, inspect each file (a leftover
+# of an interrupted run), have the owner decide to move it aside or remove
+# it, then re-apply this Job under a new name.
+#
+# Verify: the apply step's "AFTER {...}" line shows enrich_failed 0,
+# still_failing [] and after_count 0; the final SELECTION count is 0
+# (checked with --expect 0); tiles before == after; the Job exits 0. Then
+# re-run the read-only S1 count: expect 7877 at v4 + pc-rtc-gamma0,
+# 0 unstamped, 0 at v3, 5 without S1, 7882 in total.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: repair-s1-unstamped-0114
+  namespace: prithvi-training-default
+  labels: {app: s1-repair, task: '0114'}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400  # 4h
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: s1-repair, task: '0114'}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # srv04/srv06 = runc pod-sandbox bug + observed OOM host
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: repair
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== repair-s1-unstamped-0114 — $(date -u) ==="
+              if [ "${IMINT_COMMIT}" = "PINNED_SHA" ]; then
+                echo "REFUSED: IMINT_COMMIT is still the PINNED_SHA placeholder"
+                exit 1
+              fi
+              [[ "${IMINT_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "REFUSED: IMINT_COMMIT is not a full 40-hex sha"; exit 1; }
+
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy scipy rasterio requests pyproj pyyaml Pillow httpx pystac-client planetary-computer
+
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "${IMINT_COMMIT}"
+              test -f scripts/repair_s1_unstamped.py
+              echo "HEAD: $(git rev-parse HEAD)"
+              export PYTHONPATH="${PWD}"
+
+              # Fail before any backup if the enricher or its network deps
+              # cannot load, or the PC STAC catalog cannot be opened.
+              python -c "import rasterio, pystac_client, planetary_computer, scripts.enrich_tiles_s1; from imint.training import pc_s1_rtc; pc_s1_rtc._open_client(); print('preflight ok')"
+
+              count_tiles() { find "${DATA_DIR}" -maxdepth 1 -type f -name '*.npz' ! -name '*.tmp.npz' | wc -l; }
+              BEFORE=$(count_tiles)
+              echo "tiles before: ${BEFORE}"
+
+              echo ""; echo "######## dry run ########"
+              python scripts/repair_s1_unstamped.py --data-dir "${DATA_DIR}"
+
+              echo ""; echo "######## apply ########"
+              RC=0
+              python scripts/repair_s1_unstamped.py --data-dir "${DATA_DIR}" \
+                --apply --expect 23 --workers 1 \
+                --backup-dir /data/repair_backups/s1_0114_20261022 || RC=$?
+
+              echo ""; echo "######## after ########"
+              python scripts/repair_s1_unstamped.py --data-dir "${DATA_DIR}" --expect 0 || RC=1
+              AFTER=$(count_tiles)
+              echo "tiles after: ${AFTER}"
+              [ "${BEFORE}" = "${AFTER}" ] || { echo "FAIL: tile count changed"; RC=1; }
+              echo "=== done (exit ${RC}): $(date -u) ==="
+              exit ${RC}
+          env:
+            # Replace with the integrated main commit before applying.
+            - {name: IMINT_COMMIT, value: "PINNED_SHA"}
+            - {name: DATA_DIR, value: "/data/unified_v2_512"}
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits: {cpu: "2", memory: "8Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim: {claimName: training-data-cephfs}

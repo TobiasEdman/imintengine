@@ -207,6 +207,16 @@ from imint.training.tile_fetch import (  # noqa: E402
 )
 
 
+def tile_staging_path(tile_path: str) -> str:
+    """Where :func:`enrich_one_tile` stages a tile before ``os.replace``.
+
+    ``<tile>.npz.tmp.npz``. Shared so a caller can check for an existing
+    file at that name first: the write overwrites it and the rename (or the
+    cleanup on failure) removes it.
+    """
+    return tile_path + ".tmp.npz"
+
+
 def enrich_one_tile(
     tile_path: str,
     *,
@@ -355,7 +365,7 @@ def enrich_one_tile(
         data.pop("s1_vv_vh_2016", None)
         data.pop("s1_dates_2016", None)
 
-    tmp_path = tile_path + ".tmp.npz"
+    tmp_path = tile_staging_path(tile_path)
     try:
         np.savez_compressed(tmp_path[:-4], **data)  # strips .npz, re-adds
         os.replace(tmp_path, tile_path)

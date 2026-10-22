@@ -2,10 +2,12 @@
   "id": "0114",
   "subject": "Re-enrich the 22 unstamped S1 tiles from RTC",
   "description": "Owner 2026-10-22: ticket. A read-only count of training-data-cephfs (~/.agents/continuity/evidence/ImintEngine/s1-tile-count-20261022.json, pod spec next to it) found 22 tiles in /data/unified_v2_512 that hold s1_vv_vh with no s1_enrich_v and no s1_source (e.g. 44883674, 45543938, 46123926): most likely v1 S1 from the retired GCP warp (task 0113), shifted toward the satellite. The dataset gate already excludes their S1 (it requires v4), but the stale arrays stay on disk and cookie_cut_256_from_512.py copies s1_vv_vh without its version stamp. Do not delete the tiles: their other bands and labels are valid and in use. Re-enrich only their S1 from pc-rtc (scripts/enrich_tiles_s1.py redoes every tile whose s1_enrich_v != 4) as one small cluster Job on the owner's go, then re-count: expect 0 unstamped and the v3 tile at v4. Not concurrent with other jobs writing unified_v2_512.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
-  "branch": null,
-  "runtime": null,
+  "branch": "agent/te/claude/s1-repair-0114",
+  "runtime": "claude",
   "created_at": "2026-10-22T07:04:24Z",
-  "updated_at": "2026-10-22T07:04:24Z"
+  "updated_at": "2026-10-22T13:57:49Z",
+  "claimed_by": "claude-repair0114-1022",
+  "claimed_at": "2026-10-22T13:57:49Z"
 }
