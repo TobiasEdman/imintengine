@@ -843,27 +843,57 @@ def mask_to_county(item: Item, manifest: dict, dest: Path) -> bool:
     any of the county's ``COUNTY_MASKS`` rasters is valid there, read onto
     the 10 m grid (nearest); every other cell becomes -1.
 
-    Runs once per raster (record ``county_mask``). The rewrite goes to a
-    sibling file, is re-verified, then replaces the raster, and the record's
-    sha256, bytes and value statistics follow. Raises when the county has no
-    mask raster staged. Returns whether the record changed."""
-    import numpy as np
-    import rasterio
-    from rasterio.enums import Resampling
-    from rasterio.windows import Window, bounds as window_bounds, from_bounds
-
+    Runs once per raster (record ``county_mask``) through
+    ``_rewrite_county_raster``. Raises when the county has no mask raster
+    staged. Returns whether the record changed."""
     der = manifest["derived"].get(item.derived)
     if item.product != "tradhojd" or der is None or "county_mask" in der:
         return False
+    sources = _county_mask_sources(item, manifest, dest)
+
+    def clear(a, inside, win, transform):
+        drop = ~inside & (a != -1)
+        counts = {"cleared_cells": int(drop.sum()), "cleared_heights": int((drop & (a > 0)).sum())}
+        a[~inside] = -1
+        return counts
+
+    counts = _rewrite_county_raster(item, der, dest, sources, clear, suffix=".masked.tif")
+    der["county_mask"] = {"sources": [rel for rel, _ in sources], **counts, "masked_at": _now()}
+    return True
+
+
+def _county_mask_sources(item: Item, manifest: dict, dest: Path) -> list[tuple[str, tuple]]:
+    """``(path, values outside)`` of the county's ``COUNTY_MASKS`` rasters that
+    are staged; raises when there is none."""
     sources = [(f"{prefix}{item.county}.tif", invalid) for prefix, invalid in COUNTY_MASKS
                if f"{prefix}{item.county}.tif" in manifest["derived"]
                and (dest / f"{prefix}{item.county}.tif").exists()]
     if not sources:
         raise ValueError(f"{item.derived}: no county mask staged for county {item.county} "
                          f"({', '.join(p for p, _ in COUNTY_MASKS)})")
+    return sources
+
+
+def _rewrite_county_raster(item: Item, der: dict, dest: Path, sources: list[tuple[str, tuple]],
+                           edit, *, suffix: str) -> dict[str, int]:
+    """Rewrite ``item``'s derived raster in strips of 512 rows through
+    ``edit(a, inside, window, transform)``, which changes the strip ``a`` in
+    place and returns counts to add up. ``inside`` is the county on the strip:
+    any of ``sources`` valid, read onto the 10 m grid (nearest).
+
+    The rewrite goes to a sibling file (``suffix``), is re-verified, then
+    replaces the raster; the record's sha256, bytes and value statistics
+    follow. On any failure the raster and its record stay as they were.
+    Returns the summed counts."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.windows import Window, bounds as window_bounds, from_bounds
+
     out = dest / item.derived
-    partial = out.with_name(out.name + ".masked.tif")
-    cleared = cleared_heights = n_valid = 0
+    partial = out.with_name(out.name + suffix)
+    totals: dict[str, int] = {}
+    n_valid = 0
     vmin = vmax = None
     try:
         with rasterio.Env(**SERIAL_VRT), rasterio.open(out) as src, contextlib.ExitStack() as stack:
@@ -878,10 +908,8 @@ def mask_to_county(item: Item, manifest: dict, dest: Path) -> bool:
                                    out_shape=a.shape, boundless=True, fill_value=invalid[0],
                                    resampling=Resampling.nearest)
                         inside |= ~np.isin(v, invalid)
-                    drop = ~inside & (a != -1)
-                    cleared += int(drop.sum())
-                    cleared_heights += int((drop & (a > 0)).sum())
-                    a[~inside] = -1
+                    for key, n in edit(a, inside, win, src.transform).items():
+                        totals[key] = totals.get(key, 0) + n
                     dst.write(a, 1, window=win)
                     valid = a[a != -1]
                     if valid.size:
@@ -897,9 +925,7 @@ def mask_to_county(item: Item, manifest: dict, dest: Path) -> bool:
         raise
     der.update(valid_cells=n_valid, value_min_dm=vmin, value_max_dm=vmax,
                bytes=out.stat().st_size, sha256=sha256_of(out), **check)
-    der["county_mask"] = {"sources": [rel for rel, _ in sources], "cleared_cells": cleared,
-                          "cleared_heights": cleared_heights, "masked_at": _now()}
-    return True
+    return totals
 
 
 def build_vrt(dest: Path, vrt: str, rasters: list[str], srcnodata: int, vrtnodata: int) -> dict:
