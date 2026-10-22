@@ -60,7 +60,10 @@ def test_retired_sigma0_fetchers_are_gone():
 
     from imint.training import cdse_s1_stac
 
-    assert not hasattr(s1_shared, "interp_lut")
+    for name in ("interp_lut", "load_cal_grid", "compute_sigma0", "pick_calibration_urls"):
+        assert not hasattr(s1_shared, name), name
+    for name in ("_ensure_product_cached", "_download", "clear_cache"):
+        assert not hasattr(cdse_s1_stac, name), name
     assert not hasattr(mpc_s1, "fetch_s1_scene")
     assert not hasattr(cdse_s1_stac, "fetch_s1_scene")
     for gone in ("imint.training.aws_s1", "imint.training.s1_fetch"):
@@ -70,13 +73,9 @@ def test_retired_sigma0_fetchers_are_gone():
     assert callable(mpc_s1.search_grd_items) and callable(mpc_s1.sign_item)
 
 
-def test_cdse_calibrated_scene_refuses_before_download(monkeypatch):
+def test_cdse_calibrated_scene_refuses():
     from imint.training import cdse_s1_stac
 
-    def no_download(item):
-        raise AssertionError("must refuse before downloading the product")
-
-    monkeypatch.setattr(cdse_s1_stac, "_ensure_product_cached", no_download)
     with pytest.raises(RuntimeError, match="task 0113"):
         cdse_s1_stac._read_calibrated_scene(object(), 0, 0, 640, 640, 3006, 64, 64,
                                             output_db=True)

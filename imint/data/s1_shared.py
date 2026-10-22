@@ -8,16 +8,15 @@ Users:
 The σ⁰ path over GCP-referenced GRD (``mpc_s1`` / ``aws_s1`` /
 ``cdse_s1_stac`` ``fetch_s1_scene``) is retired (task 0113): its tie points
 sit at ellipsoid height and the calibration lookup was sampled on the warped
-grid. :func:`read_window` refuses such sources.
+grid. :func:`read_window` refuses such sources; the calibration-LUT and σ⁰
+helpers went with it.
 
 What lives here
 ---------------
     * STAC item filtering / orbit / footprint helpers
-    * Asset URL extraction (VV/VH measurement + calibration)
+    * Asset URL extraction (VV/VH measurement)
     * Projected COG window read at requested EPSG and size
-    * Calibration LUT XML parsing, σ⁰ assembly + dB conversion (no caller
-      since task 0113)
-    * CRS-URI parsing
+    * CRS-URI parsing, bbox/size sanity check
 
 What does NOT live here
 -----------------------
@@ -27,7 +26,6 @@ What does NOT live here
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -97,11 +95,6 @@ def orbit_from_item(item: Any) -> str | None:
         if v:
             return str(v).upper()
     return None
-
-
-def pick_best_item(items: list[Any], bbox_4326: tuple[float, float, float, float]) -> Any:
-    """Pick the item whose bbox overlaps the request bbox most."""
-    return max(items, key=lambda it: item_overlap_area(it, bbox_4326))
 
 
 def item_overlap_area(item: Any, bbox_4326: tuple[float, float, float, float]) -> float:
@@ -213,30 +206,7 @@ def pick_measurement_urls(item: Any) -> tuple[str, str]:
     return vv_url, vh_url
 
 
-def pick_calibration_urls(item: Any) -> tuple[str, str]:
-    """Extract VV and VH calibration XML URLs from item.assets."""
-    vv_url = vh_url = None
-    for name, asset in (item.assets or {}).items():
-        href = asset.href
-        lname = name.lower()
-        lhref = href.lower()
-        if "calibration" not in lname and "calibration" not in lhref:
-            continue
-        if "noise" in lname or "noise" in lhref:
-            continue
-        if "vv" in lname or "-vv-" in lhref or "_vv_" in lhref or "vv.xml" in lhref:
-            vv_url = _download_href(asset)
-        elif "vh" in lname or "-vh-" in lhref or "_vh_" in lhref or "vh.xml" in lhref:
-            vh_url = _download_href(asset)
-    if vv_url is None or vh_url is None:
-        raise RuntimeError(
-            f"Item {item.id} missing VV or VH calibration asset "
-            f"(assets: {list((item.assets or {}).keys())})"
-        )
-    return vv_url, vh_url
-
-
-# ── Window read + calibration ─────────────────────────────────────────────
+# ── Window read ──────────────────────────────────────────────────────────
 
 # Message raised for a GCP-referenced source (shared so callers/tests can match it).
 GCP_SIGMA0_RETIRED = (
@@ -300,113 +270,6 @@ def read_window(
             fill_value=0,
         ).astype(np.float32)
     return dn, window
-
-
-# Calibration LUT cache — shared across all backends, keyed by the canonical
-# product id. Values are dicts ``{"vv": grid, "vh": grid}``.
-_lut_cache: dict[str, dict[str, dict[str, np.ndarray]]] = {}
-import threading as _threading
-_lut_cache_guard = _threading.Lock()
-
-
-def load_cal_grid(
-    cal_xml_source: str | Path | bytes,
-    product_id: str,
-    pol: str,
-) -> dict[str, np.ndarray]:
-    """Parse and cache the sigmaNought LUT grid from a calibration XML.
-
-    Accepts a path, an HTTP/S3 URL (read into memory first by the caller
-    and passed as bytes), or raw bytes.
-    """
-    with _lut_cache_guard:
-        per_prod = _lut_cache.get(product_id)
-        if per_prod is not None and pol in per_prod:
-            return per_prod[pol]
-
-    if isinstance(cal_xml_source, bytes):
-        root = ET.fromstring(cal_xml_source)
-    else:
-        tree = ET.parse(cal_xml_source)
-        root = tree.getroot()
-
-    vectors = list(root.iter("calibrationVector"))
-    if not vectors:
-        raise RuntimeError(f"{cal_xml_source}: no <calibrationVector> elements")
-
-    first_pixels = _parse_int_array(vectors[0].find("pixel").text)
-    n_pix = len(first_pixels)
-
-    lines = np.empty(len(vectors), dtype=np.float64)
-    values = np.empty((len(vectors), n_pix), dtype=np.float64)
-
-    for i, v in enumerate(vectors):
-        line_el = v.find("line")
-        pix_el = v.find("pixel")
-        sig_el = v.find("sigmaNought")
-        if line_el is None or pix_el is None or sig_el is None:
-            raise RuntimeError(f"{cal_xml_source}: malformed calibrationVector {i}")
-        pix_arr = _parse_int_array(pix_el.text)
-        sig_arr = _parse_float_array(sig_el.text)
-        if len(pix_arr) != n_pix or len(sig_arr) != n_pix:
-            raise RuntimeError(
-                f"{cal_xml_source}: calibrationVector {i} width mismatch "
-                f"({len(pix_arr)}/{len(sig_arr)} vs expected {n_pix})"
-            )
-        lines[i] = float(line_el.text)
-        values[i, :] = sig_arr
-
-    entry = {
-        "lines": lines,
-        "pixels": np.asarray(first_pixels, dtype=np.float64),
-        "values": values,
-    }
-
-    with _lut_cache_guard:
-        per_prod = _lut_cache.setdefault(product_id, {})
-        per_prod[pol] = entry
-    return entry
-
-
-def compute_sigma0(
-    vv_dn: np.ndarray, vh_dn: np.ndarray,
-    vv_lut: np.ndarray, vh_lut: np.ndarray,
-    *,
-    output_db: bool = False,
-) -> np.ndarray:
-    """Assemble σ⁰ = DN² / LUT² per polarisation; return ``(2, H, W)``.
-
-    DN==0 pixels are preserved as 0 (genuine nodata). With ``output_db``,
-    apply ``10·log10`` conversion.
-    """
-    with np.errstate(divide="ignore", invalid="ignore"):
-        vv_sigma0 = (vv_dn.astype(np.float32) ** 2) / (vv_lut ** 2)
-        vh_sigma0 = (vh_dn.astype(np.float32) ** 2) / (vh_lut ** 2)
-
-    vv_sigma0 = np.where(vv_dn == 0, 0.0, vv_sigma0).astype(np.float32)
-    vh_sigma0 = np.where(vh_dn == 0, 0.0, vh_sigma0).astype(np.float32)
-
-    if output_db:
-        vv_sigma0 = to_db(vv_sigma0)
-        vh_sigma0 = to_db(vh_sigma0)
-
-    return np.stack([vv_sigma0, vh_sigma0], axis=0)
-
-
-def to_db(x: np.ndarray) -> np.ndarray:
-    """Convert linear σ⁰ to dB, replacing non-finite with 0 (nodata)."""
-    with np.errstate(divide="ignore", invalid="ignore"):
-        out = 10.0 * np.log10(np.maximum(x, 1e-10))
-    out = np.where(np.isfinite(out) & (x > 0), out, 0.0)
-    return out.astype(np.float32)
-
-
-def _parse_int_array(text: str) -> list[int]:
-    return [int(x) for x in text.split()]
-
-
-def _parse_float_array(text: str) -> list[float]:
-    return [float(x) for x in text.split()]
 
 
 # ── Bbox/size sanity check ────────────────────────────────────────────────

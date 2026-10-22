@@ -13,8 +13,8 @@ What remains:
       (:func:`fetch_s1_season_composite`, :func:`_select_spread_scenes`,
       :func:`_nodata_median`) — ``pc_s1_rtc`` reuses the scene spread rule.
     * :func:`_read_calibrated_scene` refuses, so the composite cannot produce
-      a σ⁰ tile; ``fetch_s1_scene`` is gone.
-    * The product download cache helpers, now without a caller.
+      a σ⁰ tile; ``fetch_s1_scene``, the GRD product download/cache
+      (``$S1_CACHE_DIR``) and ``clear_cache`` are gone.
 
 See ``docs/training/s1_fetch.md`` for the history of this path.
 """
@@ -22,73 +22,12 @@ from __future__ import annotations
 
 import os
 import threading
-import urllib.error
-import urllib.request
 import warnings
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-# Reuse CDSE OAuth token machinery — STAC search is anonymous, but asset
-# downloads go through the authenticated zipper endpoint.
-from imint.data.cdse_vpp import _get_token
 from imint.data import s1_shared
-
-# CDSE Keycloak token endpoint (password grant). The zipper/OData download
-# nodes reject the client_credentials service-account token with 401 (noted
-# in k8s/enrich-s1-job.yaml 2026-08-04); the resource-owner password grant
-# against the public client is the account CDSE authorises for downloads.
-_CDSE_KEYCLOAK_TOKEN_URL = (
-    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
-    "protocol/openid-connect/token"
-)
-_pw_token: str | None = None
-_pw_token_expires: float = 0.0
-_pw_token_lock = threading.Lock()
-
-
-def _get_download_token() -> str:
-    """Token for authenticated COG/OData downloads.
-
-    Prefers the resource-owner **password** grant (``CDSE_USER`` +
-    ``CDSE_PASSWORD``, or the ``user``/``password`` keys of the
-    ``cdse-credentials`` secret) — that is the account the download nodes
-    authorise. Falls back to the client-credentials token from
-    :func:`cdse_vpp._get_token` when no password is configured (older setups
-    where the service account did have download rights).
-    """
-    import json
-    import time
-    import urllib.parse
-
-    user = os.environ.get("CDSE_USER") or os.environ.get("CDSE_USERNAME")
-    password = os.environ.get("CDSE_PASSWORD")
-    if not (user and password):
-        # No password grant available → keep the historical behaviour.
-        return _get_token()
-
-    global _pw_token, _pw_token_expires
-    with _pw_token_lock:
-        if _pw_token and time.time() < _pw_token_expires - 60:
-            return _pw_token
-
-    data = urllib.parse.urlencode({
-        "grant_type": "password",
-        "client_id": "cdse-public",
-        "username": user,
-        "password": password,
-    }).encode()
-    req = urllib.request.Request(
-        _CDSE_KEYCLOAK_TOKEN_URL, data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
-        td = json.loads(resp.read())
-    with _pw_token_lock:
-        _pw_token = td["access_token"]
-        _pw_token_expires = time.time() + td.get("expires_in", 300)
-    return _pw_token
 
 # ── Module constants ─────────────────────────────────────────────────────
 
@@ -103,18 +42,6 @@ _STAC_ROOT = "https://stac.dataspace.copernicus.eu/v1"
 # CLMS collections, suggesting Sentinel collections are paginated
 # beyond the default page size — but the per-collection GET works.
 _STAC_COLLECTION = "sentinel-1-grd"
-
-_PRODUCT_CACHE_DIR = Path(os.environ.get("S1_CACHE_DIR", "/data/s1_cache"))
-
-_DOWNLOAD_TIMEOUT_S = 300  # 2 GB @ reasonable throughput
-_REQUEST_TIMEOUT_S = 60
-_MAX_RETRIES = 3
-_RETRY_DELAY_S = 2.0
-
-# Guard concurrent downloads of the same product so N parallel tile-workers
-# don't all race to pull the same 2 GB file.
-_product_locks: dict[str, threading.Lock] = {}
-_product_locks_guard = threading.Lock()
 
 # CDSE STAC's Cloudflare WAF rate-limits by source IP. All tile-workers in a
 # pod share one IP, so a burst of parallel searches (orbit probe + 2
@@ -183,8 +110,8 @@ def fetch_s1_season_composite(
     Searches CDSE STAC for every IW-GRDH Sentinel-1 scene inside the
     ``doy_window`` of ``year``, keeps only ``orbit_direction`` (never mixes
     ASC/DESC — their look geometry differs and a mixed median corrupts σ⁰),
-    σ⁰-calibrates each surviving scene (reusing the existing ``s1_shared``
-    calibration + product cache), rejects scenes with >``nodata_threshold``
+    reads each surviving scene through :func:`_read_calibrated_scene` (retired,
+    task 0113: it raises), rejects scenes with >``nodata_threshold``
     zero fraction, and returns the **per-pixel median** VV/VH over up to
     ``max_scenes`` scenes spread across the window (not clustered).
 
@@ -263,7 +190,7 @@ def fetch_s1_season_composite(
                                      h_px, w_px, output_db=output_db)
         if sar is None:
             continue
-        # nodata gate on the raw (pre-dB) zero mask: compute_sigma0 preserves
+        # nodata gate on the raw (pre-dB) zero mask: the σ⁰ reader preserved
         # DN==0 as 0.0, and dB maps 0 → 0.0 too, so a zero VV pixel is nodata
         # in both spaces.
         if float((sar[0] == 0).mean()) > nodata_threshold:
@@ -331,7 +258,7 @@ def _read_calibrated_scene(
     *,
     output_db: bool,
 ) -> np.ndarray | None:
-    """Retired (task 0113): always raises, before any product download.
+    """Retired (task 0113): always raises.
 
     It window-read a GCP-referenced GRD (ellipsoid-height tie points) and
     sampled the calibration LUT on the warped grid — see the module
@@ -467,173 +394,3 @@ def _stac_search_with_backoff(
             print(f"    [STAC S1] {date}: search failed: {e}")
             return None
     return None
-
-
-def clear_cache(product_id: str | None = None) -> int:
-    """Delete cached product(s) from disk.
-
-    Args:
-        product_id: Remove only this product's cache dir. ``None`` wipes
-            the whole ``S1_CACHE_DIR``.
-
-    Returns:
-        Number of product directories removed.
-    """
-    import shutil
-
-    if not _PRODUCT_CACHE_DIR.exists():
-        return 0
-
-    if product_id is not None:
-        target = _PRODUCT_CACHE_DIR / product_id
-        if target.exists():
-            shutil.rmtree(target)
-            with _lut_cache_guard:
-                _lut_cache.pop(product_id, None)
-            return 1
-        return 0
-
-    n = 0
-    for child in _PRODUCT_CACHE_DIR.iterdir():
-        if child.is_dir():
-            shutil.rmtree(child)
-            n += 1
-    return n
-
-
-# ── Internal: product cache & downloads ──────────────────────────────────
-
-def _product_lock(product_id: str) -> threading.Lock:
-    """Get / create the per-product download lock."""
-    with _product_locks_guard:
-        lock = _product_locks.get(product_id)
-        if lock is None:
-            lock = threading.Lock()
-            _product_locks[product_id] = lock
-        return lock
-
-
-def _prune_cache_to_cap() -> None:
-    """Evict oldest product dirs until the cache fits ``S1_CACHE_MAX_GB``.
-
-    The cache shares the training PVC: uncapped it grew to 317 GB and filled
-    the 1.6 T volume mid-run (2026-08-17), failing every download with
-    ENOSPC. LRU by directory mtime — cache HITS refresh mtime in
-    ``_ensure_product_cached``, so recently used products survive. Dirs
-    younger than 30 min are never evicted (may be mid-download / in use by a
-    concurrent worker). Prunes to 90 % of cap to avoid thrashing.
-    """
-    import shutil
-    import time
-
-    cap_gb = float(os.environ.get("S1_CACHE_MAX_GB", "150"))
-    cap = cap_gb * 1024**3
-    root = _PRODUCT_CACHE_DIR
-    if not root.is_dir():
-        return
-    dirs = []
-    total = 0
-    now = time.time()
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
-        size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
-        dirs.append((d.stat().st_mtime, size, d))
-        total += size
-    if total <= cap:
-        return
-    dirs.sort()  # oldest mtime first
-    target = cap * 0.9
-    for mtime, size, d in dirs:
-        if total <= target:
-            break
-        if now - mtime < 1800:  # in-use safety window
-            continue
-        shutil.rmtree(d, ignore_errors=True)
-        total -= size
-        print(f"  [S1 cache] evicted {d.name} ({size / 1024**3:.1f} GB) "
-              f"— cache {total / 1024**3:.0f}/{cap_gb:.0f} GB")
-
-
-def _ensure_product_cached(item: Any) -> tuple[Path, Path, Path, Path]:
-    """Download VV/VH COGs + calibration XMLs if missing. Return their paths.
-
-    Returns:
-        (vv_cog, vh_cog, vv_calibration_xml, vh_calibration_xml)
-    """
-    product_id = item.id
-    prod_dir = _PRODUCT_CACHE_DIR / product_id
-
-    with _product_lock(product_id):
-        prod_dir.mkdir(parents=True, exist_ok=True)
-
-        vv_cog = prod_dir / "measurement_vv.tiff"
-        vh_cog = prod_dir / "measurement_vh.tiff"
-        vv_cal = prod_dir / "calibration_vv.xml"
-        vh_cal = prod_dir / "calibration_vh.xml"
-
-        if all(p.exists() and p.stat().st_size > 0 for p in (vv_cog, vh_cog, vv_cal, vh_cal)):
-            os.utime(prod_dir)  # refresh LRU recency on cache hit
-            return vv_cog, vh_cog, vv_cal, vh_cal
-
-        _prune_cache_to_cap()  # make room BEFORE adding a new product
-
-        vv_cog_url, vh_cog_url = s1_shared.pick_measurement_urls(item)
-        vv_cal_url, vh_cal_url = s1_shared.pick_calibration_urls(item)
-
-        token = _get_download_token()
-
-        if not vv_cog.exists() or vv_cog.stat().st_size == 0:
-            _download(vv_cog_url, vv_cog, token)
-        if not vh_cog.exists() or vh_cog.stat().st_size == 0:
-            _download(vh_cog_url, vh_cog, token)
-        if not vv_cal.exists() or vv_cal.stat().st_size == 0:
-            _download(vv_cal_url, vv_cal, token)
-        if not vh_cal.exists() or vh_cal.stat().st_size == 0:
-            _download(vh_cal_url, vh_cal, token)
-
-        return vv_cog, vh_cog, vv_cal, vh_cal
-
-
-def _download(url: str, dest: Path, token: str) -> None:
-    """Stream a URL to disk via an atomic tmp → rename pattern."""
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    last_err: Exception | None = None
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT_S) as resp, \
-                 open(tmp, "wb") as f:
-                while True:
-                    chunk = resp.read(1 << 20)  # 1 MB
-                    if not chunk:
-                        break
-                    f.write(chunk)
-            tmp.rename(dest)
-            return
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
-            last_err = e
-            if isinstance(e, urllib.error.HTTPError) and e.code == 401:
-                # Token expired mid-download — refresh once.
-                token = _get_download_token()
-                req = urllib.request.Request(
-                    url,
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-            if attempt < _MAX_RETRIES:
-                import time
-                time.sleep(_RETRY_DELAY_S * (attempt + 1))
-                continue
-            raise
-        finally:
-            if tmp.exists() and not dest.exists():
-                # Left-over partial on failure; clean up so next retry is clean.
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
-    if last_err is not None:
-        raise last_err

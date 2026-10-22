@@ -1,7 +1,8 @@
 # Sentinel-1 GRD fetch — STAC + direct COG path
 
 > **Retired 2026-10-22 (task 0113).** The σ⁰ path described below is gone:
-> `fetch_s1_scene` (CDSE / MPC / AWS) and the `s1_fetch` cascade are removed,
+> `fetch_s1_scene` (CDSE / MPC / AWS), the `s1_fetch` cascade, the product
+> cache (`$S1_CACHE_DIR`, `clear_cache`) and the LUT/σ⁰ helpers are removed,
 > `s1_shared.read_window` refuses GCP-referenced GRD, and
 > `scripts/enrich_tiles_s1.py` refuses `--s1-backend cdse-stac` / `cascade`.
 > Why: the window was warped over the product's own tie points, which sit at

@@ -9,8 +9,8 @@
 # gamma-naught — analysis-ready float32 COGs, no calibration, no product
 # download. Each tile reads ONLY its own window (~MB) instead of the ~2 GB
 # per-product the CDSE-GRD path pulled, so:
-#   * no PVC product cache ($S1_CACHE_* removed — the CDSE path's guard stays
-#     in cdse_s1_stac.py untouched, but nothing here uses it),
+#   * no PVC product cache ($S1_CACHE_* removed; the CDSE GRD path and its
+#     cache code are retired, task 0113),
 #   * the ~45 tiles/h + PVC-fill failure mode is gone.
 # Stored units: LINEAR γ⁰ (the CROMA/TerraMind normalizers apply 10*log10
 # internally — see pc_s1_rtc.py module docstring).
