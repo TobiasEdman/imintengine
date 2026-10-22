@@ -44,3 +44,31 @@ def s1_source_of(value) -> str | None:
     if isinstance(value, bytes):
         value = value.decode("utf-8", "replace")
     return str(value)
+
+
+def s1_unusable_reason(data) -> str | None:
+    """Why a tile's S1 composite may not be used, or ``None`` if it may.
+
+    The one rule every SAR gate applies (dataset, pinned plot set, plot
+    feature extraction, k8s preflights): ``s1_enrich_v == S1_ENRICH_VERSION``
+    AND ``s1_source == S1_SOURCE``. ``data`` is any mapping with ``.get``
+    over the tile's keys — a dict, or an open ``np.load`` NpzFile (only the
+    two scalar stamps are read). A missing stamp counts as unusable.
+    """
+    version = data.get("s1_enrich_v")
+    if getattr(version, "size", 1) != 1:
+        return "s1_enrich_v=<not a scalar>"
+    if version is not None and hasattr(version, "item"):
+        version = version.item()
+    version = 0 if version is None else int(version)
+    if version != S1_ENRICH_VERSION:
+        return f"s1_enrich_v={version}"
+    source = s1_source_of(data.get("s1_source"))
+    if source != S1_SOURCE:
+        return f"s1_source={source!r}"
+    return None
+
+
+def s1_usable(data) -> bool:
+    """True iff the tile's S1 passes :func:`s1_unusable_reason`."""
+    return s1_unusable_reason(data) is None

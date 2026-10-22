@@ -69,7 +69,7 @@ from .era5_aux import (
     format_era5_cell_id,
 )
 from .errors import TilePrerequisiteError
-from .s1_enrichment import S1_ENRICH_VERSION, S1_SOURCE, s1_source_of
+from .s1_enrichment import S1_ENRICH_VERSION, S1_SOURCE, s1_unusable_reason
 from .tile_bbox import resolve_tile_bbox
 from .tile_config import TileConfig
 from .tile_time import (
@@ -1098,17 +1098,17 @@ class UnifiedDataset(Dataset):
         # trap (v1/v2: wrong shape / wrong units; v3: wrong composite year —
         # see imint/training/s1_enrichment.py). Gate on the shared version at
         # index time so stale tiles are dropped here (logged) instead of
-        # raising mid-epoch in __getitem__. The tile's `s1_source` must also
-        # name the RTC backend (S1_SOURCE): a missing or other source — e.g.
-        # the retired CDSE GRD σ⁰ path, task 0113 — is dropped too.
+        # raising mid-epoch in __getitem__. The rule (shared with every other
+        # SAR gate, s1_enrichment.s1_unusable_reason) also requires
+        # `s1_source == S1_SOURCE`: a missing or other source — e.g. the
+        # retired CDSE GRD σ⁰ path, task 0113 — is dropped too.
         needs_sar_gate = bool(
             {"croma_base", "terramind_v1_base"} & set(self.model_keys)
         )
         if required:
             kept: list[dict] = []
             dropped = 0
-            dropped_old_s1 = 0
-            dropped_s1_source = 0
+            unusable_s1: dict[str, int] = {}
             for e in self._entries:
                 try:
                     with np.load(e["path"], allow_pickle=True) as z:
@@ -1116,15 +1116,9 @@ class UnifiedDataset(Dataset):
                         if not required.issubset(present):
                             dropped += 1
                             continue
-                        if needs_sar_gate and int(z["s1_enrich_v"].item()
-                                                  if "s1_enrich_v" in present
-                                                  else 0) != S1_ENRICH_VERSION:
-                            dropped_old_s1 += 1
-                            continue
-                        if needs_sar_gate and s1_source_of(
-                                z["s1_source"] if "s1_source" in present
-                                else None) != S1_SOURCE:
-                            dropped_s1_source += 1
+                        why = s1_unusable_reason(z) if needs_sar_gate else None
+                        if why is not None:
+                            unusable_s1[why] = unusable_s1.get(why, 0) + 1
                             continue
                 except Exception:
                     dropped += 1
@@ -1134,12 +1128,11 @@ class UnifiedDataset(Dataset):
             logger.info(
                 "UnifiedDataset[%s]: model_keys=%s require tile keys %s — "
                 "kept %d tiles, dropped %d missing a required key, "
-                "dropped %d with s1_enrich_v!=%d (stale S1 — re-run "
-                "enrich_tiles_s1.py --s1-backend pc-rtc), "
-                "dropped %d with s1_source!=%r",
+                "dropped %d with unusable S1 %s (need s1_enrich_v==%d and "
+                "s1_source==%r — re-run enrich_tiles_s1.py --s1-backend pc-rtc)",
                 split, self.model_keys, sorted(required),
-                len(kept), dropped, dropped_old_s1, S1_ENRICH_VERSION,
-                dropped_s1_source, S1_SOURCE,
+                len(kept), dropped, sum(unusable_s1.values()),
+                dict(sorted(unusable_s1.items())), S1_ENRICH_VERSION, S1_SOURCE,
             )
 
         # Apply any smoke limit only after label/model eligibility filtering,
@@ -2025,25 +2018,16 @@ class UnifiedDataset(Dataset):
         # mis-shaped, double-logged, or wrong-season stack to the SAR
         # encoders.
         if needs_sar:
-            s1_ver = int(data.get("s1_enrich_v", 0))
-            if s1_ver != S1_ENRICH_VERSION:
+            why = s1_unusable_reason(data)
+            if why is not None:
                 raise TilePrerequisiteError(
-                    f"tile requires s1_enrich_v=={S1_ENRICH_VERSION} RTC γ⁰ season composite for "
+                    f"tile requires s1_enrich_v=={S1_ENRICH_VERSION} and "
+                    f"s1_source=={S1_SOURCE!r} (RTC γ⁰ season composite) for "
                     f"model_keys={sorted(set(self.model_keys) & {'croma_base', 'terramind_v1_base'})}"
-                    f" but found s1_enrich_v={s1_ver}. Re-run the S1 season "
-                    f"enrichment job (scripts/enrich_tiles_s1.py "
-                    f"--s1-backend pc-rtc / k8s/enrich-s1-season-job.yaml) "
-                    f"over this tile."
-                )
-            s1_src = s1_source_of(data.get("s1_source", None))
-            if s1_src != S1_SOURCE:
-                raise TilePrerequisiteError(
-                    f"tile requires s1_source=={S1_SOURCE!r} (RTC γ⁰) for "
-                    f"model_keys={sorted(set(self.model_keys) & {'croma_base', 'terramind_v1_base'})}"
-                    f" but found s1_source={s1_src!r}. The CDSE GRD σ⁰ "
-                    f"backend is retired (task 0113); re-run "
-                    f"scripts/enrich_tiles_s1.py --s1-backend pc-rtc over "
-                    f"this tile."
+                    f" but found {why}. The CDSE GRD σ⁰ backend is retired "
+                    f"(task 0113). Re-run the S1 season enrichment job "
+                    f"(scripts/enrich_tiles_s1.py --s1-backend pc-rtc / "
+                    f"k8s/enrich-s1-season-job.yaml) over this tile."
                 )
             s1_comp = data.get("s1_vv_vh", None)
             if s1_comp is None:

@@ -589,14 +589,10 @@ def _qualify_npz_bytes(
             if any(key not in names for key in keys):
                 return False
             for key in keys:
+                # key -> predicate over the open archive (the shared S1 rule
+                # for s1_vv_vh: s1_enrichment.s1_usable).
                 requirement = VERSION_REQUIREMENTS.get(key)
-                if requirement is None:
-                    continue
-                version_key, wanted = requirement
-                if version_key not in names:
-                    return False
-                value = np.asarray(archive[version_key])
-                if value.size != 1 or int(value.reshape(-1)[0]) != wanted:
+                if requirement is not None and not requirement(archive):
                     return False
     except (EOFError, OSError, TypeError, ValueError):
         return None

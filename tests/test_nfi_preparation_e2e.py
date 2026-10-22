@@ -53,7 +53,7 @@ def prepared_inputs(tmp_path, monkeypatch):
     for p in directories.values(): p.mkdir()
     tile = dict(spectral=np.ones((24,8,8)), tessera=np.ones((128,8,8)),
                 s1_vv_vh=np.ones((2,8,8)), b08=np.ones((4,8,8)), rededge=np.ones((12,8,8)),
-                has_tessera=1, tessera_source="geotessera-0.10.2", has_s1=1, s1_enrich_v=4,
+                has_tessera=1, tessera_source="geotessera-0.10.2", has_s1=1, s1_enrich_v=4, s1_source="pc-rtc-gamma0",
                 dem=np.zeros((8,8)), easting=500000., northing=6500000.,
                 dates=np.array(["2023-10-07","2024-05-29","2024-06-28","2024-07-28"]),
                 doy=np.array([280,150,180,210]))

@@ -41,35 +41,36 @@ import pandas as pd
 # against_nfi) — what direct execution gets for free but importlib loads
 # (the test suite) do not.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Repo root for the shared S1 rule (stdlib-only module: the CPU pod that runs
+# this script installs just numpy/pandas/pyarrow).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from imint.training.s1_enrichment import s1_usable
 
 # Keys a tile must carry for EVERY ladder column to forward it.
 # croma_base + terramind_v1_base require SAR; the optical-only families
 # (prithvi, tessera, clay) build from spectral/b08/rededge, present on
 # all tiles. Extend this list if a future column adds a modality.
 REQUIRED_KEYS = ("s1_vv_vh",)
-# Presence is NOT sufficient: the dataset gates SAR on the enrichment
-# VERSION (s1_enrich_v == 4, RTC γ⁰ season composite — f221f0c), so a
-# tile with an old-version s1_vv_vh was never seen by SAR training and
-# crashes extract/dense at forward time. Terramind's third submission
-# died on exactly one such tile (47023938, v=0). key -> (version_key,
-# required_value); checked wherever REQUIRED_KEYS is.
-VERSION_REQUIREMENTS = {"s1_vv_vh": ("s1_enrich_v", 4)}
+# Presence is NOT sufficient: the dataset gates SAR on the shared S1 rule
+# (imint.training.s1_enrichment.s1_usable: s1_enrich_v == 4 AND s1_source ==
+# "pc-rtc-gamma0", the RTC γ⁰ season composite), so a tile failing it was
+# never seen by SAR training and crashes extract/dense at forward time.
+# Terramind's third submission died on exactly one such tile (47023938,
+# v=0). key -> predicate over the open npz; checked wherever REQUIRED_KEYS is.
+VERSION_REQUIREMENTS = {"s1_vv_vh": s1_usable}
 
 
 def npz_version_ok(path: Path, keys: tuple[str, ...]) -> bool:
-    """True iff every required key's version stamp matches. Reads only
+    """True iff every required key's stamps pass its rule. Reads only
     the scalar stamps (lazy npz), not the arrays."""
     need = [VERSION_REQUIREMENTS[k] for k in keys if k in VERSION_REQUIREMENTS]
     if not need:
         return True
     try:
         with np.load(path) as z:
-            for vkey, want in need:
-                if vkey not in z.files or int(z[vkey]) != want:
-                    return False
+            return all(ok(z) for ok in need)
     except (OSError, ValueError, zipfile.BadZipFile):
         return False
-    return True
 
 
 def _crop_offset(tile_h: int, img_size: int) -> int:
