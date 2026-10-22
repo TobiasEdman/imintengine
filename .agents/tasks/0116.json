@@ -2,9 +2,12 @@
   "id": "0116",
   "subject": "Build QML experiment contracts and dry-run package",
   "description": "Implement the first QML study milestone: isolated experiments/qml_eo Python package, authenticated synthetic feature bundles, validation CLI, bounded dry-run job planner, input-readiness inventory, documentation and tests. Own experiments/qml_eo only plus this task record. Existing model/extraction code and cluster jobs remain untouched. No real-data extraction, training, evaluation-population freeze or deployment in this milestone.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "codex/qml-eo-foundation",
   "created_at": "2026-10-22T13:19:29.210361+00:00",
-  "updated_at": "2026-10-22T13:19:29.210361+00:00"
+  "updated_at": "2026-10-22T13:19:40Z",
+  "claimed_by": "codex-01a16377-d7b4-7780-95aa-bb0908a0958d",
+  "runtime": "codex",
+  "claimed_at": "2026-10-22T13:19:40Z"
 }
