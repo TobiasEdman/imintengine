@@ -917,10 +917,10 @@ def test_missing_tessera_tile_does_not_qualify(tmp_path):
 
     keys = required_npz_keys()
     full = tmp_path / "full.npz"
-    np.savez(full, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4),
+    np.savez(full, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"),
              tessera=np.zeros(1))
     no_tess = tmp_path / "no_tess.npz"
-    np.savez(no_tess, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4))
+    np.savez(no_tess, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"))
     stale_sar = tmp_path / "stale_sar.npz"
     np.savez(stale_sar, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(0),
              tessera=np.zeros(1))
@@ -964,7 +964,7 @@ def _write_lucas_fixture(tmp_path, n_tiles=10, with_tessera=True,
     for t, name in enumerate(crop_tile_names):
         kw = {
             "s1_vv_vh": np.array([t], dtype=np.float32),
-            "s1_enrich_v": np.int32(4),
+            "s1_enrich_v": np.int32(4), "s1_source": np.bytes_("pc-rtc-gamma0"),
         }
         if with_tessera or t != 0:  # tile00 optionally lacks the embedding
             kw["tessera"] = np.array([t], dtype=np.float32)
@@ -1066,7 +1066,7 @@ def test_frozen_split_is_immutable(monkeypatch, tmp_path, capsys):
 
     # a new tile lands on the PVC; the re-run must ignore it entirely
     np.savez(data_dir / "tile99.npz", s1_vv_vh=np.zeros(1),
-             s1_enrich_v=np.int32(4), tessera=np.zeros(1))
+             s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"), tessera=np.zeros(1))
     _run_split_builder(monkeypatch, index, data_dir, out_dir)
     assert "refusing to overwrite" in capsys.readouterr().out
     assert (out_dir / "lucas_crop_distill_index.parquet").read_bytes() == frozen_index
@@ -1998,7 +1998,7 @@ def test_freeze_revalidates_qualified_tile_files(monkeypatch, tmp_path):
     assert state == "corrupt"
     assert "empty" in detail
 
-    np.savez(tile_path, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4))
+    np.savez(tile_path, s1_vv_vh=np.zeros(1), s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"))
     state, detail = freeze_state(out_dir)
     assert state == "corrupt"
     assert "size changed" in detail or "required_keys" in detail
@@ -2423,7 +2423,7 @@ def test_full_verify_binds_exact_distill_npz_bytes(
         np.savez(
             target,
             s1_vv_vh=np.array([9876], dtype=np.float32),
-            s1_enrich_v=np.int32(4),
+            s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"),
             tessera=np.array([9876], dtype=np.float32),
         )
     elif damage == "missing":
@@ -2457,7 +2457,7 @@ def test_full_verify_binds_exact_validator_npz_bytes(monkeypatch, tmp_path):
     np.savez(
         target,
         s1_vv_vh=np.array([1234], dtype=np.float32),
-        s1_enrich_v=np.int32(4),
+        s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"),
         tessera=np.array([1234], dtype=np.float32),
     )
 
@@ -2665,7 +2665,7 @@ def test_tile_hash_and_qualification_share_one_capture(monkeypatch, tmp_path):
     np.savez(
         tile,
         s1_vv_vh=np.zeros(1),
-        s1_enrich_v=np.int32(4),
+        s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"),
         tessera=np.zeros(1),
     )
     np.savez(replacement, s1_vv_vh=np.ones(1), s1_enrich_v=np.int32(0))
@@ -2706,13 +2706,13 @@ def test_tile_capture_rejects_path_swap_during_read(monkeypatch, tmp_path):
     np.savez(
         tile,
         s1_vv_vh=np.zeros(1),
-        s1_enrich_v=np.int32(4),
+        s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"),
         tessera=np.zeros(1),
     )
     np.savez(
         replacement,
         s1_vv_vh=np.ones(1),
-        s1_enrich_v=np.int32(4),
+        s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"),
         tessera=np.ones(1),
     )
     real_read = blcs.os.read

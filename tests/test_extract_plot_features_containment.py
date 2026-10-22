@@ -37,7 +37,7 @@ def test_required_npz_key_filters_stale_tiles_before_forward(
     stale = tmp_path / "stale.npz"
     unreadable = tmp_path / "unreadable.npz"
     np.savez(valid, spectral=np.zeros(1), s1_vv_vh=np.zeros(1),
-             s1_enrich_v=np.int32(4))
+             s1_enrich_v=np.int32(4), s1_source=np.bytes_("pc-rtc-gamma0"))
     np.savez(missing, spectral=np.zeros(1))
     np.savez(stale, spectral=np.zeros(1), s1_vv_vh=np.zeros(1),
              s1_enrich_v=np.int32(0))

@@ -756,8 +756,9 @@ def _build_routed_batch(data, tile_path, device, img_size, family):
     Returns ``(batch, y0, x0, crop_sz)`` where ``batch`` carries (1, C, cs, cs)
     tensors keyed as ``family_forward`` expects.
 
-    Fail-loud contract (mirrors unified_dataset): CROMA/TerraMind require the
-    v3 RTC-γ⁰ season-composite S1 (``s1_enrich_v==3``); a pre-v3 leftover
+    Fail-loud contract (mirrors unified_dataset): CROMA/TerraMind require S1
+    that passes the shared rule (``s1_enrichment.s1_usable``: the current
+    ``s1_enrich_v`` and ``s1_source == S1_SOURCE``, RTC γ⁰); any other tile
     raises inside ``_build_model_specific_tensors`` rather than silently
     feeding a mis-composited SAR stack. Clay is optical-only and needs no S1.
     """

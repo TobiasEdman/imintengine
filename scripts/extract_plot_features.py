@@ -203,7 +203,9 @@ def filter_index_by_npz_requirements(
     Qualification deliberately shares the canonical probes used by
     ``build_pinned_plot_set`` and ``distill_forest_labels``. In particular,
     key presence alone is insufficient for SAR: ``s1_vv_vh`` also requires
-    the current ``s1_enrich_v`` stamp. Filtering before model construction and
+    the shared S1 rule (``s1_enrichment.s1_usable``: the current
+    ``s1_enrich_v`` and ``s1_source == S1_SOURCE``). Filtering before model
+    construction and
     forwarding keeps stale, non-pinned tiles out of the inference loop while
     the downstream ``nfi_head_cv --pinned-plots`` equality gate still rejects
     any missing pinned plot.
