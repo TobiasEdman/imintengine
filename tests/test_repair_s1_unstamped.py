@@ -576,3 +576,97 @@ def test_verify_stripped_rejects_a_wrong_strip(strip_dir, damage, match):
             zout.writestr(info, body)
     with pytest.raises(ValueError, match=match):
         repair.verify_stripped(str(original), str(bad))
+
+
+# --- The backup dir must not alias the data dir (Codex BLOCK, PR 100): a
+# tile would be its own "identical backup" and its original bytes would
+# have no backup at all.
+
+_ALIASES = ["same", "dot", "symlink", "case", "backup_in_data",
+            "backup_in_case_alias", "data_in_backup"]
+
+
+def _alias(kind, tmp_path, d):
+    if kind in ("case", "backup_in_case_alias"):
+        alias = d.parent / d.name.upper()
+        if not alias.exists():
+            pytest.skip("case-sensitive file system")
+        return str(alias if kind == "case" else alias / "backup")
+    if kind == "symlink":
+        link = tmp_path / "link"
+        link.symlink_to(d, target_is_directory=True)
+        return str(link)
+    return {"same": str(d), "dot": os.path.join(str(d), "."),
+            "backup_in_data": str(d / "backup"),
+            "data_in_backup": str(tmp_path)}[kind]
+
+
+def _tree(root):
+    """Every path below ``root`` (dirs too) with file bytes; links as such."""
+    from pathlib import Path
+
+    out = {}
+    for dp, dns, fns in os.walk(root):
+        for n in dns + fns:
+            p = Path(dp, n)
+            out[str(p.relative_to(root))] = (
+                ("link", os.readlink(p)) if p.is_symlink()
+                else p.read_bytes() if p.is_file() else "dir")
+    return out
+
+
+@pytest.mark.parametrize("mode", ["--strip", "--apply"])
+@pytest.mark.parametrize("kind", _ALIASES)
+def test_backup_dir_aliasing_the_data_dir_is_refused(strip_dir, tmp_path,
+                                                     monkeypatch, capsys,
+                                                     mode, kind):
+    calls = []
+    monkeypatch.setattr(enricher, "enrich_one_tile", _fake_enrich(calls))
+    backup = _alias(kind, tmp_path, strip_dir)
+    before = _tree(tmp_path)
+
+    rc = repair.main(["--data-dir", str(strip_dir), mode, "--expect", "2",
+                      "--backup-dir", backup])
+    assert rc == repair.EXIT_REFUSED
+    assert "same directory or nested" in capsys.readouterr().out
+    assert _tree(tmp_path) == before  # every byte, no dir created
+    assert calls == []
+
+
+@pytest.mark.parametrize("mode", ["--strip", "--apply"])
+def test_backup_that_is_the_tile_itself_is_refused(strip_dir, tmp_path,
+                                                   monkeypatch, capsys, mode):
+    """A hard link in a separate dir is the same file as the tile."""
+    calls = []
+    monkeypatch.setattr(enricher, "enrich_one_tile", _fake_enrich(calls))
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    os.link(strip_dir / _STRIP[0], backup / _STRIP[0])
+    before = _tree(tmp_path)
+
+    rc = repair.main(["--data-dir", str(strip_dir), mode,
+                      "--backup-dir", str(backup)])
+    assert rc == repair.EXIT_REFUSED
+    assert f"the tile itself: ['{_STRIP[0]}']" in capsys.readouterr().out
+    assert _tree(tmp_path) == before
+    assert calls == []
+
+
+def test_separate_backup_dir_via_symlink_still_reuses(strip_dir, tmp_path,
+                                                      capsys):
+    """Not over-refused: a symlink to a separate dir is a separate dir."""
+    import shutil
+
+    real = tmp_path / "backup_real"
+    real.mkdir()
+    shutil.copy2(strip_dir / _STRIP[0], real / _STRIP[0])
+    original = (strip_dir / _STRIP[0]).read_bytes()
+    link = tmp_path / "backup_link"
+    link.symlink_to(real, target_is_directory=True)
+
+    assert _strip(strip_dir, link, "--expect", "2") == 0
+    after = _lines(capsys.readouterr().out, "AFTER ")[0]
+    assert (after["backed_up"], after["backup_reused"]) == (1, 1)
+    assert (real / _STRIP[0]).read_bytes() == original
+    assert sorted(os.listdir(real)) == _STRIP
+    assert repair.select(str(strip_dir)) == []

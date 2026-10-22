@@ -46,7 +46,10 @@ Modes
 dir created) if a selected tile's staging file (``<tile>.npz.tmp.npz``, the
 enricher's ``tile_staging_path``) already exists: the enricher would
 overwrite it and then rename it away. The dry run lists such files as
-``staging_conflicts``. ``--strip`` likewise refuses if a selected tile holds
+``staging_conflicts``. Both refuse the same way when the backup dir and the
+data dir are one directory (same path, symlink, case alias) or nested, or a
+backup path is the tile itself: the tile would be its own backup.
+``--strip`` likewise refuses if a selected tile holds
 an ``s1_*`` / ``has_s1*`` key outside ``S1_KEYS`` (dry run:
 ``unknown_s1_keys``): it would survive the strip with unknown meaning.
 
@@ -204,6 +207,46 @@ def backup_conflicts(paths: list[str], backup_dir: str) -> list[str]:
     )
 
 
+def _within(child: str, parent: str) -> bool:
+    """``child`` is ``parent`` or lies below it, by resolved path or by file
+    identity (``samefile`` on ``child`` and each existing ancestor, which also
+    catches case aliases on a case-insensitive file system)."""
+    c, p = os.path.realpath(child), os.path.realpath(parent)
+    if os.path.commonpath([c, p]) == p:
+        return True
+    if not os.path.exists(p):
+        return False
+    while True:
+        if os.path.exists(c) and os.path.samefile(c, p):
+            return True
+        up = os.path.dirname(c)
+        if up == c:
+            return False
+        c = up
+
+
+def backup_location_error(data_dir: str, backup_dir: str,
+                          paths: list[str]) -> str | None:
+    """Why ``backup_dir`` cannot hold backups of ``paths``, or ``None``.
+
+    Refused: the backup dir and the data dir are the same directory (path,
+    symlink or case alias), one lies inside the other, or a backup name is
+    the tile itself. Otherwise a tile would be its own "backup" and its
+    original bytes would have none. Checked before anything is written.
+    """
+    if _within(backup_dir, data_dir) or _within(data_dir, backup_dir):
+        return (f"backup dir {backup_dir} and data dir {data_dir} are the "
+                f"same directory or nested")
+    same = sorted(
+        os.path.basename(p) for p in paths
+        if os.path.exists(dst := os.path.join(backup_dir, os.path.basename(p)))
+        and os.path.samefile(p, dst)
+    )
+    if same:
+        return f"backup path is the tile itself: {same}"
+    return None
+
+
 def backup_tile(path: str, backup_dir: str) -> str:
     """Byte-copy ``path`` into ``backup_dir``; never overwrite; verify bytes."""
     dst = os.path.join(backup_dir, os.path.basename(path))
@@ -314,6 +357,10 @@ def strip(data_dir: str, selected: list[tuple[str, str]],
         print(f"REFUSED: S1-looking keys outside S1_KEYS would survive the "
               f"strip: {unknown}", flush=True)
         return EXIT_REFUSED
+    where = backup_location_error(data_dir, backup_dir, paths)
+    if where:
+        print(f"REFUSED: {where}", flush=True)
+        return EXIT_REFUSED
     to_copy, reused, refused = backup_plan(paths, backup_dir)
     if refused:
         names = sorted(os.path.basename(p) for p in refused)
@@ -384,6 +431,10 @@ def apply(data_dir: str, selected: list[tuple[str, str]], backup_dir: str,
         print(f"REFUSED: {len(staged)} staging file(s) of selected tiles "
               f"already exist (would be overwritten and removed): {staged}",
               flush=True)
+        return EXIT_REFUSED
+    where = backup_location_error(data_dir, backup_dir, paths)
+    if where:
+        print(f"REFUSED: {where}", flush=True)
         return EXIT_REFUSED
     os.makedirs(backup_dir, exist_ok=True)
     conflicts = backup_conflicts(paths, backup_dir)
