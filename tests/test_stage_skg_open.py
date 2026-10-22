@@ -1134,9 +1134,17 @@ def test_main_masks_a_county_staged_before_the_mask(monkeypatch, tmp_path):
     assert snaps[-1]["derived"][_ITEM01.derived]["county_mask"]["cleared_cells"] == 4600
 
 
+def _footprint01(monkeypatch, sha: str = "z" * 64) -> None:
+    """County 01 published as 500 m tiles over its 1 km raster, all but the south-west one
+    (rows 50-99, cols 0-49), which is inside the county mask but no tile covered."""
+    monkeypatch.setattr(st, "TILED_FOOTPRINTS", {"sksTradhojd01.zip": {
+        "sha256": sha, "tile_m": 500, "tiles": ["14719_920", "14719_921", "14718_921"]}})
+
+
 def _legacy_tiled(tmp_path: Path) -> tuple[Path, dict]:
     """County 01 masked, then marked as derived under the retired all-zero rule: a treeless
-    10 x 10-cell block inside the county is -1, and so is a recorded gap (rows 50-59, cols 20-29)."""
+    10 x 10-cell block inside a tile is -1; so are a cell block inside the county that no tile
+    covered (rows 60-69, cols 0-9) and a recorded gap (rows 50-59, cols 20-29)."""
     import rasterio
 
     dest, manifest, _ = _masked_dest(tmp_path)
@@ -1144,6 +1152,7 @@ def _legacy_tiled(tmp_path: Path) -> tuple[Path, dict]:
     with rasterio.open(dest / _ITEM01.derived, "r+") as d:
         a = d.read(1)
         a[0:10, 0:10] = -1                              # treeless, made nodata by the rule
+        a[60:70, 0:10] = -1                             # genuine nodata: no tile covered it
         a[50:60, 20:30] = -1                            # the recorded gap
         d.write(a, 1)
     der = manifest["derived"][_ITEM01.derived]
@@ -1152,14 +1161,16 @@ def _legacy_tiled(tmp_path: Path) -> tuple[Path, dict]:
     return dest, manifest
 
 
-def test_a_legacy_tiled_county_gets_its_treeless_zeros_back(tmp_path):
+def test_a_legacy_tiled_county_gets_its_treeless_zeros_back(monkeypatch, tmp_path):
     import rasterio
 
+    _footprint01(monkeypatch)
     dest, manifest = _legacy_tiled(tmp_path)
     assert st.restore_tiled_zeros(_ITEM01, manifest, dest) is True
     with rasterio.open(dest / _ITEM01.derived) as ds:
         a = ds.read(1)
-    assert (a[0:10, 0:10] == 0).all()                   # treeless inside the county: 0 again
+    assert (a[0:10, 0:10] == 0).all()                   # treeless inside a tile: 0 again
+    assert (a[60:70, 0:10] == -1).all()                 # no tile covered it: stays no data
     assert (a[50:60, 20:30] == -1).all()                # the gap stays no data
     assert (a[:, 50:60] == -1).all()                    # outside the county stays -1
     rec = manifest["derived"][_ITEM01.derived]
@@ -1169,7 +1180,8 @@ def test_a_legacy_tiled_county_gets_its_treeless_zeros_back(tmp_path):
     assert not list((dest / "tradhojd").glob("*.restored.tif"))
 
 
-def test_zeros_are_restored_only_for_a_masked_legacy_tiled_county(tmp_path):
+def test_zeros_are_restored_only_for_a_masked_legacy_tiled_county(monkeypatch, tmp_path):
+    _footprint01(monkeypatch)
     dest, manifest = _legacy_tiled(tmp_path)
     der = manifest["derived"][_ITEM01.derived]
     der["all_zero_cells_nodata"] = False                # a one-raster county: its -1 is no data
@@ -1183,6 +1195,7 @@ def test_zeros_are_restored_only_for_a_masked_legacy_tiled_county(tmp_path):
 
 def test_main_restores_a_legacy_tiled_county_after_its_mask(monkeypatch, tmp_path):
     real_mask, real_restore = st.mask_to_county, st.restore_tiled_zeros
+    _footprint01(monkeypatch)
     calls, snaps = _staging(monkeypatch, tmp_path)
     monkeypatch.setattr(st, "mask_to_county", real_mask)
     monkeypatch.setattr(st, "restore_tiled_zeros", real_restore)
@@ -1290,3 +1303,15 @@ def test_an_interrupted_mask_on_a_foreign_raster_is_refused(monkeypatch, tmp_pat
     (dest / _ITEM01.derived).write_bytes(b"something else")
     with pytest.raises(RuntimeError, match="neither side of the interrupted county_mask"):
         st.finish_pending_rewrite(_ITEM01, manifest, dest)
+
+
+
+def test_the_zero_restore_is_bound_to_the_published_tiles(monkeypatch, tmp_path):
+    dest, manifest = _legacy_tiled(tmp_path)
+    monkeypatch.setattr(st, "TILED_FOOTPRINTS", {})                  # no footprint for the zip
+    with pytest.raises(ValueError, match="no published tile footprint"):
+        st.restore_tiled_zeros(_ITEM01, manifest, dest)
+    _footprint01(monkeypatch, sha="o" * 64)                             # a footprint of another zip
+    with pytest.raises(ValueError, match="no published tile footprint"):
+        st.restore_tiled_zeros(_ITEM01, manifest, dest)
+    assert "tiled_zeros_restored" not in manifest["derived"][_ITEM01.derived]
