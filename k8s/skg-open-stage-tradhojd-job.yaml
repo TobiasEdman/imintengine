@@ -56,6 +56,10 @@
 # its county (grunddata ∪ markfukt valid; outside = -1): applied once after
 # a fresh derivation and, for counties already staged, on the next apply,
 # which prints "masked ... cells cleared" per county and rewrites no zip.
+# a9ee558 (2026-10-22, heights' nodata now reads NaN): the all-zero rule is
+# retired, and county 24, derived under it, gets its treeless 0 back inside
+# the county, except at the recorded gap ("restored the treeless 0 ...").
+# No cell of its mask lies outside its 689 tiles (probe).
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -163,8 +167,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "d0307e86bba404bb6c523a0426f86ac4c055cc33"}
-            - {name: IMINT_SCRIPT_SHA256, value: "dbfbbefe85aaa0090bffd0e9c34e1500034979ea9dc9bbc7d9070d0dcc41df8f"}
+            - {name: IMINT_COMMIT, value: "a9ee558a6664ea06f21d9f80940a2098d278cfdf"}
+            - {name: IMINT_SCRIPT_SHA256, value: "68df25c2c76bac7ea5fd5e5b0f12dba541b9c336c6ab18894f6509369f44a76d"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}

@@ -39,6 +39,14 @@
 # pinned reader knows recorded gaps (skg_open.tradhojd_gaps) and county 24's
 # gaps are on record: apply the Trädhöjd Job once after its run, which
 # backfills them, before this one.
+#
+# 2026-10-22: repinned to a9ee558. Height nodata is NaN, not 0 (Tobias:
+# NaN where data is missing, outside the county masks too, no water class).
+# --max-missing-share 0 makes height a gap when any of its in-county cells is
+# NaN. 0 is strict until Tobias sets the limit; NaN at sea or abroad never
+# counts. The preflight also requires every staged Trädhöjd county to be
+# masked to its county (#96: county 23's zeros covered 20-22) and county 24's
+# treeless zeros restored, which the Trädhöjd Job does on its next apply.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -92,6 +100,12 @@ spec:
               print(f"Trädhöjd upstream gaps on record: {gaps}")
               assert any(c == "24" for c, _ in gaps), \
                   "county 24's upstream gaps are not on record: apply the Trädhöjd Job (backfill) first"
+              th = {k: v for k, v in m["derived"].items() if k.startswith("tradhojd/tradhojd_10m_") and k.endswith(".tif")}
+              unmasked = sorted(k for k, v in th.items() if "county_mask" not in v)
+              assert not unmasked, f"not masked to their county: {unmasked}; apply the Trädhöjd Job first"
+              assert "tiled_zeros_restored" in th["tradhojd/tradhojd_10m_24.tif"], \
+                  "county 24's treeless zeros are not restored: apply the Trädhöjd Job first"
+              print(f"Trädhöjd counties masked: {len(th)}; county 24 zeros restored")
               PY
               RC=0
               for Y in ${YEARS}; do
@@ -100,15 +114,16 @@ spec:
                 BEFORE=$(find "${ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l)
                 echo ""; echo "######## ${Y}: ${BEFORE} tiles ########"
                 python scripts/skg_aux_pass.py --data-dir "${ROOT}" \
-                  --report "/data/manifests/nfi${Y}_topup_aux_pass.json" --workers 8 || RC=1
+                  --report "/data/manifests/nfi${Y}_topup_aux_pass.json" --workers 8 \
+                  --max-missing-share 0 || RC=1
                 AFTER=$(find "${ROOT}" -maxdepth 1 -type f -name '*.npz' | wc -l)
                 [ "${BEFORE}" = "${AFTER}" ] || { echo "FAIL: tile count changed in ${ROOT}"; RC=1; }
               done
               echo "=== done (exit ${RC}): $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "1eb84923b1c3a6dc2d42ab015034b5a460c14ba8"}
-            - {name: IMINT_SCRIPT_SHA256, value: "cf111e6eaba590ada36df609f9442a6373547ebf6e3e057f0c18a72c6e853c61"}
+            - {name: IMINT_COMMIT, value: "a9ee558a6664ea06f21d9f80940a2098d278cfdf"}
+            - {name: IMINT_SCRIPT_SHA256, value: "da4ed8de24896f357a99ca10eaf78b864fd88f75f55fabc76c4b910856a9135f"}
             - {name: YEARS, value: "2018 2019 2021 2022"}
             - {name: GDAL_CACHEMAX, value: "512"}
           resources:
