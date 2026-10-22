@@ -40,7 +40,7 @@ spec:
               # Backend pc-rtc (RTC γ⁰, windowed reads) — the script's only
               # backend. The former `cascade` (CDSE → MPC → AWS σ⁰ over
               # GCP-referenced GRD) is retired (task 0113: ellipsoid-height
-              # tie points shifted the sea 41–56 m) and refused by the script.
+              # tie points, sea expected 41–56 m off) and refused by the script.
               python scripts/enrich_tiles_s1.py \
                 --data-dir /data/unified_v2_512 \
                 --s1-backend pc-rtc \

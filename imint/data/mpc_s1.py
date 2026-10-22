@@ -6,8 +6,9 @@ chain (``imint.fetch.fetch_s1_vessel_scenes``), which geocodes the GRD on
 the sea surface itself.
 
 The σ⁰ fetcher that lived here (``fetch_s1_scene``) is retired (task 0113):
-it warped the GRD over its ellipsoid-height tie points, so the sea landed
-41–56 m toward the satellite. Use ``imint.training.pc_s1_rtc`` (RTC) for
+it warped the GRD over its ellipsoid-height tie points, which by the vessel
+chain's geometry puts the sea 41–56 m toward the satellite off Skagen
+(expected, not measured on the tiles). Use ``imint.training.pc_s1_rtc`` (RTC) for
 backscatter.
 """
 from __future__ import annotations

@@ -2,8 +2,8 @@
 
 This module used to download whole IW-GRDH products from CDSE and compute
 σ⁰ = DN² / LUT² on a window warped over the product's own GCPs. Those tie
-points sit at ellipsoid height, so the sea landed 41–56 m toward the
-satellite, and the calibration LUT was sampled at warped-grid offsets rather
+points sit at ellipsoid height, so the sea is expected 41–56 m toward the
+satellite (vessel-chain geometry, not measured on the tiles), and the calibration LUT was sampled at warped-grid offsets rather
 than radar line/pixel. The path is retired, not fixed: no model was trained
 on its tiles, and the v4 training tiles come from ``pc_s1_rtc`` (RTC γ⁰).
 

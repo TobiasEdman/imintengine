@@ -34,7 +34,7 @@ Backends (``--s1-backend``)
         **linear** γ⁰ (the SAR normalizers log-transform internally). Free,
         anonymous. ``imint.training.pc_s1_rtc``.
     ``cdse-stac`` — RETIRED (task 0113, 2026-10-22). The CDSE full-GRD σ⁰
-        path warped the GRD over its ellipsoid-height tie points (sea shifted
+        path warped the GRD over its ellipsoid-height tie points (sea expected
         41–56 m toward the satellite) and sampled the calibration LUT on the
         warped grid. Passing it is refused (the 2026-10-22 PVC count found
         no tile made by it).

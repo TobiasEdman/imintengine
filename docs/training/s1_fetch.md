@@ -5,7 +5,8 @@
 > `s1_shared.read_window` refuses GCP-referenced GRD, and
 > `scripts/enrich_tiles_s1.py` refuses `--s1-backend cdse-stac` / `cascade`.
 > Why: the window was warped over the product's own tie points, which sit at
-> ellipsoid height, so the sea landed 41–56 m toward the satellite; and the
+> ellipsoid height, so by the vessel chain's geometry the sea sits 41–56 m
+> toward the satellite off Skagen (expected, not measured on the tiles); and the
 > calibration LUT was sampled at warped-grid offsets, not radar line/pixel.
 > It was retired rather than fixed because no model trained on its tiles and
 > the v4 training tiles come from `imint/training/pc_s1_rtc.py` (RTC γ⁰,

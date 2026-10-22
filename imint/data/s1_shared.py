@@ -241,7 +241,7 @@ def pick_calibration_urls(item: Any) -> tuple[str, str]:
 # Message raised for a GCP-referenced source (shared so callers/tests can match it).
 GCP_SIGMA0_RETIRED = (
     "σ⁰ from GCP-referenced GRD is retired: its tie points sit at ellipsoid "
-    "height (the sea lands 41–56 m toward the satellite) and the calibration "
+    "height (sea expected 41–56 m toward the satellite) and the calibration "
     "lookup is misaligned; use imint.training.pc_s1_rtc (RTC) instead "
     "(ImintEngine task 0113)"
 )

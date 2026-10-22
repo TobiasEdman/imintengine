@@ -2,7 +2,7 @@
 
 The old test here pinned sigma0 from ``mpc_s1.fetch_s1_scene`` through the real
 window read over a GCP-referenced GRD. That path is retired: its tie points sit
-at ellipsoid height (the sea lands 41-56 m toward the satellite) and the
+at ellipsoid height (the sea is expected 41-56 m toward the satellite) and the
 calibration LUT was sampled at warped-grid offsets. These tests pin that a
 GCP-referenced source is refused, and that a projected source (the RTC COGs
 ``imint.training.pc_s1_rtc`` reads) reads exactly as before the retirement:
