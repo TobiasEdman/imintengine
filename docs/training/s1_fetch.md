@@ -1,5 +1,18 @@
 # Sentinel-1 GRD fetch — STAC + direct COG path
 
+> **Retired 2026-10-22 (task 0113).** The σ⁰ path described below is gone:
+> `fetch_s1_scene` (CDSE / MPC / AWS) and the `s1_fetch` cascade are removed,
+> `s1_shared.read_window` refuses GCP-referenced GRD, and
+> `scripts/enrich_tiles_s1.py` refuses `--s1-backend cdse-stac` / `cascade`.
+> Why: the window was warped over the product's own tie points, which sit at
+> ellipsoid height, so the sea landed 41–56 m toward the satellite; and the
+> calibration LUT was sampled at warped-grid offsets, not radar line/pixel.
+> It was retired rather than fixed because no model trained on its tiles and
+> the v4 training tiles come from `imint/training/pc_s1_rtc.py` (RTC γ⁰,
+> projected COGs, unaffected). The dataset gate now also requires
+> `s1_source == "pc-rtc-gamma0"` (`imint/training/s1_enrichment.py`). The
+> page is kept as history.
+
 ## Why we switched
 
 The original fetcher (`imint/training/cdse_s1.py`) posts one request per tile
