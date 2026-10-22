@@ -268,3 +268,12 @@ def test_an_all_nan_height_is_still_a_gap(env):
 def test_the_nan_nodata_channels_match_the_dataset():
     from imint.training.unified_dataset import AUX_NAN_NODATA_CHANNELS
     assert set(ap.NAN_NODATA) == AUX_NAN_NODATA_CHANNELS
+
+
+def test_a_mixed_zero_and_nan_height_is_written(env):
+    _mirror(env / "mirror", height_dm=0, height_hole_rows=8)  # treeless, 3.9 % unknown
+    t = _tile(env / "tiles/nfi2025_a.npz")
+    assert _run(env, limit="0.05") == 0
+    d = _load(t)
+    assert int(d["aux_complete"]) == 1 and np.isnan(d["height"][:8, :20]).all()
+    assert (d["height"][8:] == 0).all()
