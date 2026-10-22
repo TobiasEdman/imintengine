@@ -77,9 +77,22 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def _empty(arr) -> bool:
-    """The enrich Job's rule: an image channel with no non-zero, non-NaN pixel carries nothing."""
-    return getattr(arr, "ndim", 0) >= 2 and not np.any(np.nan_to_num(arr))
+#: Channels whose nodata is NaN, as ``unified_dataset.AUX_NAN_NODATA_CHANNELS``
+#: (which this script does not import; a test keeps the two equal). There 0 is a
+#: value, height 0 meaning no trees, so such a channel is empty only without a
+#: finite pixel.
+NAN_NODATA = ("height", "markfukt")
+
+
+def _empty(arr, channel: str) -> bool:
+    """An image channel that carries nothing: no finite pixel for a NaN-nodata
+    channel, no non-zero finite pixel (the enrich Job's rule) for the others,
+    whose nodata is 0."""
+    if getattr(arr, "ndim", 0) < 2:
+        return False
+    if channel in NAN_NODATA:
+        return not np.isfinite(arr).any()
+    return not np.any(np.nan_to_num(arr))
 
 
 def _gap(exc: skg_open.SkgMirrorMissingError) -> str:
@@ -111,7 +124,7 @@ def _missing_share(arr: np.ndarray, west: float, south: float, east: float, nort
 def process(path: Path, *, stamp: str, git_sha: str, dry_run: bool, max_missing_share: float) -> dict:
     with np.load(path, allow_pickle=True) as z:
         d = dict(z)
-    need = [k for k in AUX if k not in d or _empty(d[k])]
+    need = [k for k in AUX if k not in d or _empty(d[k], k)]
     if not need and int(d.get("aux_complete", 1)) == 1 and "aux_missing" not in d:
         return {"status": "complete"}
     bbox, size = resolve_fetch_bbox(name=path.stem, npz_data=d)
@@ -126,7 +139,7 @@ def process(path: Path, *, stamp: str, git_sha: str, dry_run: bool, max_missing_
         except skg_open.SkgMirrorMissingError as exc:
             gaps[ch] = _gap(exc)
             continue
-        if _empty(arr):
+        if _empty(arr, ch):
             gaps[ch] = "no valid pixel in the mirror window"
             continue
         share = _missing_share(arr, west, south, east, north)

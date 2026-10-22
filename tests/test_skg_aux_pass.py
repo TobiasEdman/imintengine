@@ -20,7 +20,7 @@ GRUND = {"volym": 300, "grundyta": 25, "medeldiameter": 22}
 
 
 def _mirror(root: Path, *, height_staged: bool = True, markfukt_value: int = 40,
-            height_hole_rows: int = 0, outside_cols: int = 0) -> None:
+            height_hole_rows: int = 0, outside_cols: int = 0, height_dm: int = 183) -> None:
     """``height_hole_rows``: the tile's first rows x 20 columns have no height (-1) inside
     county 01. ``outside_cols``: the tile's last columns lie outside every county (all masks
     nodata, height -1), like sea."""
@@ -43,7 +43,7 @@ def _mirror(root: Path, *, height_staged: bool = True, markfukt_value: int = 40,
         mf[:, -out * 5:] = 255
     add("markfukt/markfukt_01.tif", mf, 2.0, 65535, "sksSLUMarkfuktighet01.zip")
     write_raster(root / "markfukt/markfukt.vrt", mf, W - 100, N + 100, 2.0, nodata=65535)
-    th = np.full((PX + 20, PX + 20), 183, dtype=np.int16)
+    th = np.full((PX + 20, PX + 20), height_dm, dtype=np.int16)
     th[10:10 + height_hole_rows, 10:30] = -1
     if outside_cols:
         th[:, -out:] = -1
@@ -241,3 +241,30 @@ def test_the_limit_must_be_stated(env):
     _tile(env / "tiles/nfi2025_a.npz")
     with pytest.raises(SystemExit):
         ap.main(["--data-dir", str(env / "tiles"), "--report", str(env / "report.json")])
+
+
+def test_a_treeless_window_keeps_its_valid_height_zero(env):
+    """Codex's #101 finding: a real mirror whose height is a valid 0 everywhere (no trees) was
+    dropped as 'no valid pixel', so the dataset filled the mean instead of height 0."""
+    _mirror(env / "mirror", height_dm=0)
+    t = _tile(env / "tiles/nfi2025_a.npz")
+    assert _run(env) == 0
+    d = _load(t)
+    assert int(d["aux_complete"]) == 1 and "height" in d and (d["height"] == 0).all()
+    (prov,) = json.loads(str(d["aux_provenance"]))
+    assert "height" in prov["written"] and prov["gaps"] == {}
+    assert _run(env) == 0                                  # present and all 0: kept, not re-read as missing
+    assert len(json.loads(str(_load(t)["aux_provenance"]))) == 1
+
+
+def test_an_all_nan_height_is_still_a_gap(env):
+    _mirror(env / "mirror", height_dm=-1)                  # the mirror has no height anywhere in the window
+    t = _tile(env / "tiles/nfi2025_a.npz")
+    assert _run(env, limit="1") == 0
+    d = _load(t)
+    assert "height" not in d and "height: no valid pixel in the mirror window" in str(d["aux_gap_reason"])
+
+
+def test_the_nan_nodata_channels_match_the_dataset():
+    from imint.training.unified_dataset import AUX_NAN_NODATA_CHANNELS
+    assert set(ap.NAN_NODATA) == AUX_NAN_NODATA_CHANNELS
