@@ -96,7 +96,7 @@ NODATA_THRESHOLD = 0.10
 # kept, and the CROMA/TerraMind dataset gate refuses tiles that predate it.
 # The provenance stamp is shared the same way: the gate accepts a tile's S1
 # only when s1_source == S1_SOURCE.
-from imint.training.s1_enrichment import S1_ENRICH_VERSION, S1_SOURCE
+from imint.training.s1_enrichment import S1_ENRICH_VERSION, S1_SOURCE, s1_usable
 
 # Per-backend module + stored-units + provenance. pc-rtc stores LINEAR γ⁰
 # (the CROMA/TerraMind normalizers apply 10*log10 internally — storing dB
@@ -240,7 +240,10 @@ def enrich_one_tile(
     except Exception as e:
         return {"name": name, "status": "failed", "reason": str(e)}
 
-    if skip_existing and int(data.get("s1_enrich_v", 0)) == S1_ENRICH_VERSION:
+    # Skip only what the consumers accept (s1_usable: v4 AND the RTC source).
+    # A v4 stamp alone is not enough: a tile with a missing or retired source
+    # would be skipped here but rejected by every gate, and never repaired.
+    if skip_existing and s1_usable(data):
         return {"name": name, "status": "skipped"}
 
     spectral = data.get("spectral", data.get("image"))

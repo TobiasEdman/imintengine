@@ -195,3 +195,27 @@ def test_enricher_refuses_retired_backends(tmp_path, monkeypatch, capsys, backen
         enricher.main()
     assert exc.value.code == 2
     assert "task 0113" in capsys.readouterr().err
+
+
+# --- the producer skips exactly what the consumers accept ------------------
+# enrich_one_tile(skip_existing=True) must not skip a tile every gate rejects,
+# or that tile is never repaired (Codex review of PR 98). Without network the
+# proof is the path taken: a skipped tile returns "skipped"; a tile that is
+# not skipped goes on to read its bands, and these fixtures have none.
+@pytest.mark.parametrize("stamps, skipped", [
+    ({"s1_enrich_v": np.int32(4), "s1_source": np.bytes_(b"pc-rtc-gamma0")}, True),
+    ({"s1_enrich_v": np.int32(4)}, False),
+    ({"s1_enrich_v": np.int32(4), "s1_source": np.bytes_(b"cdse-grd-sigma0")}, False),
+    ({"s1_enrich_v": np.int32(3), "s1_source": np.bytes_(b"pc-rtc-gamma0")}, False),
+    ({}, False),
+])
+def test_producer_skip_matches_the_consumer_rule(tmp_path, stamps, skipped):
+    from scripts import enrich_tiles_s1 as enrich
+
+    path = tmp_path / "tile.npz"
+    np.savez(path, s1_vv_vh=np.zeros((2, 4, 4), np.float32), **stamps)
+    r = enrich.enrich_one_tile(str(path), skip_existing=True)
+    if skipped:
+        assert r["status"] == "skipped"
+    else:
+        assert r == {"name": "tile", "status": "failed", "reason": "no_spectral"}
