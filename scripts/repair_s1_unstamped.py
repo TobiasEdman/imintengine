@@ -164,17 +164,19 @@ def apply(data_dir: str, selected: list[tuple[str, str]], backup_dir: str,
         dst = backup_tile(path, backup_dir)
         print(f"  backup {os.path.basename(path)} -> {dst}", flush=True)
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        results = list(pool.map(_enrich, paths))
-
+    # pool.map yields in order as tiles finish, so each line prints as soon
+    # as its tile (and every earlier one) is done.
     failed = 0
-    for (path, before), r in zip(selected, results):
-        status = r.get("status", "failed")
-        failed += status != "ok"
-        line = {"name": os.path.basename(path), "before": before,
-                "status": status}
-        line.update({k: v for k, v in r.items() if k not in ("name", "status")})
-        print("  result " + json.dumps(line, default=str), flush=True)
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        results = pool.map(_enrich, paths)
+        for i, ((path, before), r) in enumerate(zip(selected, results), 1):
+            status = r.get("status", "failed")
+            failed += status != "ok"
+            line = {"i": f"{i}/{len(paths)}", "name": os.path.basename(path),
+                    "before": before, "status": status}
+            line.update({k: v for k, v in r.items()
+                         if k not in ("name", "status")})
+            print("  result " + json.dumps(line, default=str), flush=True)
 
     still_bad = []
     for path in paths:
