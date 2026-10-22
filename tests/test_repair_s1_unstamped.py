@@ -55,7 +55,9 @@ def tile_dir(tmp_path):
     for name, (s1, version, source, _) in _CASES.items():
         _tile(d / f"{name}.npz", s1=s1, version=version, source=source)
     # An in-flight atomic-write temp is never a tile, even when it looks bad.
-    _tile(d / "unstamped.npz.tmp.npz")
+    # It belongs to an unselected tile, so --apply may proceed; a selected
+    # tile's staging file refuses the run (real-producer tests below).
+    _tile(d / "usable.npz.tmp.npz")
     return d
 
 
@@ -206,3 +208,110 @@ def test_enrich_exception_is_a_failed_tile(tile_dir, tmp_path, monkeypatch):
     rc = repair.main(["--data-dir", str(tile_dir), "--apply",
                       "--backup-dir", str(tmp_path / "backup")])
     assert rc == repair.EXIT_FAILED
+
+
+# --- Real producer: enrich_one_tile runs for real, only the RTC reads are
+# stubbed. The fake enricher above writes the tile directly and so cannot
+# see the producer's staging file (Codex review of PR 99).
+
+_REAL_TILE = "tile_380000_6170000.npz"
+_USABLE_TILE = "tile_380000_6170256.npz"
+_RTC_SAR = np.full((2, 256, 256), 0.2, np.float32)
+
+
+def _real_tile(path, **stamps):
+    data = {
+        "spectral": np.full((6, 256, 256), 0.3, np.float32),
+        "label": np.full((256, 256), 7, np.int16),
+        "lpis_year": np.int32(2023),
+        "s1_vv_vh": np.full((2, 256, 256), -12, np.float32),
+    }
+    if "version" in stamps:
+        data["s1_enrich_v"] = np.int32(stamps["version"])
+    if "source" in stamps:
+        data["s1_source"] = np.bytes_(stamps["source"])
+    np.savez(path, **data)
+    return str(path)
+
+
+@pytest.fixture
+def rtc_calls(monkeypatch):
+    from imint.training import pc_s1_rtc as rtc
+
+    calls = []
+
+    def probe(*a, **k):
+        calls.append("probe")
+        return "ASCENDING", {0: []}
+
+    def fetch(*a, **k):
+        calls.append("fetch")
+        return _RTC_SAR.copy(), ["2023-06-01"], "ASCENDING"
+
+    monkeypatch.setattr(rtc, "_open_client", lambda: object())
+    monkeypatch.setattr(rtc, "probe_orbits_with_items", probe)
+    monkeypatch.setattr(rtc, "fetch_s1_season_composite", fetch)
+    return calls
+
+
+@pytest.fixture
+def real_dir(tmp_path):
+    d = tmp_path / "tiles"
+    d.mkdir()
+    _real_tile(d / _REAL_TILE)  # unstamped: selected
+    _real_tile(d / _USABLE_TILE, version=S1_ENRICH_VERSION, source=S1_SOURCE)
+    (d / "notes.txt").write_bytes(b"not a tile")
+    return d
+
+
+def test_staging_name_is_the_producers_rule(real_dir):
+    path = str(real_dir / _REAL_TILE)
+    assert enricher.tile_staging_path(path) == path + ".tmp.npz"
+
+
+def test_real_enricher_refuses_an_existing_staging_file(
+        real_dir, tmp_path, rtc_calls, capsys):
+    staging = real_dir / f"{_REAL_TILE}.tmp.npz"
+    staging.write_bytes(b"pre-existing stage that must remain untouched")
+    backup = tmp_path / "backup"
+    before = _snapshot(tmp_path)
+
+    assert repair.main(["--data-dir", str(real_dir)]) == 0
+    report = _lines(capsys.readouterr().out, "SELECTION ")[0]
+    assert report["staging_conflicts"] == [staging.name]
+
+    rc = repair.main(["--data-dir", str(real_dir), "--apply", "--expect", "1",
+                      "--backup-dir", str(backup)])
+    assert rc == repair.EXIT_REFUSED
+    assert "REFUSED" in capsys.readouterr().out
+    assert _snapshot(tmp_path) == before  # tiles, staging file, notes.txt
+    assert not backup.exists()
+    assert rtc_calls == []
+
+
+def test_real_enricher_rewrites_only_the_s1(real_dir, tmp_path, rtc_calls):
+    path = real_dir / _REAL_TILE
+    original = path.read_bytes()
+    with np.load(path) as z:
+        before = {k: z[k] for k in z.files}
+    others = _snapshot(real_dir)
+    backup = tmp_path / "backup"
+
+    rc = repair.main(["--data-dir", str(real_dir), "--apply", "--expect", "1",
+                      "--backup-dir", str(backup)])
+    assert rc == 0
+    assert "fetch" in rtc_calls
+    with np.load(path, allow_pickle=True) as z:
+        after = {k: z[k] for k in z.files}
+    assert int(after["s1_enrich_v"]) == S1_ENRICH_VERSION
+    assert after["s1_source"].item().decode() == S1_SOURCE
+    np.testing.assert_array_equal(after["s1_vv_vh"], _RTC_SAR)
+    for key in ("spectral", "label", "lpis_year"):
+        assert after[key].dtype == before[key].dtype
+        assert after[key].tobytes() == before[key].tobytes(), key
+    # No staging file left behind; the other files are byte-identical.
+    assert sorted(os.listdir(real_dir)) == sorted(others)
+    for name in set(others) - {_REAL_TILE}:
+        assert (real_dir / name).read_bytes() == others[name]
+    assert (backup / _REAL_TILE).read_bytes() == original
+    assert repair.select(str(real_dir)) == []

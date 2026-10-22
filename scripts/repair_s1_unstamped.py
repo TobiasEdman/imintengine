@@ -30,6 +30,11 @@ Modes
     ``--expect N``           refuse (exit 3) unless exactly N tiles are
                              selected; checked before anything is written.
 
+``--apply`` also refuses (exit 3, nothing written, no backup dir created)
+if a selected tile's staging file (``<tile>.npz.tmp.npz``, the enricher's
+``tile_staging_path``) already exists: the enricher would overwrite it and
+then rename it away. The dry run lists such files as ``staging_conflicts``.
+
 Not to run concurrently with any other job writing the same directory.
 
 Usage:
@@ -104,7 +109,8 @@ def select(data_dir: str) -> list[tuple[str, str]]:
 
 
 def selection_report(data_dir: str, scanned=None) -> dict:
-    """JSON-ready selection: count, names + reasons, unreadable tiles."""
+    """JSON-ready selection: count, names + reasons, unreadable tiles and
+    existing staging files of selected tiles (``--apply`` refuses those)."""
     selected, unreadable = scanned if scanned is not None else scan(data_dir)
     return {
         "data_dir": data_dir,
@@ -115,7 +121,24 @@ def selection_report(data_dir: str, scanned=None) -> dict:
         "unreadable": [
             {"name": os.path.basename(p), "error": e} for p, e in unreadable
         ],
+        "staging_conflicts": staging_conflicts([p for p, _ in selected]),
     }
+
+
+def staging_conflicts(paths: list[str]) -> list[str]:
+    """Existing staging files of ``paths`` (any one refuses the run).
+
+    ``enrich_one_tile`` writes ``tile_staging_path(tile)`` and then renames
+    it over the tile (or unlinks it on failure), so a file already at that
+    name — e.g. left by an interrupted run — would be overwritten and
+    removed. The name comes from the enricher's own rule.
+    """
+    from scripts.enrich_tiles_s1 import tile_staging_path
+
+    return sorted(
+        os.path.basename(tile_staging_path(p)) for p in paths
+        if os.path.lexists(tile_staging_path(p))
+    )
 
 
 def backup_conflicts(paths: list[str], backup_dir: str) -> list[str]:
@@ -153,6 +176,13 @@ def apply(data_dir: str, selected: list[tuple[str, str]], backup_dir: str,
           workers: int = 1) -> int:
     """Back up, re-enrich and re-check ``selected``; return the exit code."""
     paths = [p for p, _ in selected]
+    # Checked before the backup dir is created: a refusal touches nothing.
+    staged = staging_conflicts(paths)
+    if staged:
+        print(f"REFUSED: {len(staged)} staging file(s) of selected tiles "
+              f"already exist (would be overwritten and removed): {staged}",
+              flush=True)
+        return EXIT_REFUSED
     os.makedirs(backup_dir, exist_ok=True)
     conflicts = backup_conflicts(paths, backup_dir)
     if conflicts:
