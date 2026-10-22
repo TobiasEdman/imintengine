@@ -223,6 +223,11 @@ def is_done(item: Item, manifest: dict, dest: Path) -> bool:
     der = manifest["derived"].get(item.derived)
     if not (rec and rec.get("sha256") and der and der.get("sha256") and (dest / item.derived).exists()):
         return False
+    if der.get("all_zero_cells_nodata"):
+        # derived under the retired all-zero rule (county 24, run r2): its -1 mixes
+        # treeless cells with source nodata, which only the source can tell apart,
+        # so the county is derived again from its zip (Codex review of #101)
+        return False
     return bool(rec.get("raw_deleted_at")) or (dest / "raw" / item.name).exists()
 
 
@@ -850,130 +855,6 @@ def mask_to_county(item: Item, manifest: dict, dest: Path) -> bool:
     return True
 
 
-#: The tiles a tiled county was published with, for ``restore_tiled_zeros``:
-#: name = the tile's south-west corner in ``tile_m`` units (northing_easting),
-#: bound to the zip's sha256. Read 2026-10-22 from county 24's shipped
-#: vasterbottens.vrt (689 SimpleSources; every name matched its DstRect).
-#: Inside a published tile every 1 m cell is valid (no nodata tag), so a -1
-#: there came from the retired all-zero rule or a recorded gap; outside every
-#: tile a -1 is genuine nodata.
-TILED_FOOTPRINTS = {
-    "sksTradhojd24.zip": {
-        "sha256": "05c5c6a1f8ad3f3aa0ff093222482b645073fef6cd81d9561f1dbfe548703ac4",
-        "tile_m": 10000,
-        "tiles": (
-            "703_71 703_72 703_73 704_71 704_72 704_73 704_74 704_75 705_70 705_71 705_72 705_73 705_74 "
-            "705_75 706_69 706_70 706_71 706_72 706_73 706_74 706_75 706_76 706_78 706_79 707_68 707_69 "
-            "707_70 707_71 707_72 707_73 707_74 707_75 707_76 707_77 707_78 707_79 708_60 708_61 708_62 "
-            "708_63 708_64 708_66 708_67 708_68 708_69 708_70 708_71 708_72 708_73 708_74 708_75 708_76 "
-            "708_77 708_78 708_79 709_58 709_59 709_60 709_61 709_62 709_63 709_64 709_65 709_66 709_67 "
-            "709_68 709_69 709_70 709_71 709_72 709_73 709_74 709_75 709_76 709_77 709_78 709_79 710_57 "
-            "710_58 710_59 710_60 710_61 710_62 710_63 710_64 710_65 710_66 710_67 710_68 710_69 710_70 "
-            "710_71 710_72 710_73 710_74 710_75 710_76 710_77 710_78 710_79 711_56 711_57 711_58 711_59 "
-            "711_60 711_61 711_62 711_63 711_64 711_65 711_66 711_67 711_68 711_69 711_70 711_71 711_72 "
-            "711_73 711_74 711_75 711_76 711_77 711_78 711_79 712_54 712_55 712_56 712_57 712_58 712_59 "
-            "712_60 712_61 712_62 712_63 712_64 712_65 712_66 712_67 712_68 712_69 712_70 712_71 712_72 "
-            "712_73 712_74 712_75 712_76 712_77 712_78 712_79 713_54 713_55 713_56 713_57 713_58 713_59 "
-            "713_60 713_61 713_62 713_63 713_64 713_65 713_66 713_67 713_68 713_69 713_70 713_71 713_72 "
-            "713_73 713_74 713_75 713_76 713_77 713_78 713_79 713_80 714_52 714_53 714_54 714_55 714_56 "
-            "714_57 714_58 714_59 714_60 714_61 714_62 714_63 714_64 714_65 714_66 714_67 714_68 714_69 "
-            "714_70 714_71 714_72 714_73 714_74 714_75 714_76 714_77 714_78 714_79 714_80 714_81 715_52 "
-            "715_53 715_54 715_55 715_56 715_57 715_58 715_59 715_60 715_61 715_62 715_63 715_64 715_65 "
-            "715_66 715_67 715_68 715_69 715_70 715_71 715_72 715_73 715_74 715_75 715_76 715_77 715_78 "
-            "715_79 715_80 715_81 716_51 716_52 716_53 716_54 716_55 716_56 716_57 716_58 716_59 716_60 "
-            "716_61 716_62 716_63 716_64 716_65 716_66 716_67 716_68 716_69 716_70 716_71 716_72 716_73 "
-            "716_74 716_75 716_76 716_77 716_78 716_79 716_80 716_81 717_50 717_51 717_52 717_53 717_54 "
-            "717_55 717_56 717_57 717_58 717_59 717_60 717_61 717_62 717_63 717_64 717_65 717_66 717_67 "
-            "717_68 717_69 717_70 717_71 717_72 717_73 717_74 717_75 717_76 717_77 717_78 717_79 717_80 "
-            "717_81 718_49 718_50 718_51 718_52 718_53 718_54 718_55 718_56 718_57 718_58 718_59 718_60 "
-            "718_61 718_62 718_63 718_64 718_65 718_66 718_67 718_68 718_69 718_70 718_71 718_72 718_73 "
-            "718_74 718_75 718_76 718_77 718_78 718_79 718_80 718_81 719_48 719_49 719_50 719_51 719_52 "
-            "719_53 719_54 719_55 719_56 719_57 719_58 719_59 719_60 719_61 719_62 719_63 719_64 719_65 "
-            "719_66 719_67 719_68 719_69 719_70 719_71 719_72 719_73 719_74 719_75 719_76 719_77 719_78 "
-            "719_79 719_80 720_48 720_49 720_50 720_51 720_52 720_53 720_54 720_55 720_56 720_57 720_58 "
-            "720_59 720_60 720_61 720_62 720_63 720_64 720_65 720_66 720_67 720_68 720_69 720_70 720_71 "
-            "720_72 720_73 720_74 720_75 720_76 720_77 720_78 720_79 721_47 721_48 721_49 721_50 721_51 "
-            "721_52 721_53 721_54 721_55 721_56 721_57 721_58 721_59 721_60 721_61 721_62 721_63 721_64 "
-            "721_65 721_66 721_67 721_68 721_69 721_70 721_71 721_72 721_73 721_74 721_75 721_76 721_77 "
-            "721_78 721_79 721_80 722_46 722_47 722_48 722_49 722_50 722_51 722_52 722_53 722_54 722_55 "
-            "722_56 722_57 722_58 722_59 722_60 722_61 722_62 722_63 722_64 722_65 722_66 722_67 722_68 "
-            "722_69 722_70 722_71 722_72 722_73 722_74 722_75 722_76 722_77 722_78 722_79 722_80 723_46 "
-            "723_47 723_48 723_49 723_50 723_51 723_52 723_53 723_54 723_55 723_56 723_57 723_58 723_59 "
-            "723_60 723_61 723_62 723_63 723_64 723_65 723_66 723_67 723_68 723_69 723_70 723_71 723_72 "
-            "723_73 723_74 723_75 723_76 723_77 723_78 723_79 723_80 724_47 724_48 724_49 724_50 724_51 "
-            "724_52 724_53 724_54 724_55 724_56 724_57 724_58 724_59 724_60 724_61 724_62 724_63 724_64 "
-            "724_65 724_66 724_67 724_68 724_69 724_71 724_72 724_73 724_74 724_75 724_76 724_77 724_78 "
-            "724_79 725_47 725_48 725_49 725_50 725_51 725_52 725_53 725_54 725_55 725_56 725_57 725_58 "
-            "725_59 725_60 725_61 725_62 725_63 725_64 725_65 725_66 725_67 725_68 725_72 725_73 725_74 "
-            "725_75 726_47 726_48 726_49 726_50 726_51 726_52 726_53 726_54 726_55 726_56 726_57 726_58 "
-            "726_59 726_60 726_61 726_62 726_63 726_64 726_65 726_66 726_67 727_47 727_48 727_49 727_50 "
-            "727_51 727_52 727_53 727_54 727_55 727_56 727_57 727_58 727_59 727_60 727_61 727_62 727_63 "
-            "727_64 727_65 728_47 728_48 728_49 728_50 728_51 728_52 728_53 728_54 728_55 728_56 728_57 "
-            "728_58 728_59 728_60 728_61 728_62 728_63 729_47 729_48 729_49 729_50 729_51 729_52 729_53 "
-            "729_54 729_55 729_56 729_57 729_58 729_59 729_60 729_61 730_48 730_49 730_50 730_51 730_52 "
-            "730_53 730_54 730_55 730_56 730_57 730_58 730_59 730_60 731_47 731_48 731_49 731_50 731_51 "
-            "731_52 731_53 731_54 731_55 731_56 731_57 731_58 731_59 732_47 732_48 732_49 732_50 732_51 "
-            "732_52 732_53 732_54 732_55 732_56 732_57 732_58 733_47 733_48 733_49 733_50 733_51 733_52 "
-            "733_53 733_54 733_55 733_56 734_50 734_51 734_52 734_53 734_54 734_55 735_51 735_52 735_53"
-        ).split(),
-    },
-}
-
-
-def restore_tiled_zeros(item: Item, manifest: dict, dest: Path) -> bool:
-    """Give a tiled county derived under the retired all-zero rule its 0 back
-    inside the county.
-
-    County 24 (run r2, 2026-10-21) was derived with ``all_zero_cells_nodata``:
-    a 10 m cell whose 1 m cells were all 0 became -1, which kept the tiles' 0
-    fill off the neighbours in the mosaic. ``mask_to_county`` does that job
-    now. Since 2026-10-22 readers return -1 as NaN (no data), so those
-    treeless cells inside the county, and the product's lakes, must read 0
-    again. The derived raster alone cannot tell such a cell from one no tile
-    covered (both are -1), so the restore is bound to the source: only cells
-    inside the county mask and inside a published tile (``TILED_FOOTPRINTS``,
-    for the zip with the recorded sha256) become 0, never a cell touching a
-    recorded gap. Raises when no footprint matches the recorded zip. Runs once,
-    after ``mask_to_county`` (record ``tiled_zeros_restored``). Returns whether
-    the record changed."""
-    import numpy as np
-
-    der = manifest["derived"].get(item.derived)
-    if (item.product != "tradhojd" or der is None or not der.get("all_zero_cells_nodata")
-            or "county_mask" not in der or "tiled_zeros_restored" in der):
-        return False
-    foot = TILED_FOOTPRINTS.get(item.name)
-    if not foot or manifest["files"].get(item.name, {}).get("sha256") != foot["sha256"]:
-        raise ValueError(f"{item.derived}: no published tile footprint for the recorded {item.name}; "
-                         "cannot tell its treeless cells from cells no tile covered")
-    sources = _county_mask_sources(item, manifest, dest)
-    gaps = der.get("gaps", [])
-    tile_m = foot["tile_m"]
-    blocks = {tuple(int(v) for v in t.split("_")) for t in foot["tiles"]}
-
-    def restore(a, inside, win, transform):
-        res, west = transform.a, transform.c
-        top = transform.f - win.row_off * res
-        rows = (top - (np.arange(a.shape[0]) + 0.5) * res) // tile_m
-        cols = (west + (np.arange(a.shape[1]) + 0.5) * res) // tile_m
-        in_tile = np.zeros(a.shape, bool)
-        for r in np.unique(rows):
-            covered = np.array([(int(r), int(c)) in blocks for c in np.unique(cols)])
-            in_tile[rows == r] = covered[np.searchsorted(np.unique(cols), cols)]
-        in_gap = np.zeros(a.shape, bool)
-        for gw, gs, ge, gn in gaps:                    # every cell touching a gap stays -1
-            r0, r1 = math.floor((top - gn) / res), math.ceil((top - gs) / res)
-            c0, c1 = math.floor((gw - west) / res), math.ceil((ge - west) / res)
-            in_gap[max(r0, 0):max(r1, 0), max(c0, 0):max(c1, 0)] = True
-        back = inside & in_tile & (a == -1) & ~in_gap
-        a[back] = 0
-        return {"restored_cells": int(back.sum())}
-
-    _rewrite_county_raster(item, manifest, dest, sources, restore, kind="tiled_zeros_restored",
-                           suffix=".restored.tif")
-    return True
-
-
 def _county_mask_sources(item: Item, manifest: dict, dest: Path) -> list[tuple[str, tuple]]:
     """``(path, values outside)`` of the county's ``COUNTY_MASKS`` rasters;
     raises unless every one is recorded with a sha256 and on disk."""
@@ -1254,9 +1135,6 @@ def _main(argv: list[str] | None = None) -> int:
             if mask_to_county(it, manifest, dest):
                 print(f"    masked {it.derived} to its county: "
                       f"{manifest['derived'][it.derived]['county_mask']['cleared_cells']} cells cleared", flush=True)
-            if restore_tiled_zeros(it, manifest, dest):
-                print(f"    restored the treeless 0 of {it.derived}: "
-                      f"{manifest['derived'][it.derived]['tiled_zeros_restored']['restored_cells']} cells", flush=True)
             skipped += 1
             continue
         t0 = time.time()

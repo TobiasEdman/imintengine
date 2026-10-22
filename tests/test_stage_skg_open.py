@@ -419,7 +419,6 @@ def _staging(monkeypatch, tmp_path, free_gib=1000.0):
     monkeypatch.setattr(st, "zip_tif_entry", lambda z: small)
     monkeypatch.setattr(st, "zip_tiles", lambda z: None)
     monkeypatch.setattr(st, "mask_to_county", lambda *a: False)     # the fake conversion writes no raster
-    monkeypatch.setattr(st, "restore_tiled_zeros", lambda *a: False)
     return calls, snapshots
 
 
@@ -1134,78 +1133,6 @@ def test_main_masks_a_county_staged_before_the_mask(monkeypatch, tmp_path):
     assert snaps[-1]["derived"][_ITEM01.derived]["county_mask"]["cleared_cells"] == 4600
 
 
-def _footprint01(monkeypatch, sha: str = "z" * 64) -> None:
-    """County 01 published as 500 m tiles over its 1 km raster, all but the south-west one
-    (rows 50-99, cols 0-49), which is inside the county mask but no tile covered."""
-    monkeypatch.setattr(st, "TILED_FOOTPRINTS", {"sksTradhojd01.zip": {
-        "sha256": sha, "tile_m": 500, "tiles": ["14719_920", "14719_921", "14718_921"]}})
-
-
-def _legacy_tiled(tmp_path: Path) -> tuple[Path, dict]:
-    """County 01 masked, then marked as derived under the retired all-zero rule: a treeless
-    10 x 10-cell block inside a tile is -1; so are a cell block inside the county that no tile
-    covered (rows 60-69, cols 0-9) and a recorded gap (rows 50-59, cols 20-29)."""
-    import rasterio
-
-    dest, manifest, _ = _masked_dest(tmp_path)
-    assert st.mask_to_county(_ITEM01, manifest, dest)
-    with rasterio.open(dest / _ITEM01.derived, "r+") as d:
-        a = d.read(1)
-        a[0:10, 0:10] = -1                              # treeless, made nodata by the rule
-        a[60:70, 0:10] = -1                             # genuine nodata: no tile covered it
-        a[50:60, 20:30] = -1                            # the recorded gap
-        d.write(a, 1)
-    der = manifest["derived"][_ITEM01.derived]
-    der["all_zero_cells_nodata"] = True
-    der["gaps"] = [[_W + 200.0, _N - 600.0, _W + 300.0, _N - 500.0]]
-    return dest, manifest
-
-
-def test_a_legacy_tiled_county_gets_its_treeless_zeros_back(monkeypatch, tmp_path):
-    import rasterio
-
-    _footprint01(monkeypatch)
-    dest, manifest = _legacy_tiled(tmp_path)
-    assert st.restore_tiled_zeros(_ITEM01, manifest, dest) is True
-    with rasterio.open(dest / _ITEM01.derived) as ds:
-        a = ds.read(1)
-    assert (a[0:10, 0:10] == 0).all()                   # treeless inside a tile: 0 again
-    assert (a[60:70, 0:10] == -1).all()                 # no tile covered it: stays no data
-    assert (a[50:60, 20:30] == -1).all()                # the gap stays no data
-    assert (a[:, 50:60] == -1).all()                    # outside the county stays -1
-    rec = manifest["derived"][_ITEM01.derived]
-    assert rec["tiled_zeros_restored"]["restored_cells"] == 100
-    assert rec["sha256"] == st.sha256_of(dest / _ITEM01.derived) and rec["value_min_dm"] == 0
-    assert st.restore_tiled_zeros(_ITEM01, manifest, dest) is False          # once
-    assert not list((dest / "tradhojd").glob("*.restored.tif"))
-
-
-def test_zeros_are_restored_only_for_a_masked_legacy_tiled_county(monkeypatch, tmp_path):
-    _footprint01(monkeypatch)
-    dest, manifest = _legacy_tiled(tmp_path)
-    der = manifest["derived"][_ITEM01.derived]
-    der["all_zero_cells_nodata"] = False                # a one-raster county: its -1 is no data
-    assert st.restore_tiled_zeros(_ITEM01, manifest, dest) is False
-    der["all_zero_cells_nodata"] = True
-    mask = der.pop("county_mask")                       # not masked yet: the rule still guards
-    assert st.restore_tiled_zeros(_ITEM01, manifest, dest) is False
-    der["county_mask"] = mask
-    assert st.restore_tiled_zeros(_ITEM01, manifest, dest) is True
-
-
-def test_main_restores_a_legacy_tiled_county_after_its_mask(monkeypatch, tmp_path):
-    real_mask, real_restore = st.mask_to_county, st.restore_tiled_zeros
-    _footprint01(monkeypatch)
-    calls, snaps = _staging(monkeypatch, tmp_path)
-    monkeypatch.setattr(st, "mask_to_county", real_mask)
-    monkeypatch.setattr(st, "restore_tiled_zeros", real_restore)
-    dest, manifest = _legacy_tiled(tmp_path)
-    (dest / "MANIFEST.json").write_text(json.dumps(manifest))
-    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
-    assert calls == []
-    assert snaps[-1]["derived"][_ITEM01.derived]["tiled_zeros_restored"]["restored_cells"] == 100
-
-
 def test_a_fresh_derivation_is_masked_before_the_raw_zip_goes(monkeypatch, tmp_path):
     calls, snaps = _staging(monkeypatch, tmp_path)
 
@@ -1306,12 +1233,15 @@ def test_an_interrupted_mask_on_a_foreign_raster_is_refused(monkeypatch, tmp_pat
 
 
 
-def test_the_zero_restore_is_bound_to_the_published_tiles(monkeypatch, tmp_path):
-    dest, manifest = _legacy_tiled(tmp_path)
-    monkeypatch.setattr(st, "TILED_FOOTPRINTS", {})                  # no footprint for the zip
-    with pytest.raises(ValueError, match="no published tile footprint"):
-        st.restore_tiled_zeros(_ITEM01, manifest, dest)
-    _footprint01(monkeypatch, sha="o" * 64)                             # a footprint of another zip
-    with pytest.raises(ValueError, match="no published tile footprint"):
-        st.restore_tiled_zeros(_ITEM01, manifest, dest)
-    assert "tiled_zeros_restored" not in manifest["derived"][_ITEM01.derived]
+
+def test_a_county_derived_under_the_retired_rule_is_derived_again(monkeypatch, tmp_path):
+    """County 24 (run r2) was derived with all_zero_cells_nodata: its -1 mixes treeless cells
+    with source nodata, so it is not done; the run downloads its zip again and re-derives it."""
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    dest, manifest, _ = _masked_dest(tmp_path)
+    manifest["derived"][_ITEM01.derived]["all_zero_cells_nodata"] = True
+    manifest["files"][_ITEM01.name]["sha256"] = hashlib.sha256(b"zip").hexdigest()   # the same zip again
+    (dest / "MANIFEST.json").write_text(json.dumps(manifest))
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert calls == [("download", "sksTradhojd01.zip"), ("convert", "sksTradhojd01.zip")]
+    assert "all_zero_cells_nodata" not in snaps[-1]["derived"][_ITEM01.derived]
