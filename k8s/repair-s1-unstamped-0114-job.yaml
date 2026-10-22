@@ -22,6 +22,14 @@
 # holds scripts/repair_s1_unstamped.py; the pod refuses the placeholder.
 # A re-run must use a new backup dir: the first one holds the originals.
 #
+# The apply step also refuses (exit 3, nothing written, no backup dir
+# created) if a selected tile's staging file <tile>.npz.tmp.npz already
+# exists: the enricher would overwrite it and rename it away. The dry run
+# lists them as "staging_conflicts". If it fires, do not delete them from
+# the Job: confirm no other writer is active, inspect each file (a leftover
+# of an interrupted run), have the owner decide to move it aside or remove
+# it, then re-apply this Job under a new name.
+#
 # Verify: the apply step's "AFTER {...}" line shows enrich_failed 0,
 # still_failing [] and after_count 0; the final SELECTION count is 0
 # (checked with --expect 0); tiles before == after; the Job exits 0. Then
