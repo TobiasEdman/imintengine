@@ -2,12 +2,13 @@
   "id": "0113",
   "subject": "S1 sigma0: retire the GCP-referenced warp path",
   "description": "Owner decision 2026-10-20: ticket now, fix later. Found by the review of task 0112. imint/data/s1_shared.py read_window warps GCP-referenced GRD with the product's own tie points (ellipsoid height ~0) through GDAL's 2-D TPS, which drops Z. It serves mpc_s1.fetch_s1_scene and the sigma0 training tiles of imint/training/aws_s1.py and imint/training/cdse_s1_stac.py. By the geometry measured for the vessel chain (task 0112) the sea in those tiles sits (N - z)/tan(inc) toward the satellite, 41-56 m off Skagen (expected, not yet measured on the tiles). Fix: route the sigma0 warp through the vessel chain's sea-surface tie points (one helper, no second geocoding path), version the tiles' cache, and add a regression test against independent truth (range-Doppler oracle and/or AIS hull centres) before any tile is regenerated. Decide with the owner how models trained on the old tiles are handled. Projected RTC COGs (imint/training/pc_s1_rtc.py) do not use this warp and are out of scope. Owner decision 2026-10-22 (after a blast-radius check: no model trained on the affected tiles; the v4 training tiles come from pc-rtc, which skips this warp): retire the path instead of fixing it. GCP-referenced sigma0 reads fail loud with a pointer to pc_s1_rtc; the cdse-stac fallback in scripts/enrich_tiles_s1.py is removed or refuses, so a shifted tile can never be stamped v4; the dataset gate records and checks which backend made a tile; the stale k8s jobs that pass the removed 'cascade' backend are fixed. Also found: interp_lut samples the calibration LUT at warped-grid offsets, not radar line/pixel (retired with the path). No tiles are regenerated. Separately: a read-only count of leftover v1 or unstamped S1 data on the training PVC, reported to the owner before any cleanup.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/s1-sigma0-retire",
   "runtime": "claude",
   "created_at": "2026-10-20T20:25:08Z",
-  "updated_at": "2026-10-22T06:35:05Z",
+  "updated_at": "2026-10-22T08:00:08Z",
   "claimed_by": "claude-sigma0-1022",
-  "claimed_at": "2026-10-22T06:35:05Z"
+  "claimed_at": "2026-10-22T06:35:05Z",
+  "completed_at": "2026-10-22T08:00:08Z"
 }
