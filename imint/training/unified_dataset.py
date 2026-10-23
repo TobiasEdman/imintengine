@@ -157,8 +157,11 @@ AUX_LOG_TRANSFORM = {"volume", "basal_area"}
 # Channels whose npz nodata is encoded as NaN (float) rather than 0.
 # For these, NaN is filled with the channel's z-score mean BEFORE the
 # transform so nodata normalizes to ~0 and never leaks NaN into the model.
-# (Every other aux channel uses 0 as its nodata sentinel.)
-AUX_NAN_NODATA_CHANNELS = {"markfukt"}
+# (Every other aux channel uses 0 as its nodata sentinel.) Height joined
+# 2026-10-22: the Trädhöjd mirror marks where it has no data (county 25's
+# coverage gaps, sea, abroad) instead of reading it as "no trees"; a tile
+# without the channel now normalizes to the mean as well, not to height 0.
+AUX_NAN_NODATA_CHANNELS = {"markfukt", "height"}
 
 # HR-VPP date channels: raw band is YYDDD = (year-2000)*1000 + DOY.
 # Decode to day-of-year (value % 1000) before z-score; NoData (0) maps to

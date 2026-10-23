@@ -102,9 +102,26 @@ def test_tree_height_is_metres_and_cache_is_decimetres(mirror, tmp_path):
     cache = tmp_path / "cache"
     m = skg_grunddata.fetch_tree_height_tile(W, S, E, N, size_px=PX, cache_dir=cache)
     assert m.dtype == np.float32 and m[20, 20] == pytest.approx(12.5)
-    assert (m[:4] == 0).all() and m[10, 10] == 0
-    cached = np.load(cache / f"tree_height_{W}_{S}_{E}_{N}.npy")
-    assert cached[20, 20] == 125
+    assert np.isnan(m[:4]).all() and m[10, 10] == 0
+    cached = np.load(cache / f"tree_height_nan_{W}_{S}_{E}_{N}.npy")
+    assert cached[20, 20] == 125 and np.isnan(cached[0, 0])
+
+
+def test_tree_height_nodata_is_nan_inside_and_outside_a_county(mirror):
+    """The fixture's height raster is -1 in its top 4 rows. County 01's grunddata covers the
+    tile's 44 western columns (its east side is nodata): nodata is NaN on both sides, and the
+    product's own values, 0 included, pass through."""
+    dm = skg_open.read_tradhojd(W, S, E, N, size_px=PX)
+    assert np.isnan(dm[:4]).all()
+    assert not np.isnan(dm[4:]).any() and dm[20, 20] == 125 and dm[10, 10] == 0
+
+
+def test_county_cells_are_the_valid_mask_cells(mirror, tmp_path):
+    import json
+    m = json.loads((tmp_path / "MANIFEST.json").read_text())
+    inside = skg_open.county_cells(W, S, E, N, (PX, PX), {"01"}, m)
+    assert inside[:, :44].all() and not inside[:, 44:].any()
+    assert not skg_open.county_cells(W, S, E, N, (PX, PX), set(), m).any()
 
 
 def test_public_fetchers_share_the_cache_contract(mirror, tmp_path):

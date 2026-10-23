@@ -426,7 +426,8 @@ def test_every_aux_pass_job_refuses_a_reader_blind_to_recorded_gaps() -> None:
     """A Job running skg_aux_pass.py pinned to a commit whose skg_open predates
     recorded gaps (#94) writes Trädhöjd height 0 over a truncated upstream
     tile (nfi-topup-aux-pass was pinned to eded310). Its preflight must call
-    skg_open.tradhojd_gaps, which fails on such a pin."""
+    skg_open.tradhojd_gaps, which fails on such a pin, and require every
+    county masked (#96), and the Job must state its --max-missing-share."""
     import yaml
 
     jobs = []
@@ -435,5 +436,6 @@ def test_every_aux_pass_job_refuses_a_reader_blind_to_recorded_gaps() -> None:
             for c in _containers(doc):
                 script = "\n".join(c.get("args", []) + c.get("command", []))
                 if "scripts/skg_aux_pass.py" in script:
-                    jobs.append((path.name, "skg_open.tradhojd_gaps(" in script))
+                    jobs.append((path.name, "skg_open.tradhojd_gaps(" in script and "county_mask" in script
+                                 and "--max-missing-share" in script))
     assert jobs and all(ok for _, ok in jobs), jobs

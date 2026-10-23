@@ -59,6 +59,10 @@
 # b92790b (Codex review of #96): masking needs both mask sources, and a mask
 # interrupted between the raster and manifest writes is finished on restart
 # ("finished an interrupted rewrite ...") before the raw-deletion check.
+# The NaN-height change (2026-10-22, heights' nodata now reads NaN): the
+# all-zero rule is retired. County 24, derived under it, is derived again
+# from its zip on the next apply (8052421): its -1 mixed treeless cells with
+# source nodata, which only the source can tell apart (Codex review of #101).
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -166,8 +170,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "b92790bf0d75aa54c9d11913ed15171b0c5defb3"}
-            - {name: IMINT_SCRIPT_SHA256, value: "6248d4f9b4fc2e755ceabe94f754b050c5b717387e306296951d375fe546f9cb"}
+            - {name: IMINT_COMMIT, value: "91f96c863cea0074dae995c3ae101212c3ab1201"}
+            - {name: IMINT_SCRIPT_SHA256, value: "5c02dde5cb71b9045b47bcf4f25c8655f46a086011cd34c632640264f2f70c5b"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}

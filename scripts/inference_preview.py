@@ -25,7 +25,7 @@ from imint.schema.unified_schema import (
     nmd19_to_unified,
 )
 
-from imint.training.unified_dataset import AUX_CHANNEL_NAMES, normalize_aux_channel
+from imint.training.unified_dataset import AUX_CHANNEL_NAMES, AUX_NAN_NODATA_CHANNELS, normalize_aux_channel
 
 CLASS_NAMES = [UNIFIED_CLASSES.get(i, f"cls_{i}") for i in range(NUM_UNIFIED_CLASSES)]
 
@@ -91,6 +91,23 @@ def load_model(checkpoint_path: str, device: torch.device):
     missing, unexpected = model.load_state_dict(sd, strict=False)
     print(f"  Loaded ({len(missing)} missing, {len(unexpected)} unexpected)")
     return model.to(device).eval()
+
+
+def preview_aux_stack(data, h: int, w: int) -> np.ndarray:
+    """The normalized aux stack for one tile, filled like UnifiedDataset: an
+    absent or padded pixel is NaN for the NaN-nodata channels (markfukt,
+    height; normalize_aux_channel turns it into the channel mean) and 0 for
+    the others."""
+    arrays = []
+    for ch_name in AUX_CHANNEL_NAMES:
+        fill = np.nan if ch_name in AUX_NAN_NODATA_CHANNELS else 0.0
+        arr = np.full((h, w), fill, dtype=np.float32)
+        if ch_name in data:
+            src = data[ch_name].astype(np.float32)
+            sh, sw = min(src.shape[0], h), min(src.shape[1], w)
+            arr[:sh, :sw] = src[:sh, :sw]
+        arrays.append(normalize_aux_channel(ch_name, arr))
+    return np.stack(arrays, axis=0)
 
 
 def main():
@@ -171,19 +188,7 @@ def main():
         if model is not None:
             model_input = spectral[base:base + bands_per_frame]  # (6, H, W)
             h, w = model_input.shape[1], model_input.shape[2]
-            aux_arrays = []
-            for ch_name in AUX_CHANNEL_NAMES:
-                if ch_name in data:
-                    arr = data[ch_name].astype(np.float32)
-                    if arr.shape != (h, w):
-                        padded = np.zeros((h, w), dtype=np.float32)
-                        sh = min(arr.shape[0], h); sw = min(arr.shape[1], w)
-                        padded[:sh, :sw] = arr[:sh, :sw]
-                        arr = padded
-                else:
-                    arr = np.zeros((h, w), dtype=np.float32)
-                aux_arrays.append(normalize_aux_channel(ch_name, arr))
-            aux_stack = np.stack(aux_arrays, axis=0)
+            aux_stack = preview_aux_stack(data, h, w)
             inp   = torch.from_numpy(model_input).unsqueeze(0).to(device)
             aux_t = torch.from_numpy(aux_stack).unsqueeze(0).to(device)
             with torch.no_grad():

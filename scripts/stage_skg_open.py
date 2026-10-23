@@ -223,7 +223,18 @@ def is_done(item: Item, manifest: dict, dest: Path) -> bool:
     der = manifest["derived"].get(item.derived)
     if not (rec and rec.get("sha256") and der and der.get("sha256") and (dest / item.derived).exists()):
         return False
+    if _stale(der):
+        return False
     return bool(rec.get("raw_deleted_at")) or (dest / "raw" / item.name).exists()
+
+
+def _stale(der: dict) -> bool:
+    """A derived raster that must be derived again from its zip: one derived
+    under the retired all-zero rule (county 24, run r2), whose -1 mixes
+    treeless cells with source nodata that only the source can tell apart
+    (Codex review of #101). Neither ``is_done`` nor the raw-deletion
+    recovery may count it as the zip's verified derivation."""
+    return bool(der.get("all_zero_cells_nodata"))
 
 
 def staged_vrt_sources(manifest: dict, dest: Path, vrt: str) -> list[str]:
@@ -545,12 +556,11 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
             tradhojd_workers: int = 1) -> dict:
     """Write the derived COG for ``item``; returns the record for the manifest.
 
-    A tiled Trädhöjd county is derived from its mosaic VRT with
-    ``all_zero_cells_nodata``: its tiles fill the sea and the land outside
-    the county with 0, where every one-raster county has nodata -1, so a
-    10 m cell whose 1 m cells are all 0 becomes nodata. ``read_tradhojd``
-    reads nodata as 0, so readers see the same heights; the county's zeros
-    no longer cover its neighbours in the mosaic."""
+    A tiled Trädhöjd county is derived from its mosaic VRT. Its tiles fill
+    the sea and the land outside the county with 0; ``mask_to_county`` sets
+    those cells to -1 afterwards, as for every county, so they never cover a
+    neighbour in the mosaic and the county's own zeros (treeless land, the
+    product's lakes) stay 0."""
     entries = zip_tiles(zpath)
     tiled = entries is not None
     gaps = [g for k in known_truncated(zpath.name, entries[1:]).values() for g in k["gaps"]] if tiled else []
@@ -561,11 +571,8 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
     partial = out.with_name(out.name + ".part.tif")
     try:
         if item.product == "tradhojd":
-            check = derive_tradhojd_10m(src, partial, tradhojd_method, workers=tradhojd_workers,
-                                        all_zero_cells_nodata=tiled)
+            check = derive_tradhojd_10m(src, partial, tradhojd_method, workers=tradhojd_workers)
             method = f"block {tradhojd_method} of the 1 m cells per 10 m cell, nodata-aware, int16 dm"
-            if tiled:
-                method += "; tiled source: a 10 m cell whose 1 m cells are all 0 is nodata"
             if gaps:
                 method += "; truncated upstream tiles: their unreadable blocks are nodata, the gaps recorded"
         else:
@@ -587,12 +594,10 @@ def convert(item: Item, zpath: Path, out: Path, work: Path, tradhojd_method: str
 TRADHOJD_STATS = ("p90", "p95", "average", "max")
 
 
-def block_stat(block, stat: str, nodata: int, all_zero_cells_nodata: bool = False):
+def block_stat(block, stat: str, nodata: int):
     """``stat`` of each 10×10 group of 1 m cells in ``block`` (rows and
     columns multiples of 10), ignoring nodata; a group with no valid cell
-    is nodata, and with ``all_zero_cells_nodata`` so is a group whose valid
-    cells are all 0 (zeros still count in every other group). Returns int16
-    (dm, rounded)."""
+    is nodata. Returns int16 (dm, rounded)."""
     import numpy as np
 
     h, w = block.shape
@@ -609,25 +614,20 @@ def block_stat(block, stat: str, nodata: int, all_zero_cells_nodata: bool = Fals
             v = np.nanpercentile(gf, int(stat[1:]), axis=2)
         else:
             raise ValueError(f"unknown tradhojd statistic {stat!r}")
-    keep = n_valid > 0
-    if all_zero_cells_nodata:
-        keep &= (valid & (g != 0)).any(axis=2)
-    out = np.where(keep, np.rint(v), nodata)
+    out = np.where(n_valid > 0, np.rint(v), nodata)
     return np.clip(out, -1, 32767).astype(np.int16)
 
 
-def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int, all_zero_cells_nodata: bool):
+def _reduce_strip(src: str, row: int, n_rows: int, stat: str, nodata: int):
     """``block_stat`` of ``n_rows`` source rows from ``row``; runs in a worker process."""
     import rasterio
     from rasterio.windows import Window
 
     with rasterio.Env(**SERIAL_VRT), rasterio.open(src) as ds:
-        return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata,
-                          all_zero_cells_nodata)
+        return block_stat(ds.read(1, window=Window(0, row, ds.width, n_rows)), stat, nodata)
 
 
-def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1, *,
-                        all_zero_cells_nodata: bool = False) -> dict:
+def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1) -> dict:
     """Reduce the 1 m Trädhöjd raster to the NMD 10 m lattice, one strip of
     640 source rows at a time (memory-bounded; works on a strip TIFF read
     through /vsizip/).
@@ -682,27 +682,25 @@ def derive_tradhojd_10m(src: str, out: Path, stat: str, workers: int = 1, *,
         if workers <= 1:
             with rasterio.Env(**SERIAL_VRT), rasterio.open(src) as ds:    # one handle, read in order
                 for r, n in strips:
-                    write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod,
-                                                all_zero_cells_nodata))
+                    write(dst, r, n, block_stat(ds.read(1, window=Window(0, r, ds.width, n)), stat, nod))
         else:
             ex = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"))
             try:
                 todo, pending = iter(strips), deque()
                 for r, n in todo:
-                    pending.append((r, n, ex.submit(_reduce_strip, src, r, n, stat, nod, all_zero_cells_nodata)))
+                    pending.append((r, n, ex.submit(_reduce_strip, src, r, n, stat, nod)))
                     if len(pending) == 2 * workers:
                         break
                 while pending:
                     r, n, fut = pending.popleft()
                     nxt = next(todo, None)
                     if nxt is not None:
-                        pending.append((*nxt, ex.submit(_reduce_strip, src, *nxt, stat, nod,
-                                                        all_zero_cells_nodata)))
+                        pending.append((*nxt, ex.submit(_reduce_strip, src, *nxt, stat, nod)))
                     write(dst, r, n, fut.result())
             finally:
                 ex.shutdown(wait=False, cancel_futures=True)   # a SIGTERM or error must not wait for the queue
     rec = {"width": ow, "height": oh, "res_m": 10.0, "nodata": -1, "dtype": "int16",
-           "bounds": src_bounds, "statistic": stat, "all_zero_cells_nodata": all_zero_cells_nodata,
+           "bounds": src_bounds, "statistic": stat,
            "value_min_dm": vmin, "value_max_dm": vmax, "valid_cells": n_valid}
     return {**rec, **verify_tradhojd_10m(out, rec)}
 
@@ -1120,7 +1118,7 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"    finished an interrupted rewrite of {it.derived}", flush=True)
         raw = dest / "raw" / it.name
         der = manifest["derived"].get(it.derived)
-        if (args.drop_raw and it.product == "tradhojd" and der and der.get("sha256")
+        if (args.drop_raw and it.product == "tradhojd" and der and der.get("sha256") and not _stale(der)
                 and raw.exists() and (dest / it.derived).exists()
                 and not manifest["files"].get(it.name, {}).get("raw_deleted_at")):
             # crashed after the verified derivation was recorded, before the delete:

@@ -115,15 +115,23 @@ class LULCDataset(Dataset):
 
         # Load and stack auxiliary channels → (N, H, W) or None
         # Missing channels are zero-filled to ensure consistent batch keys
+        # NaN-nodata channels (markfukt, height) mark missing pixels with NaN:
+        # an absent channel is all NaN, and NaN takes the channel mean before
+        # the z-score, as in UnifiedDataset, so no NaN reaches the model.
+        from .unified_dataset import AUX_NAN_NODATA_CHANNELS, AUX_NORM
         aux_names: list[str] = []
         aux_arrays: list[np.ndarray] = []
         h, w = label.shape
         for ch_name in self.aux_channels:
             aux_names.append(ch_name)
             if ch_name in data:
-                aux_arrays.append(data[ch_name].astype(np.float32))
+                arr = data[ch_name].astype(np.float32)
             else:
-                aux_arrays.append(np.zeros((h, w), dtype=np.float32))
+                arr = np.full((h, w), np.nan if ch_name in AUX_NAN_NODATA_CHANNELS else 0.0, dtype=np.float32)
+            if ch_name in AUX_NAN_NODATA_CHANNELS:
+                mean = (self.config.aux_norm or {}).get(ch_name, AUX_NORM.get(ch_name, (0.0, 1.0)))[0]
+                arr = np.where(np.isnan(arr), np.float32(mean), arr)
+            aux_arrays.append(arr)
         aux_stack = np.stack(aux_arrays) if aux_arrays else None  # (N,H,W)
 
         # Normalize aux channels (z-score using empirical mean/std).

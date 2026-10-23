@@ -785,31 +785,31 @@ def test_a_tiled_county_is_extracted_and_its_gaps_read_as_nodata(tmp_path):
         assert np.array_equal(ds.read(1), mosaic)                   # the missing tile reads -1, not 0
 
 
-def test_a_tiled_county_derives_all_zero_cells_as_nodata(tmp_path):
+def test_a_tiled_county_keeps_its_zeros_for_the_county_mask(tmp_path):
+    """The all-zero rule is retired (2026-10-22): a tiled county derives like any other, its
+    0 fill included; mask_to_county clears what lies outside the county afterwards."""
     import rasterio
 
     zpath, mosaic = _tiled_zip(tmp_path)
     item = st.Item(zpath.name, "tradhojd", "tradhojd/tradhojd_10m_24.tif", county="24")
     out = tmp_path / "m/tradhojd/tradhojd_10m_24.tif"
     rec = st.convert(item, zpath, out, tmp_path / "work", "p90")
-    assert rec["all_zero_cells_nodata"] is True and "all 0 is nodata" in rec["method"]
+    assert "all_zero_cells_nodata" not in rec and "all 0" not in rec["method"]
     assert not (tmp_path / "work/sksTradhojd24").exists()
     with rasterio.open(out) as ds:
         got = ds.read(1)
-    assert (got[0:4, 4:8] == -1).all()                  # the sea tile
-    assert (got[4:8, 4:8] == -1).all()                  # the missing tile
-    assert got[4, 0] == -1                              # the treeless cell
+    assert (got[0:4, 4:8] == 0).all()                   # the sea tile: 0 until the county mask
+    assert (got[4:8, 4:8] == -1).all()                  # the missing tile: no data
+    assert got[4, 0] == 0                               # the treeless cell
     mixed = mosaic[40:50, 10:20].astype(float)
-    assert got[4, 1] == np.rint(np.percentile(mixed, 90))     # zeros still count in a mixed cell
+    assert got[4, 1] == np.rint(np.percentile(mixed, 90))
     cell = mosaic[0:10, 0:10].astype(float)
     assert got[0, 0] == np.rint(np.percentile(cell, 90))
-    # a one-raster county keeps a treeless cell as 0
-    assert st.block_stat(mosaic[40:50, 0:10], "p90", -1)[0, 0] == 0
 
     out2 = tmp_path / "m2/tradhojd_10m_24.tif"
     st.convert(item, zpath, out2, tmp_path / "work", "p90", tradhojd_workers=2)
     with rasterio.open(out2) as ds:
-        assert np.array_equal(ds.read(1), got)           # the workers apply the same rule
+        assert np.array_equal(ds.read(1), got)           # the workers derive the same raster
 
 
 def test_a_tiled_vrt_that_does_not_list_the_zips_tiles_is_refused(tmp_path):
@@ -1230,3 +1230,39 @@ def test_an_interrupted_mask_on_a_foreign_raster_is_refused(monkeypatch, tmp_pat
     (dest / _ITEM01.derived).write_bytes(b"something else")
     with pytest.raises(RuntimeError, match="neither side of the interrupted county_mask"):
         st.finish_pending_rewrite(_ITEM01, manifest, dest)
+
+
+
+
+def test_a_county_derived_under_the_retired_rule_is_derived_again(monkeypatch, tmp_path):
+    """County 24 (run r2) was derived with all_zero_cells_nodata: its -1 mixes treeless cells
+    with source nodata, so it is not done; the run downloads its zip again and re-derives it."""
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    dest, manifest, _ = _masked_dest(tmp_path)
+    manifest["derived"][_ITEM01.derived]["all_zero_cells_nodata"] = True
+    manifest["files"][_ITEM01.name]["sha256"] = hashlib.sha256(b"zip").hexdigest()   # the same zip again
+    (dest / "MANIFEST.json").write_text(json.dumps(manifest))
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert calls == [("download", "sksTradhojd01.zip"), ("convert", "sksTradhojd01.zip")]
+    assert "all_zero_cells_nodata" not in snaps[-1]["derived"][_ITEM01.derived]
+
+
+def test_a_rederivation_interrupted_after_its_download_reuses_the_zip(monkeypatch, tmp_path):
+    """Codex's #101 finding: the zip was downloaded again for a rule-derived county and the run
+    stopped before deriving. On restart the raw-deletion recovery must not take the stale raster
+    for the zip's derivation and delete the zip; the zip is reused, no second ~40 GB download."""
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    dest, manifest, _ = _masked_dest(tmp_path)
+    der = manifest["derived"][_ITEM01.derived]
+    der["all_zero_cells_nodata"] = True
+    rec = manifest["files"][_ITEM01.name]
+    rec["sha256"] = hashlib.sha256(b"zip").hexdigest()
+    del rec["raw_deleted_at"]                                 # downloaded again, not yet derived
+    (dest / "raw").mkdir()
+    (dest / "raw" / _ITEM01.name).write_bytes(b"zip")
+    (dest / "MANIFEST.json").write_text(json.dumps(manifest))
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert calls == [("convert", "sksTradhojd01.zip")]          # no download: the zip was reused
+    last = snaps[-1]
+    assert "all_zero_cells_nodata" not in last["derived"][_ITEM01.derived]
+    assert last["files"][_ITEM01.name]["raw_deleted_at"] and not (dest / "raw" / _ITEM01.name).exists()

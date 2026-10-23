@@ -22,6 +22,13 @@ rewrite, per tile:
   the window reads, with their sha256 and source zip date
   (``skg_open.window_provenance``): the open products are versions of their
   own, documented per tile;
+* where the mirror has no data a channel holds NaN (height since
+  2026-10-22, markfukt always). The share of the window's in-county cells
+  that are NaN is recorded per channel (``missing_share``); NaN outside every
+  county (sea, abroad) never counts. Height with a share above
+  ``--max-missing-share`` is a gap like an empty read, so the census, which
+  counts present keys, never takes a mostly unknown height for a complete
+  one. The limit is Tobias's choice, and the Job states it;
 * all five present: ``aux_complete=1`` and ``aux_missing`` /
   ``aux_gap_reason`` removed; otherwise ``aux_complete=0`` with the missing
   channels and a dated reason naming each gap.
@@ -53,6 +60,10 @@ from imint.training.tile_bbox import resolve_fetch_bbox  # noqa: E402
 from scripts.prefetch_aux import _CHANNEL_FETCHERS  # noqa: E402
 
 AUX = ("height", "volume", "basal_area", "diameter", "markfukt")
+#: Channels whose in-county NaN share is held to ``--max-missing-share``.
+#: Markfukt is not: its NaN marks SLU's own coverage gaps, written and counted
+#: complete since IM-022, and the census quota rests on that.
+LIMITED = ("height",)
 
 
 def _git_sha() -> str:
@@ -66,9 +77,22 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def _empty(arr) -> bool:
-    """The enrich Job's rule: an image channel with no non-zero, non-NaN pixel carries nothing."""
-    return getattr(arr, "ndim", 0) >= 2 and not np.any(np.nan_to_num(arr))
+#: Channels whose nodata is NaN, as ``unified_dataset.AUX_NAN_NODATA_CHANNELS``
+#: (which this script does not import; a test keeps the two equal). There 0 is a
+#: value, height 0 meaning no trees, so such a channel is empty only without a
+#: finite pixel.
+NAN_NODATA = ("height", "markfukt")
+
+
+def _empty(arr, channel: str) -> bool:
+    """An image channel that carries nothing: no finite pixel for a NaN-nodata
+    channel, no non-zero finite pixel (the enrich Job's rule) for the others,
+    whose nodata is 0."""
+    if getattr(arr, "ndim", 0) < 2:
+        return False
+    if channel in NAN_NODATA:
+        return not np.isfinite(arr).any()
+    return not np.any(np.nan_to_num(arr))
 
 
 def _gap(exc: skg_open.SkgMirrorMissingError) -> str:
@@ -85,10 +109,22 @@ def _gap(exc: skg_open.SkgMirrorMissingError) -> str:
     return "mirror product missing"
 
 
-def process(path: Path, *, stamp: str, git_sha: str, dry_run: bool) -> dict:
+def _missing_share(arr: np.ndarray, west: float, south: float, east: float, north: float) -> float:
+    """Share of the window's in-county cells where ``arr`` is NaN (no data in
+    the mirror); NaN outside every county (sea, abroad) does not count."""
+    nan = np.isnan(arr)
+    if not nan.any():
+        return 0.0
+    inside = skg_open.county_cells(west, south, east, north, arr.shape,
+                                   skg_open.counties_in_window(west, south, east, north))
+    n = int(inside.sum())
+    return float((nan & inside).sum()) / n if n else 0.0
+
+
+def process(path: Path, *, stamp: str, git_sha: str, dry_run: bool, max_missing_share: float) -> dict:
     with np.load(path, allow_pickle=True) as z:
         d = dict(z)
-    need = [k for k in AUX if k not in d or _empty(d[k])]
+    need = [k for k in AUX if k not in d or _empty(d[k], k)]
     if not need and int(d.get("aux_complete", 1)) == 1 and "aux_missing" not in d:
         return {"status": "complete"}
     bbox, size = resolve_fetch_bbox(name=path.stem, npz_data=d)
@@ -96,16 +132,23 @@ def process(path: Path, *, stamp: str, git_sha: str, dry_run: bool) -> dict:
         raise RuntimeError("tile bbox cannot be resolved")
     west, south, east, north = bbox["west"], bbox["south"], bbox["east"], bbox["north"]
 
-    written, gaps = [], {}
+    written, gaps, missing_share = [], {}, {}
     for ch in need:
         try:
             arr = _CHANNEL_FETCHERS[ch](west, south, east, north, size_px=(size, size), cache_dir=None)
         except skg_open.SkgMirrorMissingError as exc:
             gaps[ch] = _gap(exc)
             continue
-        if _empty(arr):
+        if _empty(arr, ch):
             gaps[ch] = "no valid pixel in the mirror window"
             continue
+        share = _missing_share(arr, west, south, east, north)
+        if ch in LIMITED and share > max_missing_share:
+            gaps[ch] = (f"{share:.1%} of the window inside its counties has no data in the mirror "
+                        f"(limit {max_missing_share:.1%})")
+            continue
+        if share:
+            missing_share[ch] = round(share, 4)
         d[ch] = arr
         written.append(ch)
     missing = [k for k in need if k not in written]
@@ -121,7 +164,8 @@ def process(path: Path, *, stamp: str, git_sha: str, dry_run: bool) -> dict:
         kept[ch] = bool(np.array_equal(np.asarray(d[ch], dtype=np.float32), again, equal_nan=True))
 
     entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "git_sha": git_sha,
-             "written": written, "gaps": gaps, "kept_equal_to_mirror": kept,
+             "written": written, "gaps": gaps, "missing_share": missing_share,
+             "max_missing_share": max_missing_share, "kept_equal_to_mirror": kept,
              **skg_open.window_provenance(west, south, east, north, size_px=(size, size))}
     history = json.loads(str(d["aux_provenance"])) if "aux_provenance" in d else []
     d["aux_provenance"] = np.array(json.dumps([*history, entry]))
@@ -140,7 +184,8 @@ def process(path: Path, *, stamp: str, git_sha: str, dry_run: bool) -> dict:
             np.savez_compressed(f, **d)
         os.replace(tmp, path)
     return {"status": "incomplete" if missing else "completed", "written": written, "missing": missing,
-            "gaps": gaps, "kept_equal_to_mirror": kept, "counties": entry["counties"]}
+            "gaps": gaps, "missing_share": missing_share, "kept_equal_to_mirror": kept,
+            "counties": entry["counties"]}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -149,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--report", type=Path, required=True, help="per-tile outcome JSON")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--dry-run", action="store_true", help="read and decide, write no tile and no report")
+    p.add_argument("--max-missing-share", type=float, required=True,
+                   help="height with more of its in-county cells NaN than this share is a gap (0 = any)")
     args = p.parse_args(argv)
 
     tiles = sorted(args.data_dir.glob("*.npz"))
@@ -159,7 +206,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def run(path: Path) -> tuple[str, dict]:
         try:
-            return path.stem, process(path, stamp=stamp, git_sha=git_sha, dry_run=args.dry_run)
+            return path.stem, process(path, stamp=stamp, git_sha=git_sha, dry_run=args.dry_run,
+                                      max_missing_share=args.max_missing_share)
         except Exception as exc:                      # the tile is untouched; reported, run exits 1
             return path.stem, {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
@@ -170,11 +218,14 @@ def main(argv: list[str] | None = None) -> int:
     written = Counter(ch for r in results.values() for ch in r.get("written", []))
     gaps = Counter(f"{ch}: {why}" for r in results.values() for ch, why in r.get("gaps", {}).items())
     kept = Counter(f"{ch}: {eq}" for r in results.values() for ch, eq in r.get("kept_equal_to_mirror", {}).items())
+    partial = Counter(ch for r in results.values() for ch in r.get("missing_share", {}))
     errors = Counter(r["error"].split(":")[0] for r in results.values() if r["status"] == "error")
     print(f"tiles by outcome: {dict(sorted(counts.items()))}", flush=True)
     print(f"channels written: {dict(sorted(written.items()))}", flush=True)
     for g, n in sorted(gaps.items()):
         print(f"  gap {g}: {n} tiles", flush=True)
+    for ch, n in sorted(partial.items()):
+        print(f"  written with in-county NaN {ch}: {n} tiles", flush=True)
     for k, n in sorted(kept.items()):
         print(f"  kept, equal to the mirror {k}: {n} tiles", flush=True)
     for e, n in sorted(errors.items()):
