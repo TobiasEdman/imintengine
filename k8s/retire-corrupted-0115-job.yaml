@@ -1,0 +1,77 @@
+# Task 0115: delete /data/unified_v2_512_corrupted (owner decision
+# 2026-10-23; docs/experiments/unified_v2_512_dropped_tiles_2026-10-23.md).
+# The OWNER applies this Job: permanent deletion is the owner's action.
+#
+#   kubectl --context icekube apply -f k8s/retire-corrupted-0115-job.yaml
+#   kubectl --context icekube -n prithvi-training-default logs -f job/retire-corrupted-0115
+#
+# Guard: it deletes only if the names without a copy in /data/unified_v2_512
+# are exactly the 11 found by the check of 2026-10-22 (the ten dropped tiles
+# and one temporary file); any other difference refuses with exit 3 and
+# deletes nothing. An already deleted directory exits 0.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: retire-corrupted-0115
+  namespace: prithvi-training-default
+  labels: {app: dataset-hygiene, task: '0115'}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: dataset-hygiene, task: '0115'}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: retire
+          image: python:3.11-slim
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              CORR=/data/unified_v2_512_corrupted
+              if [ ! -e "$CORR" ]; then echo "$CORR does not exist: nothing to do"; exit 0; fi
+              python3 - <<'PY'
+              import os, sys
+              live = set(os.listdir("/data/unified_v2_512"))
+              corr = sorted(os.listdir("/data/unified_v2_512_corrupted"))
+              expected = {
+                  "tile_555366_6801136.npz", "tile_616126_6925422.npz", "tile_617120_6514080.npz",
+                  "tile_618702_6929973.npz", "tile_618702_6932473.npz", "tile_621126_6917922.npz",
+                  "urban_413223_6256470.npz", "urban_431494_6216721.npz", "urban_436888_6247191.npz",
+                  "urban_442961_6228264.npz", "tile_368631_6143498.tmp.npz",
+              }
+              missing = {n for n in corr if n not in live}
+              print(f"corrupted dir: {len(corr)} files, {len(corr) - len(missing)} with a copy in the live dir, "
+                    f"{len(missing)} without")
+              if missing != expected:
+                  print("REFUSED: the names without a live copy differ from the check of 2026-10-22")
+                  print("  not expected:", sorted(missing - expected))
+                  print("  expected, now with a live copy or gone:", sorted(expected - missing))
+                  sys.exit(3)
+              print("guard ok: exactly the 11 names of the check")
+              PY
+              du -sh "$CORR"
+              rm -rf "$CORR"
+              if [ -e "$CORR" ]; then echo "FAILED: $CORR still exists"; exit 1; fi
+              echo "deleted $CORR"
+          resources:
+            requests: {cpu: "1", memory: "1Gi"}
+            limits: {cpu: "1", memory: "1Gi"}
+          volumeMounts:
+            - {name: training-data, mountPath: /data}
+      volumes:
+        - name: training-data
+          persistentVolumeClaim: {claimName: training-data-cephfs}

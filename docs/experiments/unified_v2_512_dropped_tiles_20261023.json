@@ -1,0 +1,26 @@
+{
+  "task": "0115",
+  "decision": "owner 2026-10-23: drop permanently, do not refetch; retire /data/unified_v2_512_corrupted",
+  "dataset": "/data/unified_v2_512 (PVC training-data-cephfs)",
+  "check": {
+    "date": "2026-10-22",
+    "evidence": "~/.agents/continuity/evidence/ImintEngine/corrupted-check-0115-20261022.json",
+    "corrupted_files": 231,
+    "readable_copy_in_live": 220,
+    "unreadable_copy_in_live": 0,
+    "missing_in_live": 11
+  },
+  "dropped": [
+    "tile_555366_6801136",
+    "tile_616126_6925422",
+    "tile_617120_6514080",
+    "tile_618702_6929973",
+    "tile_618702_6932473",
+    "tile_621126_6917922",
+    "urban_413223_6256470",
+    "urban_431494_6216721",
+    "urban_436888_6247191",
+    "urban_442961_6228264"
+  ],
+  "not_a_tile": ["tile_368631_6143498.tmp.npz"]
+}
