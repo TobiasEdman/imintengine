@@ -50,7 +50,8 @@
 # 0f3fd26 (Codex review of #101): a valid all-0 height (no trees) is written,
 # not dropped as empty; only a window without a finite height is a gap. The preflight also requires every staged Trädhöjd county to be
 # masked to its county (#96: county 23's zeros covered 20-22) and county 24's
-# treeless zeros restored, which the Trädhöjd Job does on its next apply.
+# re-derived without the retired all-zero rule, which the Trädhöjd Job does on
+# its next apply.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -107,9 +108,9 @@ spec:
               th = {k: v for k, v in m["derived"].items() if k.startswith("tradhojd/tradhojd_10m_") and k.endswith(".tif")}
               unmasked = sorted(k for k, v in th.items() if "county_mask" not in v)
               assert not unmasked, f"not masked to their county: {unmasked}; apply the Trädhöjd Job first"
-              assert "tiled_zeros_restored" in th["tradhojd/tradhojd_10m_24.tif"], \
-                  "county 24's treeless zeros are not restored: apply the Trädhöjd Job first"
-              print(f"Trädhöjd counties masked: {len(th)}; county 24 zeros restored")
+              assert not th["tradhojd/tradhojd_10m_24.tif"].get("all_zero_cells_nodata"), \
+                  "county 24 is still derived under the retired all-zero rule: apply the Trädhöjd Job (re-derives it) first"
+              print(f"Trädhöjd counties masked: {len(th)}; county 24 re-derived")
               PY
               RC=0
               for Y in ${YEARS}; do

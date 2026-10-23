@@ -59,11 +59,10 @@
 # b92790b (Codex review of #96): masking needs both mask sources, and a mask
 # interrupted between the raster and manifest writes is finished on restart
 # ("finished an interrupted rewrite ...") before the raw-deletion check.
-# The NaN-height change (2026-10-22, heights' nodata now reads NaN): the all-zero rule is
-# retired, and county 24, derived under it, gets its treeless 0 back inside
-# the county, except at the recorded gap ("restored the treeless 0 ...").
-# 9ffb277 (Codex review of #101): the restore is bound to the 689 published
-# tiles (TILED_FOOTPRINTS, by zip sha256); a -1 outside every tile stays nodata.
+# The NaN-height change (2026-10-22, heights' nodata now reads NaN): the
+# all-zero rule is retired. County 24, derived under it, is derived again
+# from its zip on the next apply (8052421): its -1 mixed treeless cells with
+# source nodata, which only the source can tell apart (Codex review of #101).
 # Switch-over: delete the running Job right after a county's "done in"
 # line (its pod gets SIGTERM, forward_term passes it on, the lock is
 # released), check no skg-open-stage Job is ACTIVE and no MANIFEST.lock is
@@ -171,8 +170,8 @@ spec:
               echo "=== done: $(date -u) ==="
               exit ${RC}
           env:
-            - {name: IMINT_COMMIT, value: "9ffb277f734141f7bca410c43b3357c6382b7fc3"}
-            - {name: IMINT_SCRIPT_SHA256, value: "b97408e0353bc76368d6d6db5e5bcd592d6d9bf61759149f122bb0f3490f07a7"}
+            - {name: IMINT_COMMIT, value: "805242155b2b72fb283e18797bb534bd9e6ac571"}
+            - {name: IMINT_SCRIPT_SHA256, value: "5229de734badd9f83f0ebb19de9fd450e804dd00a5429a8f076b10a3936f58e6"}
             - {name: TRADHOJD_WORKERS, value: "8"}
             - {name: COUNTIES, value: "01 03 04 05 06 07 08 09 10 12 13 14 17 18 19 20 21 22 23 24 25"}
             - {name: MIN_FREE_GIB, value: "50"}
