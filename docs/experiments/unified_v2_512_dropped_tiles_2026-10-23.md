@@ -2,9 +2,14 @@
 
 **Decision (owner, 2026-10-23):** the ten tiles below are dropped from
 `/data/unified_v2_512` for good instead of being fetched again, and
-`/data/unified_v2_512_corrupted` is retired. The owner deletes the directory
+`/data/unified_v2_512_corrupted` is retired. The owner deleted the directory
 with `k8s/retire-corrupted-0115-job.yaml`. The names are in
 `unified_v2_512_dropped_tiles_20261023.json`.
+
+**Deleted 2026-10-23 14:31 UTC** by the owner with the Job: the guard found
+231 files, 220 with a copy in the live directory and exactly the 11 names of
+the check without one; 184 MB removed
+(`~/.agents/continuity/evidence/ImintEngine/retire-corrupted-0115-20261023.log`).
 
 ## What the check found
 

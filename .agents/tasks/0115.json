@@ -2,12 +2,13 @@
   "id": "0115",
   "subject": "Retire /data/unified_v2_512_corrupted after refill check",
   "description": "Owner 2026-10-22: ticket. The read-only count (~/.agents/continuity/evidence/ImintEngine/s1-tile-count-20261022.json) found 230 files in /data/unified_v2_512_corrupted, 217 unreadable and 13 without S1. The directory was made by k8s/quarantine-corrupt-tiles-job.yaml, and k8s/refill-512-watcher-job.yaml reads its file names to refetch those tiles (its 'Klass A'), so it is still an input until the refill is done. Steps: (1) read-only check that every name in the directory has a readable tile in /data/unified_v2_512 and that no job, manifest or split file still points into it; report the result to the owner; (2) if the check is clean, the owner deletes the directory (permanent deletion is the owner's action, e.g. a one-shot pod running rm -rf /data/unified_v2_512_corrupted, or archives it first), and the refill watcher's corrupted-dir input is retired with it; if not clean, list the missing names for a refetch first.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": null,
   "runtime": "claude",
   "created_at": "2026-10-22T07:04:24Z",
-  "updated_at": "2026-10-23T13:40:22Z",
+  "updated_at": "2026-10-23T14:35:18Z",
   "claimed_by": "claude-retire-0115",
-  "claimed_at": "2026-10-23T13:40:22Z"
+  "claimed_at": "2026-10-23T13:40:22Z",
+  "completed_at": "2026-10-23T14:35:18Z"
 }
