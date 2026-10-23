@@ -223,12 +223,18 @@ def is_done(item: Item, manifest: dict, dest: Path) -> bool:
     der = manifest["derived"].get(item.derived)
     if not (rec and rec.get("sha256") and der and der.get("sha256") and (dest / item.derived).exists()):
         return False
-    if der.get("all_zero_cells_nodata"):
-        # derived under the retired all-zero rule (county 24, run r2): its -1 mixes
-        # treeless cells with source nodata, which only the source can tell apart,
-        # so the county is derived again from its zip (Codex review of #101)
+    if _stale(der):
         return False
     return bool(rec.get("raw_deleted_at")) or (dest / "raw" / item.name).exists()
+
+
+def _stale(der: dict) -> bool:
+    """A derived raster that must be derived again from its zip: one derived
+    under the retired all-zero rule (county 24, run r2), whose -1 mixes
+    treeless cells with source nodata that only the source can tell apart
+    (Codex review of #101). Neither ``is_done`` nor the raw-deletion
+    recovery may count it as the zip's verified derivation."""
+    return bool(der.get("all_zero_cells_nodata"))
 
 
 def staged_vrt_sources(manifest: dict, dest: Path, vrt: str) -> list[str]:
@@ -1112,7 +1118,7 @@ def _main(argv: list[str] | None = None) -> int:
             print(f"    finished an interrupted rewrite of {it.derived}", flush=True)
         raw = dest / "raw" / it.name
         der = manifest["derived"].get(it.derived)
-        if (args.drop_raw and it.product == "tradhojd" and der and der.get("sha256")
+        if (args.drop_raw and it.product == "tradhojd" and der and der.get("sha256") and not _stale(der)
                 and raw.exists() and (dest / it.derived).exists()
                 and not manifest["files"].get(it.name, {}).get("raw_deleted_at")):
             # crashed after the verified derivation was recorded, before the delete:

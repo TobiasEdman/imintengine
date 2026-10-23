@@ -1245,3 +1245,24 @@ def test_a_county_derived_under_the_retired_rule_is_derived_again(monkeypatch, t
     assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
     assert calls == [("download", "sksTradhojd01.zip"), ("convert", "sksTradhojd01.zip")]
     assert "all_zero_cells_nodata" not in snaps[-1]["derived"][_ITEM01.derived]
+
+
+def test_a_rederivation_interrupted_after_its_download_reuses_the_zip(monkeypatch, tmp_path):
+    """Codex's #101 finding: the zip was downloaded again for a rule-derived county and the run
+    stopped before deriving. On restart the raw-deletion recovery must not take the stale raster
+    for the zip's derivation and delete the zip; the zip is reused, no second ~40 GB download."""
+    calls, snaps = _staging(monkeypatch, tmp_path)
+    dest, manifest, _ = _masked_dest(tmp_path)
+    der = manifest["derived"][_ITEM01.derived]
+    der["all_zero_cells_nodata"] = True
+    rec = manifest["files"][_ITEM01.name]
+    rec["sha256"] = hashlib.sha256(b"zip").hexdigest()
+    del rec["raw_deleted_at"]                                 # downloaded again, not yet derived
+    (dest / "raw").mkdir()
+    (dest / "raw" / _ITEM01.name).write_bytes(b"zip")
+    (dest / "MANIFEST.json").write_text(json.dumps(manifest))
+    assert st.main(["--dest", str(dest), "--products", "tradhojd", "--counties", "01", "--drop-raw"]) == 0
+    assert calls == [("convert", "sksTradhojd01.zip")]          # no download: the zip was reused
+    last = snaps[-1]
+    assert "all_zero_cells_nodata" not in last["derived"][_ITEM01.derived]
+    assert last["files"][_ITEM01.name]["raw_deleted_at"] and not (dest / "raw" / _ITEM01.name).exists()
