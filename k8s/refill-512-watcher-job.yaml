@@ -14,6 +14,11 @@ spec:
   #      → writes /data/debug/missing_512_inventory.json
   #   2. Klass A refetch: 188 corrupted-name tiles via fetch_unified_tiles
   #      from-json (DES openEO, PU-free)
+  #      RETIRED (task 0115, owner 2026-10-23): the ten names left were dropped
+  #      for good; the owner deletes /data/unified_v2_512_corrupted with
+  #      k8s/retire-corrupted-0115-job.yaml. The glob of the
+  #      missing directory is empty, so Klass A is 0 and the job stops at its
+  #      Klass A gate (docs/experiments/unified_v2_512_dropped_tiles_2026-10-23.md).
   #   3. build_labels for the new tiles only (--tile-ids)
   #   4. enrichment: SKG+DEM+rededge(DES)+tessera+markfukt for new tiles
   #   STOP. Klass B (~1003 fully missing) requires user decision.
