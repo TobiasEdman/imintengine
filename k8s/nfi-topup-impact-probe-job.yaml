@@ -1,0 +1,126 @@
+# Read-only probe 3 (2026-10-22, Foundation [7c9c49]; Tobias: "gör 1 och 3").
+# Per NFI top-up tile window (230), using the aux pass's window logic:
+#   owner  = the county whose mask (grunddata ∪ markfukt valid) covers the cell
+#   right  = the owner's own Trädhöjd raster value
+#   A      = share of in-county cells where the mosaic differs from `right`
+#            (another county's raster covers it: county 23's zeros, county 24's
+#            heights outside 24)
+#   B      = share of in-county cells where `right` is -1 (no coverage);
+#            read_tradhojd read these as height 0 until #101 (NaN since)
+# First run 2026-10-22 at pin 1eb8492 (before #96 and #101). Re-run as -r2 on
+# 2026-10-24 at main b80658c, after Trädhöjd r4 masked every county; that is
+# the pin below. Image as the aux pass; PVC read-only.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-impact-probe-r2
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-probe, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 604800
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== nfi-topup-impact-probe — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libexpat1 >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio pyproj
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "${IMINT_COMMIT}"
+              echo "HEAD: $(git rev-parse HEAD)"
+              python - <<'PY'
+              import json
+              from collections import Counter, defaultdict
+              from pathlib import Path
+
+              import numpy as np
+              from rasterio.enums import Resampling
+
+              from imint.training import skg_open
+              from imint.training.tile_bbox import resolve_fetch_bbox
+
+              m = json.load(open("/data/skg_open/MANIFEST.json"))
+              vrt = skg_open.tradhojd_path()
+              th = skg_open._county_rasters(m, skg_open.TRADHOJD_PREFIX)
+              masks = [(skg_open._county_rasters(m, prefix), inv) for prefix, inv in skg_open.COUNTY_MASKS]
+              nearest = Resampling.nearest
+
+              def bucket(x):
+                  return "0" if x == 0 else "<1%" if x < 0.01 else "1-10%" if x < 0.10 else "10-50%" if x < 0.5 else ">=50%"
+
+              hist_a, hist_b = Counter(), Counter()
+              a_by_county, b_by_county = defaultdict(Counter), defaultdict(Counter)
+              rows = []
+              for year in (2018, 2019, 2021, 2022):
+                  for p in sorted(Path(f"/data/unified_v2_512_nfi{year}_staging").glob("*.npz")):
+                      with np.load(p, allow_pickle=True) as z:
+                          bbox, size = resolve_fetch_bbox(name=p.stem, npz_data=z)
+                      w, s, e, n = bbox["west"], bbox["south"], bbox["east"], bbox["north"]
+                      shape = (size, size)
+                      mosaic = skg_open._read_window(vrt, w, s, e, n, shape, resampling=nearest, fill=-1)
+                      owner = np.full(shape, "", dtype="<U2")
+                      right = np.full(shape, -1, dtype=np.int16)
+                      for c in sorted(skg_open.counties_in_window(w, s, e, n, m)):
+                          inside = np.zeros(shape, bool)
+                          for rasters, inv in masks:
+                              if c in rasters:
+                                  a = skg_open._read_window(rasters[c], w, s, e, n, shape, resampling=nearest, fill=inv[0])
+                                  inside |= ~np.isin(a, inv)
+                          take = inside & (owner == "")
+                          owner[take] = c
+                          own = skg_open._read_window(th[c], w, s, e, n, shape, resampling=nearest, fill=-1)
+                          right[take] = own[take]
+                      inc = owner != ""
+                      ninc = max(int(inc.sum()), 1)
+                      a_share = float((inc & (mosaic != right)).sum()) / ninc
+                      b_share = float((inc & (right == -1)).sum()) / ninc
+                      main = Counter(owner[inc].tolist()).most_common(1)[0][0] if inc.any() else "-"
+                      hist_a[bucket(a_share)] += 1
+                      hist_b[bucket(b_share)] += 1
+                      a_by_county[main][bucket(a_share)] += 1
+                      b_by_county[main][bucket(b_share)] += 1
+                      rows.append((year, p.stem, main, round(float(inc.mean()), 3), round(a_share, 4), round(b_share, 4)))
+              print("TILE year stem main_county in_county_share A_wrong_share B_missing_share")
+              for r in rows:
+                  if r[4] > 0 or r[5] > 0:
+                      print("TILE", *r)
+              print("A histogram (tiles):", dict(hist_a))
+              print("B histogram (tiles):", dict(hist_b))
+              print("A by main county:", {k: dict(v) for k, v in sorted(a_by_county.items())})
+              print("B by main county:", {k: dict(v) for k, v in sorted(b_by_county.items())})
+              json.dump(rows, open("/dev/stdout", "w"))
+              PY
+              echo
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: IMINT_COMMIT, value: "b80658c8eaa9860edd442a4c10668c1e4eb96506"}
+            - {name: GDAL_CACHEMAX, value: "512"}
+          resources:
+            requests: {cpu: "2", memory: "6Gi"}
+            limits: {cpu: "2", memory: "6Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}

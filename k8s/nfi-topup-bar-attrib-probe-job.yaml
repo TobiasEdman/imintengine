@@ -1,0 +1,114 @@
+---
+# Read-only attribution probe after the top-up census (2026-10-24).
+#
+# The census reports, per year, plot-years that are eligible and the subset on
+# tiles meeting the full modality bar, but not why a tile misses the bar.
+# This probe reuses the census's own functions at the census pin (7317d7e,
+# script sha256 checked; fieldtruth from ba31235c) and splits the eligible
+# plot-years by the modalities their tile fails: frame_2016, s1_vv_vh_2016,
+# aux (the 11 aux keys plus forestry), s1, tessera, vpp_year, spectral/label,
+# flag on an empty array. A plot-year on two tiles counts under each tile's
+# cause, so the per-cause counts can overlap; the per-year totals are exact.
+#
+# It asserts that its eligible and on-bar totals equal the census's
+# (nfi-topup-census-r2) before printing, and prints only counts (one ATTRIB
+# line per year). No identities, names or coordinates leave the pod.
+# Eligibility here is crop + valid rows: the census found 0 teacher-pool
+# exclusions on these roots, which the assertion confirms. PVC readOnly.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-bar-attrib-probe
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 18000
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: census
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== top-up census — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio pyproj openpyxl
+              mkdir -p /workspace && cd /workspace
+              git clone -q --depth 1 --branch "$CENSUS_BRANCH" https://github.com/TobiasEdman/ImintEngine.git ie
+              cd ie
+              git fetch -q --depth 1 origin "$CENSUS_COMMIT" "$FIELDTRUTH_COMMIT" "$SIZING_COMMIT"
+              git checkout -q "$CENSUS_COMMIT"
+              # Never run an old census: the pinned bytes must be the reviewed ones.
+              echo "$CENSUS_SCRIPT_SHA256  scripts/census_holdout_val_512.py" | sha256sum -c -
+              git checkout -q "$FIELDTRUTH_COMMIT" -- imint/eval/fieldtruth.py
+              git show "$SIZING_COMMIT:docs/experiments/nfi_fieldtruth_0103_tile_sizing_20261008.json" > /workspace/codex_sizing.json
+              echo "HEAD: $(git rev-parse HEAD)"; sha256sum imint/eval/fieldtruth.py /workspace/codex_sizing.json
+              export PYTHONPATH=/workspace/ie:${PYTHONPATH:-}
+              python scripts/census_holdout_val_512.py --help > /dev/null && echo "imports OK"
+              python - <<'PYPROBE'
+              # Read-only: split the census's eligible-minus-bar plot-years by failing modality.
+              import sys
+              from collections import Counter
+              from pathlib import Path
+              sys.path.insert(0, "/workspace/ie/scripts")
+              import census_holdout_val_512 as c
+              ft = c.load_fieldtruth(Path("/workspace/ie/imint/eval/fieldtruth.py"))
+              EXPECT = {2018: (449, 323), 2019: (46, 35), 2021: (210, 186), 2022: (195, 170)}   # census-r2
+              root = Path("/data")
+
+              def causes(t):
+                  u, s = t["usable"], []
+                  if not (u["frame_2016"] and t["has_frame_2016"] == 1): s.append("frame_2016")
+                  if not u["s1_vv_vh_2016"]: s.append("s1_2016")
+                  if not t["aux_complete"] or not all(u[k] for k in c.FORESTRY_KEYS): s.append("aux")
+                  if not (u["s1_vv_vh"] and t["has_s1"] == 1): s.append("s1")
+                  if not (u["tessera"] and t["has_tessera"] == 1): s.append("tessera")
+                  if not t["vpp_year_ok"]: s.append("vpp_year")
+                  if not (t["spectral_ok"] and t["label_present"]): s.append("spectral_label")
+                  if t["flag_on_empty"]: s.append("flag_on_empty")
+                  return "+".join(s) or "on_bar"
+
+              for Y in (2018, 2019, 2021, 2022):
+                  manifest, _ = c.read_manifest(root / f"manifests/nfi{Y}_topup_512.json")
+                  tiles = [c.read_tile(p, manifest.get(p.stem))
+                           for p in sorted(Path(f"/data/unified_v2_512_nfi{Y}_staging").glob("*.npz"))]
+                  tiles = [t for t in tiles if t.get("admitted")]
+                  plots = c.load_nfi_plots(data_dir=root / "nfi", years=(Y,))
+                  idx = c.build_index(tiles, plots)
+                  crop = idx["row"].between(c.PAD, c.PAD + c.CROP_PX - 1) & idx["col"].between(c.PAD, c.PAD + c.CROP_PX - 1)
+                  elig = crop & c.valid_rows(idx)          # census-r2: 0 teacher-pool exclusions in every year
+                  by = {t["name"]: t for t in tiles}
+                  idx["cause"] = idx["tile_name"].map(lambda n: causes(by[n]))
+                  e = idx.loc[elig]
+                  keys = lambda f: ft.observation_keys(f).unique()
+                  n_elig, n_bar = len(keys(e)), len(keys(e.loc[e["cause"] == "on_bar"]))
+                  assert (n_elig, n_bar) == EXPECT[Y], f"{Y}: probe {n_elig, n_bar} != census {EXPECT[Y]}"
+                  tile_causes = Counter(causes(t) for t in tiles)
+                  py = {cause: len(keys(e.loc[e["cause"] == cause])) for cause in sorted(set(e["cause"]))}
+                  print(f"ATTRIB {Y} eligible={n_elig} on_bar={n_bar} plot_years_by_cause={py} tiles_by_cause={dict(tile_causes)}", flush=True)
+              PYPROBE
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: PYTHONUNBUFFERED, value: "1"}
+            - {name: YEARS, value: "2018 2019 2021 2022"}
+            - {name: CENSUS_BRANCH, value: "main"}
+            - {name: CENSUS_COMMIT, value: "7317d7e7c97858190e5c9a1d35b2cbeb23f1f3fb"}
+            - {name: CENSUS_SCRIPT_SHA256, value: "9244f7bc5415af4b3aab75a3d6b6a4f393bc070bf598bfa518c0622c4f43084a"}
+            - {name: FIELDTRUTH_COMMIT, value: "ba31235c6bb5f4c2fa9d5c71929926a0023d062b"}
+            - {name: SIZING_COMMIT, value: "94b26bbbef9d28220734e4efce38ed4943fd6157"}
+          resources:
+            requests: {cpu: "8", memory: "24Gi"}
+            limits: {cpu: "8", memory: "24Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
