@@ -2,9 +2,12 @@
   "id": "0117",
   "subject": "Multi-year NFI held-out evaluation, step 4: index v5 and the combined census over every evaluation root",
   "description": "Tobias reassigned step 4 of the multi-year NFI control-tile plan (docs/ops/nfi_multiyear_control_tiles_plan.md) from Codex's task 0103 to Claude on 2026-10-24 ('codex has no tokens left, take it'). Scope: an exposure/reference index (v5) over the training cohort, nfi2024, the evaluation copy and the four top-up staging roots, with explicit root roles (training roots are never eligible evaluation roots); same-year footprint exclusion (D6) and teacher-pool exclusion before any quota; a combined, deduplicated census per (TractID, PlotID, Year) reporting per-year counts under every modality bar (full bar_modalities, without frame_2016/S1-2016, eligible only) with has_frame_2016 per plot-year; the dated CLAUDE.md exception that evaluation tiles may lack frame_2016 (Tobias 2026-10-24). Read-only CPU Jobs only. Not in scope: quota choice, seeded selection, freeze, inference or NMD scoring (each needs Tobias's go), GPU jobs, edits to tiles. Review: single-model mode (separate fresh-context Claude reviewer) until Tobias says Codex is back.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/nfi-index-v5",
   "created_at": "2026-10-24T12:10:00Z",
-  "updated_at": "2026-10-24T12:10:00Z"
+  "updated_at": "2026-10-24T14:55:54Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-10-24T14:55:54Z"
 }
