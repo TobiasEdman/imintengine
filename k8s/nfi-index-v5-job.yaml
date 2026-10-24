@@ -1,0 +1,82 @@
+---
+# NFI plot index v5 (task 0117, step 4 of docs/ops/nfi_multiyear_control_tiles_plan.md).
+#
+# Colocates the NFI plots, year-exact, onto every root the freeze declares:
+# the training cohort (exclusion only), the nfi2024 campaign, the evaluation
+# copy and the four top-up staging roots. scripts/build_nfi_index_v5.py fails
+# on an unreadable tile or a tile name in two roots, lists roots as the
+# freeze does, and never overwrites. Rows and columns are index v4's.
+#
+# The only write is the new index and its JSON sidecar under /data/nfi/
+# (Tobias 2026-10-24: "Yes, write it as a new file"). No tile is opened for
+# writing. The sidecar holds aggregates and hashes only; the log prints it.
+#
+# Code pin: IMINT_COMMIT (full sha) and BUILDER_SHA256 (sha256 of the script
+# at that commit); the pod refuses to run if either check fails.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-index-v5
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-index-v5}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: index
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== nfi-index-v5 — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              export IMINT_GIT_SHA="$(git rev-parse HEAD)"
+              test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
+              echo "${BUILDER_SHA256}  scripts/build_nfi_index_v5.py" | sha256sum -c -
+              echo "HEAD: ${IMINT_GIT_SHA}"
+              python scripts/build_nfi_index_v5.py --help > /dev/null && echo "imports OK"
+              python scripts/build_nfi_index_v5.py --nfi-dir /data/nfi \
+                --root cohort:/data/unified_v2_512 \
+                --root campaign:/data/unified_v2_512_nfi2024_staging \
+                --root holdout_copy:/data/holdout_eval_512 \
+                --root topup2018:/data/unified_v2_512_nfi2018_staging \
+                --root topup2019:/data/unified_v2_512_nfi2019_staging \
+                --root topup2021:/data/unified_v2_512_nfi2021_staging \
+                --root topup2022:/data/unified_v2_512_nfi2022_staging \
+                --out "${INDEX_OUT}"
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: IMINT_COMMIT, value: "c2441f0ba4de5e1fea67a3e7ac166c0f89b7bf32"}
+            - {name: BUILDER_SHA256, value: "6e1d6c3dbeab2340c70807f02b03cc100e43769eea763217b1adf73ccd9bac11"}
+            - {name: INDEX_OUT, value: "/data/nfi/nfi_index_v5_2026-10-24.parquet"}
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits: {cpu: "2", memory: "8Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
