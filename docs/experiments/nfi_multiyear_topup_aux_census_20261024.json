@@ -9,7 +9,8 @@
  ],
  "decisions_user_stated": {
   "2026-10-22": "Height nodata is NaN everywhere; no water class; absent height normalizes to the mean; aux pass makes height a gap above 25 % in-county NaN.",
-  "2026-10-24": "Go for the real aux pass, then the census, after the read-only dry run and probes."
+  "2026-10-24": "Go for the real aux pass, then the census, after the read-only dry run and probes.",
+  "2026-10-24_after_census": "Keep the 38 frame_2016-gap tiles; no sen2cor fallback ('we will not have all data for all tiles always'). Step 4 reports per-year counts under every bar (full, without frame_2016/S1-2016, eligible only) with has_frame_2016 per plot-year; the bar is chosen at the quota step. The CLAUDE.md frame_2016 rule stays for training tiles; step 4 adds a dated exception for evaluation tiles. Step 4 moves from Codex (0103) to Claude."
  },
  "aux_pass": {
   "by_year": {

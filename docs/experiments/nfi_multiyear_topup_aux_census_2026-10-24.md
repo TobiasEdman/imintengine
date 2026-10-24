@@ -105,13 +105,23 @@ The S1 2016 layer is built on the `frame_2016` composite, so the two fail
 together. The S1 tile in 2022 is the one with no descending-orbit composite
 for its year (step 3).
 
+## Decided after this census (Tobias, 2026-10-24)
+
+- **The 38 `frame_2016` gaps stay, and no sen2cor fallback runs**: "we will
+  not have all data for all tiles always". A fallback could have recovered at
+  most the 155 plot-years on the 35 tiles that miss nothing else.
+- **Step 4 reports the per-year counts under every bar**: the full bar,
+  without `frame_2016` and S1 2016, and eligible only. Each plot-year carries
+  `has_frame_2016`, so results can be split by it. Tobias picks the bar at
+  the quota step.
+- **The CLAUDE.md `frame_2016` rule stays for training tiles.** The step 4 PR
+  adds a dated exception for evaluation tiles.
+- **Step 4 moves from Codex's task 0103 to Claude**, because Codex is out of
+  tokens. Until Codex returns, PRs are reviewed by a separate Claude session.
+
 ## What this does not decide
 
-- **A sen2cor fallback for the 38 `frame_2016` gaps.** It could recover at
-  most the 155 plot-years on the 35 tiles that miss nothing else. This
-  repo's rule is that a campaign is not complete until `has_frame_2016 == 1`.
-  The GPU cost is Tobias's decision.
-- **The combined census and the exact quota** (step 4, task 0103). Index v5
+- **The combined census and the exact quota** (step 4). Index v5
   over the evaluation copy and the four top-up roots, with same-year
   exclusion and deduplication, gives the binding per-year number.
 - **Whether the 2018 shortfall is accepted at that number**, and the
