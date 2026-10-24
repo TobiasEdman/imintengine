@@ -149,36 +149,6 @@
   },
   "note": "A plot-year on two tiles counts under each tile's cause, so per-cause counts can overlap; per-year eligible and on-bar totals are exact and equal the census's."
  },
- "evaluation_copy_on_bar_20261012": {
-  "2018": {
-   "eligible_excl_same_year_overlap": 489,
-   "eligible_excl_same_year_overlap_on_bar_modalities": 381
-  },
-  "2019": {
-   "eligible_excl_same_year_overlap": 967,
-   "eligible_excl_same_year_overlap_on_bar_modalities": 816
-  },
-  "2020": {
-   "eligible_excl_same_year_overlap": 1030,
-   "eligible_excl_same_year_overlap_on_bar_modalities": 842
-  },
-  "2021": {
-   "eligible_excl_same_year_overlap": 848,
-   "eligible_excl_same_year_overlap_on_bar_modalities": 652
-  },
-  "2022": {
-   "eligible_excl_same_year_overlap": 840,
-   "eligible_excl_same_year_overlap_on_bar_modalities": 684
-  },
-  "2023": {
-   "eligible_excl_same_year_overlap": 1245,
-   "eligible_excl_same_year_overlap_on_bar_modalities": 1014
-  },
-  "2024": {
-   "eligible_excl_same_year_overlap": 1402,
-   "eligible_excl_same_year_overlap_on_bar_modalities": 1197
-  }
- },
  "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
  "execution_evidence": {
   "nfi-topup-aux-pass-dryrun4": {
@@ -4026,5 +3996,44 @@
     "legacy_files_expected": 1463
    }
   }
+ },
+ "evaluation_copy_on_bar_20261013": {
+  "source": "docs/experiments/nfi_multiyear_holdout_eval_20261013.json (census of /data/holdout_eval_512)",
+  "by_year": {
+   "2018": {
+    "eligible": 489,
+    "eligible_on_bar_modalities": 389
+   },
+   "2019": {
+    "eligible": 967,
+    "eligible_on_bar_modalities": 835
+   },
+   "2020": {
+    "eligible": 1030,
+    "eligible_on_bar_modalities": 888
+   },
+   "2021": {
+    "eligible": 848,
+    "eligible_on_bar_modalities": 700
+   },
+   "2022": {
+    "eligible": 838,
+    "eligible_on_bar_modalities": 735
+   },
+   "2023": {
+    "eligible": 1234,
+    "eligible_on_bar_modalities": 1062
+   },
+   "2024": {
+    "eligible": 1396,
+    "eligible_on_bar_modalities": 1275
+   }
+  }
+ },
+ "on_bar_upper_bound_copy_plus_topup": {
+  "2018": 712,
+  "2019": 870,
+  "2021": 886,
+  "2022": 905
  }
 }

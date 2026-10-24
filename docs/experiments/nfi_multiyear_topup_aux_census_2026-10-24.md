@@ -16,12 +16,12 @@ source gaps, recorded and not zero-filled.** The census then finds 714 of the
 **`frame_2016` is the main loss**: 38 tiles lack it. 35 of them miss nothing
 else, and they carry 155 plot-years, 102 of them in 2018.
 
-**2018 sets the quota, and on the full bar it is at most 704 plot-years.** The
-evaluation copy has 381 on the bar (census of 2026-10-12, after same-year
-exclusion) and the top-up 323. Their deduplicated union lies between 381 and
-704, below the 826 counted by plot-years alone in step 3. The exact figure
-needs the combined census of step 4. 2021 is at most 838 and 2022 at most
-854.
+**2018 sets the quota, and on the full bar it is at most 712 plot-years.** The
+evaluation copy has 389 on the bar (its own census,
+[2026-10-13](nfi_multiyear_holdout_eval_2026-10-13.md)) and the top-up 323.
+Their deduplicated union lies between 389 and 712, below the 826 counted by
+plot-years alone in step 3. The exact figure needs the combined census of
+step 4. 2021 is at most 886 and 2022 at most 905.
 
 ## Aux pass
 
