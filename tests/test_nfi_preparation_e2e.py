@@ -234,3 +234,74 @@ def test_evaluation_root_name_collision_is_rejected_early(prepared_inputs, monke
     with pytest.raises(ValueError, match="globally unique tile names"):
         prep.main()
     assert not prepared_inputs["out-dir"].exists()
+
+
+def _report_only_argv(argv):
+    """Drop --out-dir; report-only must never be given one."""
+    argv = list(argv)
+    i = argv.index("--out-dir"); del argv[i:i+2]
+    return argv + ["--report-only"]
+
+
+def _support_report(text):
+    begin, end = "=== SUPPORT_REPORT_BEGIN ===\n", "\n=== SUPPORT_REPORT_END ==="
+    return json.loads(text[text.index(begin) + len(begin):text.index(end)])
+
+
+def test_report_only_prints_every_variant_and_writes_nothing(prepared_inputs, monkeypatch, capsys):
+    extra = prepared_inputs["out-dir"].parent / "topup2024"
+    extra.mkdir()
+    with np.load(prepared_inputs["staging-dir"] / "campaign000.npz", allow_pickle=False) as tile:
+        data = dict(tile)
+    # One tile with the 2016 baseline, one without the checkpoints' "dem" channel.
+    np.savez(extra / "full.npz", **data, has_frame_2016=1, frame_2016=np.ones((6, 8, 8)),
+             s1_vv_vh_2016=np.ones((2, 8, 8)))
+    np.savez(extra / "nodem.npz", **{k: v for k, v in data.items() if k != "dem"})
+    index_path = prepared_inputs["plot-index"]
+    frame = pd.read_parquet(index_path)
+    new = pd.concat([frame.iloc[[2]].assign(TractID=5, tile_name="full"),
+                     frame.iloc[[2]].assign(TractID=6, tile_name="nodem")])
+    pd.concat([frame, new]).to_parquet(index_path, index=False)
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv) + ["--evaluation-root", f"topup:2024:{extra}"])
+    prep.main()
+    report = _support_report(capsys.readouterr().out)
+    assert not prepared_inputs["out-dir"].exists()
+    v = report["variants"]
+    assert v["freeze"]["year_support"] == {"2024": 2}
+    assert v["freeze"]["role_year_support"] == {"campaign": {"2024": 1}, "topup": {"2024": 1}}
+    assert v["freeze"]["frame_2016_by_year"] == {"2024": {"present": 1, "absent": 1}}
+    assert v["absent_aux_mean_fill"]["year_support"] == {"2024": 3}
+    assert v["census_full_bar"]["role_year_support"] == {"topup": {"2024": 1}}
+    assert report["excluded_evaluation_tiles"] == {"topup": {"auxiliary_gaps:dem:missing": 1}}
+    assert [r["tiles"] for r in report["evaluation_roots"]] == [475, 2]
+    # Aggregates only: no tile name or plot identity leaves the data environment.
+    text = json.dumps(report)
+    assert not any(name in text for name in ("campaign000", "full.npz", "nodem", "TractID"))
+
+
+def test_report_only_reports_an_empty_variant_instead_of_failing(prepared_inputs, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    prep.main()
+    v = _support_report(capsys.readouterr().out)["variants"]
+    assert v["freeze"]["observations"] == 1
+    assert v["census_full_bar"] == {"observations": 0, "admitted_tiles_by_role": {},
+                                    "empty_support": "no eligible observations with common input support"}
+
+
+@pytest.mark.parametrize("extra, message", [
+    (["--population", "balanced", "--inventory-years", "2023", "2024", "--observations-per-year", "1"],
+     "requires --population all"),
+    (["--out-dir", "/never/created"], "requires --population all and no --out-dir"),
+])
+def test_report_only_refuses_quotas_and_outputs_before_any_read(prepared_inputs, monkeypatch, extra, message):
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv) + extra)
+    monkeypatch.setattr(prep, "preparation_runtime", lambda *a: pytest.fail("runtime read before validation"))
+    with pytest.raises(ValueError, match=message):
+        prep.main()
+
+
+def test_freeze_still_requires_an_out_dir(prepared_inputs, monkeypatch):
+    argv = list(sys.argv); i = argv.index("--out-dir"); del argv[i:i+2]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(ValueError, match="--out-dir is required"):
+        prep.main()
