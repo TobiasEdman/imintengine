@@ -346,11 +346,14 @@ def test_report_only_mean_fills_only_absent_nan_nodata_channels(prepared_inputs,
         "auxiliary_gaps:dem:missing,height:missing": 1, "auxiliary_gaps:height:invalid_shape_or_dtype": 1}
 
 
-def _unclean_promotion(prepared_inputs):
-    """Like the real report: one cohort tile had no Tessera v2 to promote."""
+def _unclean_promotion(prepared_inputs, **states):
+    """Shaped like the real report, extra keys included: one cohort tile had no
+    Tessera v2 to promote."""
     prepared_inputs["promotion-report"].write_text(json.dumps({
-        "source": "geotessera-0.10.2", "states": {"promoted": 1, "no_v2": 1},
-        "verify": {"has_v1": 1, "stamped": 1, "has_v2_left": 0}}))
+        "source": "geotessera-0.10.2", "states": {"promoted": 1, "no_v2": 1, **states},
+        "verify": {"has_v1": 1, "stamped": 1, "has_v2_left": 0},
+        "campaign_stamped": 475, "old_preserved_as": "tessera_v1 / tessera_v1_year",
+        "recovered_from_zero": [], "still_empty_in_v2": ["train.npz"]}))
 
 
 def test_report_only_records_a_failed_promotion_gate(prepared_inputs, monkeypatch, capsys):
@@ -372,10 +375,22 @@ def test_the_freeze_still_refuses_a_failed_promotion_gate(prepared_inputs):
     assert not prepared_inputs["out-dir"].exists()
 
 
+def test_the_gate_never_records_a_non_integer_counter(prepared_inputs, monkeypatch, capsys):
+    _unclean_promotion(prepared_inputs, unreadable=["train.npz"])
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    prep.main()
+    gate = _support_report(capsys.readouterr().out)["promotion_gate"]
+    assert gate["reason"] == "promotion counters must be nonnegative integers"
+    assert gate["states"] == {"promoted": 1, "no_v2": 1}
+    assert "train" not in json.dumps(gate)
+
+
 def test_report_only_records_a_passed_promotion_gate(prepared_inputs, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
     prep.main()
-    assert _support_report(capsys.readouterr().out)["promotion_gate"] == {"passed": True, "cohort_tiles": 2}
+    assert _support_report(capsys.readouterr().out)["promotion_gate"] == {
+        "passed": True, "cohort_tiles": 2, "states": {"promoted": 2},
+        "verify": {"has_v1": 2, "stamped": 2, "has_v2_left": 0}}
 
 
 def test_report_only_reports_an_empty_variant_instead_of_failing(prepared_inputs, monkeypatch, capsys):

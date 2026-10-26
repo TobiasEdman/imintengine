@@ -71,12 +71,14 @@ def promotion_gate(job: dict, report: dict, cohort_count: int) -> dict:
     """check_promotion as a recorded outcome. The freeze raises on a failed
     gate; a support report records it and continues (Tobias 2026-10-26: nine
     cohort tiles have no Tessera v2, so the report can never be fully clean)."""
+    # Integer counters only: an unchecked report must not carry names into the output.
+    counters = {k: {name: v for name, v in report[k].items() if type(v) is int}
+                for k in ("verify", "states") if isinstance(report.get(k), dict)}
     try:
         check_promotion(job, report, cohort_count)
     except ValueError as exc:
-        counters = {k: report[k] for k in ("verify", "states") if isinstance(report.get(k), dict)}
         return {"passed": False, "reason": str(exc), "cohort_tiles": cohort_count, **counters}
-    return {"passed": True, "cohort_tiles": cohort_count}
+    return {"passed": True, "cohort_tiles": cohort_count, **counters}
 
 
 def teacher_training_set(
