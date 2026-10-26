@@ -9,11 +9,14 @@
 # are centred on NFI plots, so their names stay out of the repo. It refuses
 # unless exactly EXPECTED tiles match and each carries the promoted source
 # (geotessera-0.10.2), so that after demotion the freeze reads it as an
-# ordinary Tessera gap. For each: has_tessera -> 0 (same dtype) and a dated
+# ordinary Tessera gap; a tile that already has a tessera_gap_reason is
+# refused. For each: has_tessera -> 0 (same dtype and shape) and a dated
 # tessera_gap_reason; every other array is byte-for-byte unchanged, verified
-# on read-back; written atomically with the tile's own compression. The
-# record (names, sha256 before and after) goes to /data/manifests/ by
-# exclusive create. A re-census must find no positive flag on an empty array.
+# on read-back (bytes, so NaN-nodata arrays survive); written atomically with
+# the tile's own compression; the temporary file never outlives a failure.
+# The record (names, sha256 before and after) goes to /data/manifests/ by
+# exclusive create before the re-census, which must find no positive flag on
+# an empty array.
 #
 # Only the campaign root and manifests/ are mounted writable.
 apiVersion: batch/v1
@@ -58,18 +61,27 @@ spec:
               if RECORD.exists():
                   sys.exit(f"{RECORD} exists: already demoted; refusing")
 
+
               def sha256(p):
                   return hashlib.sha256(p.read_bytes()).hexdigest()
 
-              def invalid(t):
+
+              def flagged_invalid(d):
+                  """has_tessera > 0 (tile_readiness's test) on an empty or invalid array."""
+                  if int(d.get("has_tessera", 0)) <= 0 or "tessera" not in d:
+                      return False
+                  t = d["tessera"]
                   return not (t.ndim == 3 and t.size and np.isfinite(t).all() and np.any(t))
 
+
+              def tiles():
+                  return [p for p in sorted(ROOT.glob("*.npz")) if not p.name.endswith(".tmp.npz")]
+
+
               targets = []
-              for p in sorted(ROOT.glob("*.npz")):
-                  if p.name.endswith(".tmp.npz"):
-                      continue
+              for p in tiles():
                   with np.load(p, allow_pickle=False) as d:
-                      if int(d.get("has_tessera", 0)) == 1 and "tessera" in d and invalid(d["tessera"]):
+                      if flagged_invalid(d):
                           targets.append(p)
               print(f"campaign tiles with has_tessera=1 on an empty/invalid array: {len(targets)} (expected {EXPECTED})")
               if len(targets) != EXPECTED:
@@ -81,36 +93,41 @@ spec:
                       data = {k: d[k] for k in d.files}
                   if str(data.get("tessera_source", "")) != "geotessera-0.10.2":
                       sys.exit(f"{p.name}: tessera_source is not geotessera-0.10.2; refusing")
+                  if "tessera_gap_reason" in data:
+                      sys.exit(f"{p.name}: already has a tessera_gap_reason; refusing to overwrite it")
                   with zipfile.ZipFile(p) as z:
                       compressed = any(i.compress_type == zipfile.ZIP_DEFLATED for i in z.infolist())
                   before = sha256(p)
-                  changed = dict(data, has_tessera=np.array(0, dtype=data["has_tessera"].dtype),
+                  changed = dict(data, has_tessera=np.zeros_like(data["has_tessera"]),
                                  tessera_gap_reason=np.array(REASON))
                   tmp = p.with_name(p.stem + ".tmp.npz")
-                  (np.savez_compressed if compressed else np.savez)(tmp, **changed)
-                  with np.load(tmp, allow_pickle=False) as back:
-                      for k, v in data.items():
-                          if k in ("has_tessera", "tessera_gap_reason"):
-                              continue
-                          if not np.array_equal(back[k], v) or back[k].dtype != v.dtype:
-                              tmp.unlink()
-                              sys.exit(f"{p.name}: array {k} changed on rewrite; refusing")
-                      assert int(back["has_tessera"]) == 0 and str(back["tessera_gap_reason"]) == REASON
-                  os.replace(tmp, p)
+                  try:
+                      (np.savez_compressed if compressed else np.savez)(tmp, **changed)
+                      with np.load(tmp, allow_pickle=False) as back:
+                          # Bytes, not values: NaN-nodata arrays (height, markfukt) must survive too.
+                          for k, v in data.items():
+                              if k == "has_tessera":
+                                  continue
+                              b = back[k]
+                              if b.dtype != v.dtype or b.shape != v.shape or b.tobytes() != v.tobytes():
+                                  sys.exit(f"{p.name}: array {k} changed on rewrite; refusing")
+                          if int(back["has_tessera"]) != 0 or str(back["tessera_gap_reason"]) != REASON:
+                              sys.exit(f"{p.name}: the demotion did not read back; refusing")
+                      os.replace(tmp, p)
+                  finally:
+                      tmp.unlink(missing_ok=True)
                   record.append({"tile": p.stem, "sha256_before": before, "sha256_after": sha256(p),
                                  "reason": REASON, "compressed": compressed})
                   print(f"demoted 1 tile: sha256 {before} -> {record[-1]['sha256_after']}")
 
-              still = 0
-              for p in sorted(ROOT.glob("*.npz")):
-                  if p.name.endswith(".tmp.npz"):
-                      continue
-                  with np.load(p, allow_pickle=False) as d:
-                      if int(d.get("has_tessera", 0)) == 1 and "tessera" in d and invalid(d["tessera"]):
-                          still += 1
-              print(f"re-census: positive Tessera flags on empty/invalid arrays left: {still}")
+              # Record first, so a pod lost during the re-census still leaves it.
               with open(RECORD, "x") as f:
-                  json.dump({"demoted": record, "remaining": still}, f, indent=2)
+                  json.dump({"demoted": record}, f, indent=2)
+              still = 0
+              for p in tiles():
+                  with np.load(p, allow_pickle=False) as d:
+                      still += flagged_invalid(d)
+              print(f"re-census: positive Tessera flags on empty/invalid arrays left: {still}")
               sys.exit(1 if still else 0)
               PY
           env:
