@@ -106,8 +106,8 @@ Modellen har två output-huvuden från samma backbone:
   hanteras genom att den syns, inte genom att tilen kastas. Det som finns
   i dag: varje tile bär `has_frame_2016` i sin npz, och stödrapporten
   (`prepare_nfi_holdout.py --report-only`) visar per år hur många plot-år
-  som har ramen (`frame_2016_by_year`) samt varianten
-  `freeze_with_frame_2016` (ram och 2016-SAR), så kvoten väljs med
+  som har ramen och 2016-SAR (`frame_2016_by_year`) samt varianten
+  `freeze_with_frame_2016` med samma krav, så kvoten väljs med
   skillnaden synlig. Det som saknas: ett `has_frame_2016`-fält per plot-år
   i frysningens `holdout.parquet`, så att resultat kan skiktas på ramen.
   Det ska byggas innan frysningen. Frysningen själv kräver aldrig ramen.
