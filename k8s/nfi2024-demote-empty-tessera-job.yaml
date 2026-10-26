@@ -83,7 +83,7 @@ spec:
                   with np.load(p, allow_pickle=False) as d:
                       if flagged_invalid(d):
                           targets.append(p)
-              print(f"campaign tiles with has_tessera=1 on an empty/invalid array: {len(targets)} (expected {EXPECTED})")
+              print(f"campaign tiles with has_tessera > 0 on an empty/invalid array: {len(targets)} (expected {EXPECTED})")
               if len(targets) != EXPECTED:
                   sys.exit("count differs from the support report; refusing to change anything")
 

@@ -17,10 +17,11 @@ RECORD = "nfi2024_empty_tessera_demoted_20261026.json"
 
 
 def _tile(path, *, flag, tessera, source="geotessera-0.10.2", compressed=True, **extra):
-    # markfukt carries NaN nodata, as real campaign tiles do.
+    # markfukt carries NaN nodata, as real campaign tiles do. The flag is 0-d, as
+    # tile_readiness requires (int() of it).
     markfukt = np.array([[1.0, np.nan], [np.nan, 2.0]], np.float32)
     (np.savez_compressed if compressed else np.savez)(
-        path, has_tessera=np.int32(flag), tessera=tessera, tessera_source=source, markfukt=markfukt,
+        path, has_tessera=np.asarray(flag, np.int32), tessera=tessera, tessera_source=source, markfukt=markfukt,
         spectral=np.arange(24 * 4, dtype=np.float32).reshape(24, 2, 2), **extra)
 
 
@@ -44,10 +45,13 @@ def _compressed(path):
         return any(i.compress_type == zipfile.ZIP_DEFLATED for i in z.infolist())
 
 
-@pytest.mark.parametrize("compressed", [True, False])
-def test_demotes_exactly_the_flagged_empty_tile_and_keeps_every_other_array(campaign, compressed):
+@pytest.mark.parametrize("compressed, flag", [
+    (True, 1), (False, 1),
+    (True, 2),                      # any positive flag, as tile_readiness reads it
+])
+def test_demotes_exactly_the_flagged_empty_tile_and_keeps_every_other_array(campaign, compressed, flag):
     root, manifests = campaign
-    _tile(root / "bad.npz", flag=1, tessera=np.zeros((128, 2, 2), np.float32), compressed=compressed)
+    _tile(root / "bad.npz", flag=flag, tessera=np.zeros((128, 2, 2), np.float32), compressed=compressed)
     good_before = (root / "good.npz").read_bytes()
     with np.load(root / "bad.npz") as d:
         original = {k: d[k] for k in d.files}

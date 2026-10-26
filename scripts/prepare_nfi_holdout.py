@@ -585,7 +585,7 @@ def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: l
       2016 SAR (Tobias 2026-10-24: report every bar, choose at the quota).
     Counts are after NMD coverage, as in the freeze manifest's selection.
     """
-    candidates = set(frame_2016)   # admitted + mean-filled evaluation tiles (main)
+    candidates = set(frame_2016) & evaluation_names   # independent of how main built the map
     variants = {
         "freeze": metadata,
         "absent_aux_mean_fill": {**metadata, **absent_mean_filled},
