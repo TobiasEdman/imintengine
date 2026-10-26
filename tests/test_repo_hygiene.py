@@ -330,8 +330,9 @@ def test_no_nfi_plot_coordinates_tracked() -> None:
 _NFI_TILE_NAME = re.compile(r"nfi20\d\d_\d{6}_\d{7}")
 #: A literal SWEREF99 TM (easting, northing) pair.
 _COORD_TUPLE = re.compile(r"\(\s*(\d{6})(?:\.\d+)?\s*,\s*(\d{7})(?:\.\d+)?\s*\)")
-#: An NFI file: "nfi" at the start of a path token (not inside e.g. "config").
-_NFI_PATH = re.compile(r"(?:^|[/_.\-])nfi")
+#: An NFI file: "nfi", "holdout" or "fieldtruth" at the start of a path token
+#: (not inside e.g. "config"). Evaluation-copy tiles are plot-centred too.
+_NFI_PATH = re.compile(r"(?:^|[/_.\-])(?:nfi|holdout|fieldtruth)")
 _TEXT_SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".txt", ".sh", ".toml",
                   ".cfg", ".ini", ".csv", ".html", ".js", ".ipynb"}
 
@@ -350,15 +351,19 @@ def _nfi_location_hits(rel: str, text: str) -> list[str]:
     return hits
 
 
-# Synthetic values only, built so this file never contains a match itself.
-_NAME = "nfi%d_%06d_%07d" % (2024, 123450, 6543210)
-_PAIR = "(%d, %d)" % (123450, 6543210)
+# Synthetic values only. The tuple below is built, so no real-looking pair
+# sits in this file; the one literal pair left is a whole-100 km point.
+_E, _N = 123450, 6543210
+_NAME = "nfi%d_%06d_%07d" % (2024, _E, _N)
+_PAIR = "(%d, %d)" % (_E, _N)
 
 
 @pytest.mark.parametrize("rel, text, found", [
     ("k8s/x-job.yaml", f"#   {_NAME}  frame_2016 ALL ZERO", True),
     ("k8s/nfi-probe-job.yaml", f"windows = {{'21a': {_PAIR}}}", True),
     ("scripts/build_nfi_index_v5.py", _PAIR, True),
+    ("k8s/holdout-eval-probe-job.yaml", _PAIR, True),
+    ("imint/eval/fieldtruth.py", _PAIR, True),
     ("k8s/lpis-debug-job.yaml", f"centre {_PAIR}", False),
     ("tests/test_tile_config.py", _PAIR, False),              # "config" is not an NFI file
     ("tests/test_plan_nfi_tile_counts.py", "bbox_from_center(500000,6400000)", False),
