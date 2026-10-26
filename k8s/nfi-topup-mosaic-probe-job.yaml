@@ -1,0 +1,128 @@
+# Read-only probe 2 (2026-10-22, Foundation [7c9c49]), after height-gap-probe:
+# (A) which county rasters cover seven of the all-0 windows, in the VRT's
+#     source order;
+# (B) per county: inside vs outside its county mask (grunddata ∪ markfukt
+#     valid), the share of tradhojd -1 / 0 / >0, on a 1:10 decimated read;
+#     for county 25 also per 10 km northing band inside the mask.
+# First run 2026-10-22 at pin 1eb8492 (before #96 and #101). Re-run as -r2 on
+# 2026-10-24 at main b80658c, after Trädhöjd r4 masked every county; that is
+# the pin below. Image as the aux pass; PVC read-only.
+#
+# The seven windows are NFI top-up tile origins, which locate protected plots,
+# so they are not in this file: the probe reads them from
+# /data/manifests/nfi_topup_mosaic_windows_20261022.json and checks its
+# sha256. The runs had the same seven inline; this copy prints them sorted by
+# tag. (Tobias 2026-10-26.)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-topup-mosaic-probe-r2
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-probe, purpose: nfi-topup}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 604800
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== nfi-topup-mosaic-probe — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libexpat1 >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy rasterio pyproj
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              test "$(git rev-parse HEAD)" = "${IMINT_COMMIT}"
+              echo "HEAD: $(git rev-parse HEAD)"
+              python - <<'PY'
+              import json
+              import xml.etree.ElementTree as ET
+
+              import numpy as np
+              import rasterio
+              from rasterio.enums import Resampling
+
+              from imint.training import skg_open
+
+              m = json.load(open("/data/skg_open/MANIFEST.json"))
+              vrt = skg_open.tradhojd_path()
+              order = [s.text for s in ET.parse(vrt).getroot().findall("VRTRasterBand/*/SourceFilename")]
+              print("VRT source order:", [o.split("_")[-1].split(".")[0] for o in order])
+              th = skg_open._county_rasters(m, skg_open.TRADHOJD_PREFIX)
+              masks = [skg_open._county_rasters(m, prefix) for prefix, _ in skg_open.COUNTY_MASKS]
+              invalids = [inv for _, inv in skg_open.COUNTY_MASKS]
+
+              def frac(a):
+                  n = max(a.size, 1)
+                  return f"-1 {(a == -1).sum() / n:.3f}  0 {(a == 0).sum() / n:.3f}  >0 {(a > 0).sum() / n:.3f}"
+
+              print("\n== (A) county rasters over the all-0 windows ==")
+              import hashlib, os
+              raw = open(os.environ["WINDOWS_JSON"], "rb").read()
+              assert hashlib.sha256(raw).hexdigest() == os.environ["WINDOWS_SHA256"], "windows file changed"
+              windows = {tag: tuple(xy) for tag, xy in sorted(json.loads(raw).items())}
+              for tag, (w, s) in windows.items():
+                  e, n = w + 5120, s + 5120
+                  print(f"window {tag} ({w},{s})")
+                  for c in [o.split("_")[-1].split(".")[0] for o in order]:
+                      with rasterio.open(th[c]) as ds:
+                          b = ds.bounds
+                      if e <= b.left or w >= b.right or n <= b.bottom or s >= b.top:
+                          continue
+                      a = skg_open._read_window(th[c], w, s, e, n, (512, 512), resampling=Resampling.nearest, fill=-1)
+                      print(f"    county {c}: {frac(a)}")
+
+              print("\n== (B) per county, inside vs outside its own county mask (1:10 decimated) ==")
+              for c in sorted(th):
+                  with rasterio.open(th[c]) as ds:
+                      b, shape = ds.bounds, (max(ds.height // 10, 1), max(ds.width // 10, 1))
+                      t = ds.read(1, out_shape=shape, resampling=Resampling.nearest)
+                  inside = np.zeros(shape, bool)
+                  for mk, inv in zip(masks, invalids):
+                      if c in mk:
+                          a = skg_open._read_window(mk[c], b.left, b.bottom, b.right, b.top, shape,
+                                                    resampling=Resampling.nearest, fill=inv[0])
+                          inside |= ~np.isin(a, inv)
+                  print(f"county {c}: inside {frac(t[inside])} | outside {frac(t[~inside])} "
+                        f"| inside share {inside.mean():.3f}")
+                  if c == "25":
+                      rows = t.shape[0]
+                      step = max(int(round(10000 / ((b.top - b.bottom) / rows))), 1)    # 10 km in decimated rows
+                      for r0 in range(0, rows, step):
+                          ii, tt = inside[r0:r0 + step], t[r0:r0 + step]
+                          if ii.any():
+                              top = b.top - r0 * (b.top - b.bottom) / rows
+                              print(f"    N {top / 1000:.0f} km: inside -1 {(tt[ii] == -1).mean():.3f} (n {int(ii.sum())})")
+              PY
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: IMINT_COMMIT, value: "b80658c8eaa9860edd442a4c10668c1e4eb96506"}
+            - {name: GDAL_CACHEMAX, value: "512"}
+            - {name: WINDOWS_JSON, value: /data/manifests/nfi_topup_mosaic_windows_20261022.json}
+            - {name: WINDOWS_SHA256, value: e33ddf7431555ba50e611c5f66e2e2e75ddae05f7c9433f59b4dd1393c2cad65}
+          resources:
+            requests: {cpu: "2", memory: "12Gi"}
+            limits: {cpu: "2", memory: "12Gi"}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
