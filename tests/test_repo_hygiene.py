@@ -326,6 +326,79 @@ def test_no_nfi_plot_coordinates_tracked() -> None:
     )
 
 
+#: An NFI tile name: nfi<year>_<west>_<south> in SWEREF99 TM metres.
+_NFI_TILE_NAME = re.compile(r"nfi20\d\d_\d{6}_\d{7}")
+#: A literal SWEREF99 TM (easting, northing) pair.
+_COORD_TUPLE = re.compile(r"\(\s*(\d{6})(?:\.\d+)?\s*,\s*(\d{7})(?:\.\d+)?\s*\)")
+#: An NFI file: "nfi" at the start of a path token (not inside e.g. "config").
+_NFI_PATH = re.compile(r"(?:^|[/_.\-])nfi")
+_TEXT_SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".txt", ".sh", ".toml",
+                  ".cfg", ".ini", ".csv", ".html", ".js", ".ipynb"}
+
+
+def _nfi_location_hits(rel: str, text: str) -> list[str]:
+    """NFI tile names anywhere, and coordinate pairs in NFI files.
+
+    NFI tiles are centred on the plots they carry, so a tile name or a tile
+    corner in NFI code locates a plot. A pair whose numbers are both whole
+    100 km is a synthetic test grid point, not a location.
+    """
+    hits = _NFI_TILE_NAME.findall(text)
+    if _NFI_PATH.search(rel.lower()):
+        hits += [m.group(0) for m in _COORD_TUPLE.finditer(text)
+                 if int(m.group(1)) % 100_000 or int(m.group(2)) % 100_000]
+    return hits
+
+
+# Synthetic values only, built so this file never contains a match itself.
+_NAME = "nfi%d_%06d_%07d" % (2024, 123450, 6543210)
+_PAIR = "(%d, %d)" % (123450, 6543210)
+
+
+@pytest.mark.parametrize("rel, text, found", [
+    ("k8s/x-job.yaml", f"#   {_NAME}  frame_2016 ALL ZERO", True),
+    ("k8s/nfi-probe-job.yaml", f"windows = {{'21a': {_PAIR}}}", True),
+    ("scripts/build_nfi_index_v5.py", _PAIR, True),
+    ("k8s/lpis-debug-job.yaml", f"centre {_PAIR}", False),
+    ("tests/test_tile_config.py", _PAIR, False),              # "config" is not an NFI file
+    ("tests/test_plan_nfi_tile_counts.py", "bbox_from_center(500000,6400000)", False),
+    ("tests/test_nfi_x.py", "(500000, 6400000)", False),       # whole 100 km: synthetic
+])
+def test_nfi_location_patterns(rel: str, text: str, found: bool) -> None:
+    assert bool(_nfi_location_hits(rel, text)) is found
+
+
+def test_no_nfi_tile_locations_tracked() -> None:
+    """No tracked text file may name an NFI tile or carry an NFI coordinate pair.
+
+    The parquet guard above misses text: on 2026-10-26 a probe yaml put seven
+    top-up tile corners into a public PR branch, and a recovered Job header
+    on main named three nfi2024 tiles. Plot locations stay in the data
+    environment; probes read them from the PVC.
+    """
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files"],
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    offenders: dict[str, list[str]] = {}
+    for rel in tracked:
+        path = REPO / rel
+        if path.suffix.lower() not in _TEXT_SUFFIXES or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if hits := _nfi_location_hits(rel, text):
+            offenders[rel] = hits
+    assert not offenders, (
+        f"NFI tile names or coordinates in tracked files: {sorted(offenders)}. "
+        f"They locate protected plots and the repo is public."
+    )
+
+
 # ── manifest-writing skg Jobs forward SIGTERM to their script ──────────────
 # scripts/stage_skg_open.py and scripts/drop_skg_open_raw.py hold
 # /data/skg_open/MANIFEST.lock and release it on SIGTERM. Under
