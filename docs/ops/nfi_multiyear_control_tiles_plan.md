@@ -2,6 +2,14 @@
 
 2026-10-08 · Claude · for Tobias (decisions) and Codex (task 0103, PR #68)
 
+**Status (2026-10-26):** steps 0–4 are done. Step 3's top-up tiles are
+aux-complete where the source allows ([3k record](../experiments/nfi_multiyear_topup_aux_census_2026-10-24.md)).
+Step 4 measured per-year support under the freeze's own rules, and Tobias
+set the quota at 742 plot-years per year, 2018–2024
+([step 4 record](../experiments/nfi_multiyear_support_2026-10-26.md)). The
+freeze (step 5) still needs its own go, after the prerequisites listed
+there.
+
 **Status (2026-10-12):** steps 0–1 are done (#71, merged as `91902bf`).
 Tobias decided D2–D6 on 2026-10-11 and the same-year exclusion and the
 84-file chmod on 2026-10-12 (see Decisions). Steps 2–3 have his go after

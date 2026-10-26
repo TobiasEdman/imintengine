@@ -1,0 +1,123 @@
+---
+# Per-year NFI support under the freeze's own rules (task 0117, step 4).
+#
+# scripts/prepare_nfi_holdout.py --report-only, in the sealed
+# ladder-crop-distill image built at the reviewed main sha, over every
+# evaluation root: the nfi2024 campaign, the evaluation copy and the four
+# top-up staging roots, with the training cohort for exclusion only. It runs
+# the freeze's teacher and footprint exclusion, readiness and aux audit,
+# cross-root deduplication and NMD coverage, then prints aggregate support per
+# year and role, with frame_2016 presence per year, for three tile sets
+# (freeze, absent_aux_mean_fill, freeze_with_frame_2016). Tobias 2026-10-24: report
+# every bar, choose at the quota step.
+#
+# Read-only: the PVC is mounted readOnly, there is no --out-dir, and
+# --report-only writes nothing. The promotion Job's JSON, captured from the
+# cluster, comes from ConfigMap nfi-tessera-promote-v2-job. TMPDIR is a
+# Pod-private emptyDir for the checkpoint-metadata child.
+#
+# Ran 2026-10-26 as -r4 at main b2ebf3c (image sha-b2ebf3c). r1 stopped at
+# the promotion gate (#107), r2 at 7 root-only cohort tiles (chmod 0644),
+# r3 at the sidecar gate (#109). Ephemeral-storage request equals the limit,
+# as the ICE admission webhook requires.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-support-report-r4
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: report
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:e52802a6cda2c94e76ba708c9aac552a0c15b21747979a1e336af3326c25362b
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/venvs/scoring/bin/python
+            - -u
+            - /opt/imintengine/scripts/prepare_nfi_holdout.py
+            - --report-only
+            - --population
+            - all
+            - --plot-index
+            - /cephfs/nfi/nfi_index_v5_2026-10-24.parquet
+            - --teacher-index
+            - /cephfs/nfi/nfi_index_unified_v2_512.parquet
+            - --teacher-root
+            - /cephfs/distill/heads
+            - --distill-root
+            - /cephfs/distill
+            - --checkpoint-root
+            - /cephfs/checkpoints/ladder
+            - --cohort-dir
+            - /cephfs/unified_v2_512
+            - --staging-dir
+            - /cephfs/unified_v2_512_nfi2024_staging
+            - --promotion-job-json
+            - /promotion/tessera-promote-v2.job.json
+            - --promotion-report
+            - /cephfs/manifests/tessera_promotion.json
+            - --nmd2023
+            - /cephfs/nmd2023/NMD2023bas_v2_1.tif
+            - --nmd2018
+            - /cephfs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif
+            - --evaluation-root
+            - holdout_copy:any:/cephfs/holdout_eval_512
+            - --evaluation-root
+            - topup2018:2018:/cephfs/unified_v2_512_nfi2018_staging
+            - --evaluation-root
+            - topup2019:2019:/cephfs/unified_v2_512_nfi2019_staging
+            - --evaluation-root
+            - topup2021:2021:/cephfs/unified_v2_512_nfi2021_staging
+            - --evaluation-root
+            - topup2022:2022:/cephfs/unified_v2_512_nfi2022_staging
+            - --runtime-image
+            - ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:e52802a6cda2c94e76ba708c9aac552a0c15b21747979a1e336af3326c25362b
+            - --runtime-manifest
+            - /opt/provenance/runtime.json
+            - --source-git-sha
+            - b2ebf3ced98e9489edfe474db4efe1f04603dcdf
+          env:
+            - {name: CUDA_VISIBLE_DEVICES, value: ""}
+            - {name: TMPDIR, value: /scratch}
+          resources:
+            requests: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+            limits: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: promotion, mountPath: /promotion, readOnly: true}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
+        - name: promotion
+          configMap: {name: nfi-tessera-promote-v2-job}
+        - name: scratch
+          emptyDir: {sizeLimit: 20Gi}
