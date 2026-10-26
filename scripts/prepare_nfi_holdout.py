@@ -121,11 +121,17 @@ def teacher_head_metadata(payload: bytes, split: dict, features: pd.DataFrame) -
 
 
 def teacher_sidecar_inventory(directory: Path, expected: set[str], head_sha: str,
-                              staging: set[str]) -> dict:
-    """Authenticate all dense-label files, including tiles without NFI plots."""
+                              staging: set[str], *, allow_missing: bool = False) -> dict:
+    """Authenticate all dense-label files, including tiles without NFI plots.
+
+    allow_missing (support reports only) records expected tiles without a
+    sidecar instead of raising; evaluation tiles with sidecars and stale
+    stamps stay fatal in every mode.
+    """
     paths = {p.stem: p for p in directory.glob("*.npz")}
-    if not expected or expected - set(paths):
-        raise ValueError(f"missing teacher sidecars in {directory}: {len(expected - set(paths))}")
+    missing = len(expected - set(paths))
+    if not expected or (missing and not allow_missing):
+        raise ValueError(f"missing teacher sidecars in {directory}: {missing}")
     if set(paths) & staging:
         raise ValueError("evaluation-only campaign has distilled training sidecars")
     records = {}
@@ -139,7 +145,16 @@ def teacher_sidecar_inventory(directory: Path, expected: set[str], head_sha: str
         records[name] = {"path": str(path.resolve()), "bytes": len(payload),
                          "sha256": hashlib.sha256(payload).hexdigest()}
     return {"expected_tiles": len(expected), "verified_tiles": len(records),
-            "head_sha": head_sha, "files": records}
+            "missing_tiles": missing, "head_sha": head_sha, "files": records}
+
+
+def readiness_error_reason(exc: ValueError) -> str:
+    """A tile_readiness error as an exclusion reason, without its path.
+
+    Every raise in tile_readiness reads "<message>: <path>"; the report
+    holds no tile names, so only the message is kept.
+    """
+    return "readiness_error:" + str(exc).split(": ")[0]
 
 
 def tile_readiness(path: Path) -> tuple[dict, str | None]:
@@ -740,7 +755,8 @@ def main() -> None:
         directory = args.distill_root / f"{model}_r2"
         for path in directory.glob("*.npz"):
             capture(path)
-        sidecars = teacher_sidecar_inventory(directory, expected, head["sidecar_head_sha"], evaluation_names)
+        sidecars = teacher_sidecar_inventory(directory, expected, head["sidecar_head_sha"], evaluation_names,
+                                             allow_missing=args.report_only)
         teacher_provenance[model] = {"head": head, "sidecars": sidecars,
                                    "historical_split_digest_available": False}
         inputs.extend([features, split, head_path])
@@ -775,7 +791,14 @@ def main() -> None:
     names = evaluation_names | set(index["tile_name"].astype(str))
     for name in sorted(names):
         capture(paths[name])
-        meta, reason = tile_readiness(paths[name])
+        try:
+            meta, reason = tile_readiness(paths[name])
+        except ValueError as exc:
+            # Only a report, and only for evaluation tiles (Tobias 2026-10-26);
+            # a cohort tile that fails here stays fatal.
+            if not args.report_only or name not in evaluation_names:
+                raise
+            meta, reason = {}, readiness_error_reason(exc)
         if reason:
             excluded[name] = reason
         else:
@@ -798,6 +821,9 @@ def main() -> None:
             evaluation_names=evaluation_names, paths=paths, baselines=baselines,
             model_python=model_python, evaluation_roots=evaluation_roots)
         report["promotion_gate"] = gate
+        report["sidecar_inventory"] = {
+            model: {k: p["sidecars"][k] for k in ("expected_tiles", "verified_tiles", "missing_tiles")}
+            for model, p in teacher_provenance.items()}
         for path in list(input_stats):   # the frame_2016 reads come after the captures
             capture(path)
         print("=== SUPPORT_REPORT_BEGIN ===", json.dumps(report, indent=2),

@@ -48,6 +48,48 @@ def test_sidecar_inventory_checks_non_teacher_training_tiles(tmp_path):
         prep.teacher_sidecar_inventory(tmp_path, {"train"}, "a" * 16, set())
 
 
+def test_sidecar_inventory_allows_only_missing_files_when_asked(tmp_path):
+    """allow_missing (support reports) records a shortfall; an empty expected
+    set, evaluation-tile sidecars and stale stamps stay fatal."""
+    np.savez(tmp_path / "train.npz", head_sha="a" * 16)
+    result = prep.teacher_sidecar_inventory(tmp_path, {"train", "gone"}, "a" * 16, set(), allow_missing=True)
+    assert (result["expected_tiles"], result["verified_tiles"], result["missing_tiles"]) == (2, 1, 1)
+    with pytest.raises(ValueError, match="missing teacher"):
+        prep.teacher_sidecar_inventory(tmp_path, set(), "a" * 16, set(), allow_missing=True)
+    with pytest.raises(ValueError, match="campaign"):
+        prep.teacher_sidecar_inventory(tmp_path, {"train"}, "a" * 16, {"train"}, allow_missing=True)
+    np.savez(tmp_path / "other.npz", head_sha="b" * 16)
+    with pytest.raises(ValueError, match="stale"):
+        prep.teacher_sidecar_inventory(tmp_path, {"train"}, "a" * 16, set(), allow_missing=True)
+
+
+def _readiness_base():
+    return dict(spectral=np.ones((24, 8, 8)), tessera=np.ones((128, 8, 8)), has_tessera=1,
+                tessera_source="geotessera-0.10.2")
+
+
+@pytest.mark.parametrize("arrays, message", [
+    (None, "unreadable tile"),
+    ({k: v for k, v in _readiness_base().items() if k != "tessera"}, "positive has_tessera without an array"),
+    (dict(_readiness_base(), tessera=np.zeros((128, 8, 8))), "positive has_tessera on empty/invalid array"),
+    (dict(_readiness_base(), tessera_source="geotessera-0.9"), "unpromoted Tessera source"),
+    (dict(_readiness_base(), spectral=np.full((24, 8, 8), np.nan), s1_vv_vh=np.ones((2, 8, 8)),
+          b08=np.ones((4, 8, 8)), rededge=np.ones((12, 8, 8)), has_s1=1, s1_enrich_v=4,
+          s1_source="pc-rtc-gamma0"), "invalid spectral array"),
+])
+def test_every_readiness_raise_becomes_a_reason_without_its_path(tmp_path, arrays, message):
+    path = tmp_path / "nfi_tile_42.npz"
+    if arrays is None:
+        path.write_bytes(b"not a zip")
+    else:
+        np.savez(path, **arrays)
+    with pytest.raises(ValueError) as caught:
+        prep.tile_readiness(path)
+    reason = prep.readiness_error_reason(caught.value)
+    assert reason == "readiness_error:" + message
+    assert "nfi_tile_42" not in reason and str(tmp_path) not in reason
+
+
 @pytest.fixture
 def prepared_inputs(tmp_path, monkeypatch):
     directories = {n: tmp_path / n for n in ("cohort-dir", "staging-dir", "teacher-root", "distill-root", "checkpoint-root")}
@@ -391,6 +433,88 @@ def test_report_only_records_a_passed_promotion_gate(prepared_inputs, monkeypatc
     assert _support_report(capsys.readouterr().out)["promotion_gate"] == {
         "passed": True, "cohort_tiles": 2, "states": {"promoted": 2},
         "verify": {"has_v1": 2, "stamped": 2, "has_v2_left": 0}}
+
+
+def _drop_sidecar(prepared_inputs, model="clay", tile="oldtest"):
+    (prepared_inputs["distill-root"] / f"{model}_r2" / f"{tile}.npz").unlink()
+
+
+def test_report_only_records_missing_teacher_sidecars(prepared_inputs, monkeypatch, capsys):
+    _drop_sidecar(prepared_inputs)
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    prep.main()
+    report = _support_report(capsys.readouterr().out)
+    assert report["sidecar_inventory"]["clay"] == {"expected_tiles": 2, "verified_tiles": 1, "missing_tiles": 1}
+    assert all(v["missing_tiles"] == 0 for m, v in report["sidecar_inventory"].items() if m != "clay")
+    assert report["variants"]["freeze"]["observations"] == 1
+
+
+def test_the_freeze_still_refuses_missing_teacher_sidecars(prepared_inputs):
+    _drop_sidecar(prepared_inputs)
+    with pytest.raises(ValueError, match="missing teacher sidecars"):
+        prep.main()
+    assert not prepared_inputs["out-dir"].exists()
+
+
+@pytest.mark.parametrize("report_only", [False, True])
+def test_a_teacher_sidecar_on_an_evaluation_tile_stops_every_mode(prepared_inputs, monkeypatch, report_only):
+    """Exposure: a sidecar on an evaluation tile is never recorded and skipped."""
+    sidecars = prepared_inputs["distill-root"] / "clay_r2"
+    with np.load(sidecars / "train.npz", allow_pickle=False) as train:
+        np.savez(sidecars / "campaign000.npz", **dict(train))
+    if report_only:
+        monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    with pytest.raises(ValueError, match="evaluation-only campaign has distilled training sidecars"):
+        prep.main()
+
+
+def _flag_empty_tessera(prepared_inputs, tile="campaign002"):
+    path = prepared_inputs["staging-dir"] / f"{tile}.npz"
+    with np.load(path, allow_pickle=False) as data:
+        data = dict(data)
+    np.savez(path, **dict(data, tessera=np.zeros_like(data["tessera"]), has_tessera=1))
+
+
+def test_report_only_records_a_readiness_error_as_an_exclusion(prepared_inputs, monkeypatch, capsys):
+    _flag_empty_tessera(prepared_inputs)
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    prep.main()
+    report = _support_report(capsys.readouterr().out)
+    assert report["excluded_evaluation_tiles"]["campaign"] == {
+        "readiness_error:positive has_tessera on empty/invalid array": 1}
+    assert report["variants"]["freeze"]["observations"] == 1
+    assert "campaign002" not in json.dumps(report)
+
+
+def test_report_only_still_raises_a_readiness_error_on_a_cohort_tile(prepared_inputs, monkeypatch):
+    """The decision covered evaluation tiles; a cohort tile that fails stays fatal."""
+    path = prepared_inputs["cohort-dir"] / "train.npz"
+    with np.load(path, allow_pickle=False) as data:
+        data = dict(data)
+    np.savez(path, **dict(data, tessera=np.zeros_like(data["tessera"]), has_tessera=1))
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    with pytest.raises(ValueError, match="positive has_tessera on empty/invalid array"):
+        prep.main()
+
+
+def test_report_only_does_not_swallow_a_non_value_readiness_error(prepared_inputs, monkeypatch):
+    original = prep.tile_readiness
+
+    def broken(path):
+        if path.stem == "campaign002":
+            raise TypeError("unexpected")
+        return original(path)
+    monkeypatch.setattr(prep, "tile_readiness", broken)
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    with pytest.raises(TypeError, match="unexpected"):
+        prep.main()
+
+
+def test_the_freeze_still_raises_a_readiness_error(prepared_inputs):
+    _flag_empty_tessera(prepared_inputs)
+    with pytest.raises(ValueError, match="positive has_tessera on empty/invalid array"):
+        prep.main()
+    assert not prepared_inputs["out-dir"].exists()
 
 
 def test_report_only_reports_an_empty_variant_instead_of_failing(prepared_inputs, monkeypatch, capsys):
