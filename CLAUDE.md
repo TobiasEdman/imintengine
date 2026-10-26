@@ -99,6 +99,17 @@ Modellen har två output-huvuden från samma backbone:
   `frame_2016` alla saknades. Etikettverifieringen var noggrann och
   kontrollerade fel sak.)*
 
+  **Undantag: utvärderingstiles** (Tobias 2026-10-24: "we will not have
+  all data for all tiles always"). Tiles i utvärderingsrötterna
+  (holdout-kopian, nfi2024-kampanjen, top-up-rötterna) får sakna
+  `frame_2016`; ingen sen2cor-fallback körs för dem. Konfunderingen ovan
+  hanteras genom att den syns, inte genom att tilen kastas: varje plot-år
+  bär `has_frame_2016`, kvoten väljs med per-år-stödet med och utan ramen
+  synligt (`prepare_nfi_holdout.py --report-only`, varianten
+  `freeze_with_frame_2016`), och resultat ska kunna skiktas på den.
+  Frysningen själv kräver aldrig ramen. Regeln ovan gäller oförändrad för
+  träningstiles.
+
 ## Datapipeline — 2 steg
 
 ### Steg 1: Fetch spektral (CDSE, CPU-pod, ~5h)
