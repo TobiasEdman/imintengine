@@ -1,0 +1,676 @@
+{
+ "schema": "nfi-multiyear-support/1",
+ "step": "4: per-year support under the freeze's own rules over every evaluation root",
+ "task": "0117",
+ "decisions_user_stated": {
+  "2026-10-24": "Keep frame_2016-gap tiles; report every bar and choose at the quota step; step 4 moves to Claude.",
+  "2026-10-26": "Report-only records the promotion, sidecar and readiness gates; the freeze stays strict. Seven root-only cohort tiles chmod 0644. Quota: freeze rules, 742 per year, 2018-2024."
+ },
+ "quota": {
+  "bar": "freeze",
+  "per_year": 742,
+  "years": [
+   "2018",
+   "2019",
+   "2020",
+   "2021",
+   "2022",
+   "2023",
+   "2024"
+  ],
+  "weakest_year": "2018",
+  "primary_plot_years": 5194,
+  "extended_plot_years": 2731,
+  "selection": "seeded, at the freeze (NFI_YEAR_SAMPLING sha256 rank); not yet run"
+ },
+ "index_v5": {
+  "parquet": {
+   "path": "/data/nfi/nfi_index_v5_2026-10-24.parquet",
+   "sha256": "323176a1e5afa73e9d6e460b6ac0f135aced550bb1816ce357105bc1af39e90c"
+  },
+  "rows": 11809,
+  "observations": 9576,
+  "rows_by_year": {
+   "2018": 1711,
+   "2019": 1044,
+   "2020": 1055,
+   "2021": 1150,
+   "2022": 1554,
+   "2023": 1269,
+   "2024": 4026
+  },
+  "roots": [
+   {
+    "role": "cohort",
+    "root": "/data/unified_v2_512",
+    "tiles": 7882,
+    "tiles_with_plots": 306,
+    "rows": 1105
+   },
+   {
+    "role": "campaign",
+    "root": "/data/unified_v2_512_nfi2024_staging",
+    "tiles": 475,
+    "tiles_with_plots": 475,
+    "rows": 2600
+   },
+   {
+    "role": "holdout_copy",
+    "root": "/data/holdout_eval_512",
+    "tiles": 1241,
+    "tiles_with_plots": 1017,
+    "rows": 6990
+   },
+   {
+    "role": "topup2018",
+    "root": "/data/unified_v2_512_nfi2018_staging",
+    "tiles": 133,
+    "tiles_with_plots": 133,
+    "rows": 651
+   },
+   {
+    "role": "topup2019",
+    "root": "/data/unified_v2_512_nfi2019_staging",
+    "tiles": 7,
+    "tiles_with_plots": 7,
+    "rows": 46
+   },
+   {
+    "role": "topup2021",
+    "root": "/data/unified_v2_512_nfi2021_staging",
+    "tiles": 47,
+    "tiles_with_plots": 47,
+    "rows": 210
+   },
+   {
+    "role": "topup2022",
+    "root": "/data/unified_v2_512_nfi2022_staging",
+    "tiles": 43,
+    "tiles_with_plots": 43,
+    "rows": 207
+   }
+  ],
+  "nfi_plots": {
+   "path": "/data/nfi/nfi_plots.parquet",
+   "sha256": "70d4daedeba4536362a22c23b84eee40e499f271c6d203829407e38290ff9de0",
+   "years": [
+    2018,
+    2025
+   ],
+   "plots": 18661
+  },
+  "git_sha": "8e66e2b9fa893043a6db0620fe5bd9ef88a683ec",
+  "note": "a subset of the builder's sidecar (schema and created_at left out); the sidecar is printed in index-v5.log"
+ },
+ "image": {
+  "ref": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:e52802a6cda2c94e76ba708c9aac552a0c15b21747979a1e336af3326c25362b",
+  "tag": "sha-b2ebf3c",
+  "source_git_sha": "b2ebf3ced98e9489edfe474db4efe1f04603dcdf"
+ },
+ "support_report": {
+  "schema": "nfi-support-report-v1",
+  "evaluation_roots": [
+   {
+    "root": "/cephfs/unified_v2_512_nfi2024_staging",
+    "tiles": 475,
+    "role": "campaign"
+   },
+   {
+    "root": "/cephfs/holdout_eval_512",
+    "tiles": 1241,
+    "role": "holdout_copy",
+    "year": null
+   },
+   {
+    "root": "/cephfs/unified_v2_512_nfi2018_staging",
+    "tiles": 133,
+    "role": "topup2018",
+    "year": 2018
+   },
+   {
+    "root": "/cephfs/unified_v2_512_nfi2019_staging",
+    "tiles": 7,
+    "role": "topup2019",
+    "year": 2019
+   },
+   {
+    "root": "/cephfs/unified_v2_512_nfi2021_staging",
+    "tiles": 47,
+    "role": "topup2021",
+    "year": 2021
+   },
+   {
+    "root": "/cephfs/unified_v2_512_nfi2022_staging",
+    "tiles": 43,
+    "role": "topup2022",
+    "year": 2022
+   }
+  ],
+  "excluded_evaluation_tiles": {
+   "campaign": {
+    "tessera_gap": 2,
+    "readiness_error:positive has_tessera on empty/invalid array": 1,
+    "auxiliary_gaps:markfukt:invalid_or_all_nodata": 3
+   },
+   "holdout_copy": {
+    "tessera_gap": 1,
+    "auxiliary_gaps:markfukt:invalid_or_all_nodata": 2,
+    "s1_version": 1
+   },
+   "topup2018": {
+    "auxiliary_gaps:height:missing": 10,
+    "auxiliary_gaps:markfukt:missing": 2,
+    "tessera_gap": 1
+   },
+   "topup2019": {
+    "auxiliary_gaps:markfukt:missing": 1
+   },
+   "topup2022": {
+    "missing_keys:s1_vv_vh": 1,
+    "auxiliary_gaps:markfukt:missing": 1
+   }
+  },
+  "variants": {
+   "freeze": {
+    "observations": 7925,
+    "year_support": {
+     "2018": 742,
+     "2019": 962,
+     "2020": 969,
+     "2021": 1007,
+     "2022": 949,
+     "2023": 1180,
+     "2024": 2116
+    },
+    "role_year_support": {
+     "campaign": {
+      "2024": 2054
+     },
+     "holdout_copy": {
+      "2018": 428,
+      "2019": 917,
+      "2020": 969,
+      "2021": 802,
+      "2022": 796,
+      "2023": 1180,
+      "2024": 62
+     },
+     "topup2018": {
+      "2018": 314
+     },
+     "topup2019": {
+      "2019": 45
+     },
+     "topup2021": {
+      "2021": 205
+     },
+     "topup2022": {
+      "2022": 153
+     }
+    },
+    "frame_2016_by_year": {
+     "2018": {
+      "present": 596,
+      "absent": 146
+     },
+     "2019": {
+      "present": 826,
+      "absent": 136
+     },
+     "2020": {
+      "present": 841,
+      "absent": 128
+     },
+     "2021": {
+      "present": 850,
+      "absent": 157
+     },
+     "2022": {
+      "present": 835,
+      "absent": 114
+     },
+     "2023": {
+      "present": 1017,
+      "absent": 163
+     },
+     "2024": {
+      "present": 2069,
+      "absent": 47
+     }
+    },
+    "selection": {
+     "index_rows": 11809,
+     "index_observations": 9576,
+     "training_overlap_rows": 949,
+     "cohort_overlap_rows": 156,
+     "training_footprint_overlap_rows": 0,
+     "common_support_rows": 10421,
+     "observations": 7925,
+     "duplicate_rows_removed": 2026,
+     "training_observation_overlap": 0,
+     "tile_role_support": {
+      "holdout_copy": 5154,
+      "campaign": 2054,
+      "topup2018": 314,
+      "topup2021": 205,
+      "topup2022": 153,
+      "topup2019": 45
+     },
+     "nmd_coverage": {
+      "NMD2023": {
+       "covered": 7925,
+       "uncovered": 470
+      },
+      "NMD2018": {
+       "covered": 8395,
+       "uncovered": 0
+      }
+     },
+     "pre_nmd_coverage_observations": 8395,
+     "excluded_for_nmd_coverage": 470,
+     "nmd_coverage_excluded_by_year": {
+      "2018": 80,
+      "2019": 50,
+      "2020": 55,
+      "2021": 31,
+      "2022": 49,
+      "2023": 54,
+      "2024": 151
+     }
+    },
+    "admitted_tiles_by_role": {
+     "holdout_copy": 1237,
+     "topup2018": 120,
+     "topup2019": 6,
+     "topup2021": 47,
+     "topup2022": 41,
+     "campaign": 469
+    }
+   },
+   "absent_aux_mean_fill": {
+    "observations": 7930,
+    "year_support": {
+     "2018": 745,
+     "2019": 963,
+     "2020": 969,
+     "2021": 1007,
+     "2022": 950,
+     "2023": 1180,
+     "2024": 2116
+    },
+    "role_year_support": {
+     "campaign": {
+      "2024": 2054
+     },
+     "holdout_copy": {
+      "2018": 428,
+      "2019": 917,
+      "2020": 969,
+      "2021": 802,
+      "2022": 796,
+      "2023": 1180,
+      "2024": 62
+     },
+     "topup2018": {
+      "2018": 317
+     },
+     "topup2019": {
+      "2019": 46
+     },
+     "topup2021": {
+      "2021": 205
+     },
+     "topup2022": {
+      "2022": 154
+     }
+    },
+    "frame_2016_by_year": {
+     "2018": {
+      "present": 598,
+      "absent": 147
+     },
+     "2019": {
+      "present": 826,
+      "absent": 137
+     },
+     "2020": {
+      "present": 841,
+      "absent": 128
+     },
+     "2021": {
+      "present": 850,
+      "absent": 157
+     },
+     "2022": {
+      "present": 836,
+      "absent": 114
+     },
+     "2023": {
+      "present": 1017,
+      "absent": 163
+     },
+     "2024": {
+      "present": 2069,
+      "absent": 47
+     }
+    },
+    "selection": {
+     "index_rows": 11809,
+     "index_observations": 9576,
+     "training_overlap_rows": 949,
+     "cohort_overlap_rows": 156,
+     "training_footprint_overlap_rows": 0,
+     "common_support_rows": 10460,
+     "observations": 7930,
+     "duplicate_rows_removed": 2040,
+     "training_observation_overlap": 0,
+     "tile_role_support": {
+      "holdout_copy": 5154,
+      "campaign": 2054,
+      "topup2018": 317,
+      "topup2021": 205,
+      "topup2022": 154,
+      "topup2019": 46
+     },
+     "nmd_coverage": {
+      "NMD2023": {
+       "covered": 7930,
+       "uncovered": 490
+      },
+      "NMD2018": {
+       "covered": 8420,
+       "uncovered": 0
+      }
+     },
+     "pre_nmd_coverage_observations": 8420,
+     "excluded_for_nmd_coverage": 490,
+     "nmd_coverage_excluded_by_year": {
+      "2018": 100,
+      "2019": 50,
+      "2020": 55,
+      "2021": 31,
+      "2022": 49,
+      "2023": 54,
+      "2024": 151
+     }
+    },
+    "admitted_tiles_by_role": {
+     "holdout_copy": 1237,
+     "topup2018": 132,
+     "topup2019": 7,
+     "topup2021": 47,
+     "topup2022": 42,
+     "campaign": 469
+    }
+   },
+   "freeze_with_frame_2016": {
+    "observations": 7054,
+    "year_support": {
+     "2018": 607,
+     "2019": 826,
+     "2020": 841,
+     "2021": 850,
+     "2022": 835,
+     "2023": 1017,
+     "2024": 2078
+    },
+    "role_year_support": {
+     "campaign": {
+      "2024": 2014
+     },
+     "holdout_copy": {
+      "2018": 343,
+      "2019": 791,
+      "2020": 841,
+      "2021": 669,
+      "2022": 703,
+      "2023": 1017,
+      "2024": 64
+     },
+     "topup2018": {
+      "2018": 264
+     },
+     "topup2019": {
+      "2019": 35
+     },
+     "topup2021": {
+      "2021": 181
+     },
+     "topup2022": {
+      "2022": 132
+     }
+    },
+    "frame_2016_by_year": {
+     "2018": {
+      "present": 607,
+      "absent": 0
+     },
+     "2019": {
+      "present": 826,
+      "absent": 0
+     },
+     "2020": {
+      "present": 841,
+      "absent": 0
+     },
+     "2021": {
+      "present": 850,
+      "absent": 0
+     },
+     "2022": {
+      "present": 835,
+      "absent": 0
+     },
+     "2023": {
+      "present": 1017,
+      "absent": 0
+     },
+     "2024": {
+      "present": 2078,
+      "absent": 0
+     }
+    },
+    "selection": {
+     "index_rows": 11809,
+     "index_observations": 9576,
+     "training_overlap_rows": 949,
+     "cohort_overlap_rows": 156,
+     "training_footprint_overlap_rows": 0,
+     "common_support_rows": 9238,
+     "observations": 7054,
+     "duplicate_rows_removed": 1808,
+     "training_observation_overlap": 0,
+     "tile_role_support": {
+      "holdout_copy": 4428,
+      "campaign": 2014,
+      "topup2018": 264,
+      "topup2021": 181,
+      "topup2022": 132,
+      "topup2019": 35
+     },
+     "nmd_coverage": {
+      "NMD2023": {
+       "covered": 7054,
+       "uncovered": 376
+      },
+      "NMD2018": {
+       "covered": 7430,
+       "uncovered": 0
+      }
+     },
+     "pre_nmd_coverage_observations": 7430,
+     "excluded_for_nmd_coverage": 376,
+     "nmd_coverage_excluded_by_year": {
+      "2018": 53,
+      "2019": 44,
+      "2020": 47,
+      "2021": 16,
+      "2022": 39,
+      "2023": 45,
+      "2024": 132
+     }
+    },
+    "admitted_tiles_by_role": {
+     "holdout_copy": 1068,
+     "topup2018": 99,
+     "topup2019": 5,
+     "topup2021": 41,
+     "topup2022": 33,
+     "campaign": 456
+    }
+   }
+  },
+  "promotion_gate": {
+   "passed": false,
+   "reason": "promotion report lacks complete, clean v2 coverage",
+   "cohort_tiles": 7882,
+   "verify": {
+    "has_v1": 7873,
+    "has_v2_left": 0,
+    "stamped": 7873
+   },
+   "states": {
+    "promoted": 7873,
+    "empty_in_v2": 71,
+    "no_v2": 9
+   }
+  },
+  "sidecar_inventory": {
+   "clay": {
+    "expected_tiles": 7882,
+    "verified_tiles": 7882,
+    "missing_tiles": 0
+   },
+   "croma": {
+    "expected_tiles": 7854,
+    "verified_tiles": 7844,
+    "missing_tiles": 10
+   },
+   "prithvi300m": {
+    "expected_tiles": 7882,
+    "verified_tiles": 7882,
+    "missing_tiles": 0
+   },
+   "prithvi300m4f": {
+    "expected_tiles": 7882,
+    "verified_tiles": 7882,
+    "missing_tiles": 0
+   },
+   "prithvi600m": {
+    "expected_tiles": 7882,
+    "verified_tiles": 7882,
+    "missing_tiles": 0
+   },
+   "terramind": {
+    "expected_tiles": 7854,
+    "verified_tiles": 7844,
+    "missing_tiles": 10
+   },
+   "tessera": {
+    "expected_tiles": 7874,
+    "verified_tiles": 7874,
+    "missing_tiles": 0
+   }
+  }
+ },
+ "freeze_prerequisites_open": [
+  "10 cohort tiles without croma_r2 and terramind_r2 sidecars (sidecar_inventory)",
+  "one campaign tile with has_tessera=1 on an empty array (readiness_error)",
+  "promotion gate: 9 no_v2 cohort tiles",
+  "a per-plot-year has_frame_2016 field in holdout.parquet",
+  "whether deduplication prefers a tile with frame_2016 (today: campaign first, then tile name); decides the stratum of 11 plot-years in 2018 and 9 in 2024"
+ ],
+ "execution_evidence": {
+  "nfi-index-v5": {
+   "pod": "nfi-index-v5-vll47",
+   "node": "p02r10srv04",
+   "started": "2026-10-26T08:07:33Z",
+   "finished": "2026-10-26T08:23:38Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-index-v5-job.yaml (#106), pin 8e66e2b; the only write: the index and its sidecar",
+   "log": "index-v5.log",
+   "log_sha256": "444220e150f3084920c20ed43401dd551bc956f347eafd8d5bc84226e3ff6882"
+  },
+  "nfi-support-report": {
+   "pod": "nfi-support-report-pk5rf",
+   "node": "p02r09srv02",
+   "started": "2026-10-26T08:28:46Z",
+   "finished": "2026-10-26T08:30:00Z",
+   "exit_code": 1,
+   "source": "report, image sha-042ad63; stopped in check_promotion",
+   "log": "support-report-attempt1.log",
+   "log_sha256": "2603b1c91cdebc1016808cffa7d52ad0b47d9b71129e78d9fd25172c8973a4bf"
+  },
+  "nfi-promotion-report-probe": {
+   "pod": "nfi-promotion-report-probe-4dv2d",
+   "node": "p02r10srv03",
+   "started": "2026-10-26T08:30:47Z",
+   "finished": "2026-10-26T08:30:48Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-promotion-report-probe-job.yaml; read-only",
+   "log": "promotion-report-probe.log",
+   "log_sha256": "15d700a5da0aab55924e53bd437c23b895526676d540c51c012b5d09cdf35432"
+  },
+  "nfi-support-report-r2": {
+   "pod": "nfi-support-report-r2-zw959",
+   "node": "p02r09srv02",
+   "started": "2026-10-26T10:20:38Z",
+   "finished": "2026-10-26T10:24:58Z",
+   "exit_code": 1,
+   "source": "report, image sha-6ce0755; PermissionError on a root-only cohort tile",
+   "log": "support-report-r2.log",
+   "log_sha256": "8ac115e3470b1a737b56afb20ea3f29f5b8195f98a1301d52600e18aa9d38032"
+  },
+  "nfi-readability-probe": {
+   "pod": "nfi-readability-probe-dxq9l",
+   "node": "p02r10srv03",
+   "started": "2026-10-26T10:26:11Z",
+   "finished": "2026-10-26T10:26:14Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-readability-probe-job.yaml; read-only",
+   "log": "readability-probe.log",
+   "log_sha256": "64475557d11e74e34717d281c6102d7ea61e5ef128e631591ee13ec27f681440"
+  },
+  "nfi-cohort-chmod": {
+   "pod": "nfi-cohort-chmod-5dr5h",
+   "node": "p02r10srv03",
+   "started": "2026-10-26T11:09:17Z",
+   "finished": "2026-10-26T11:09:19Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-cohort-chmod-job.yaml; 7 cohort tiles 0600 -> 0644, sha256 unchanged (Tobias 2026-10-26)",
+   "log": "cohort-chmod.log",
+   "log_sha256": "c01891cf85f6edeabfee2b4d53b8bc8ad1f817f033c3e4d4fb001a4204f747df"
+  },
+  "nfi-support-report-r3": {
+   "pod": "nfi-support-report-r3-56pm4",
+   "node": "p02r09srv02",
+   "started": "2026-10-26T11:10:19Z",
+   "finished": "2026-10-26T11:26:41Z",
+   "exit_code": 1,
+   "source": "report, image sha-6ce0755; stopped at the croma_r2 sidecar inventory",
+   "log": "support-report-r3.log",
+   "log_sha256": "a34c6157b9256bf1ba4111ee518403471edc28f63ea7cfba70ee105f06697dbc"
+  },
+  "nfi-freeze-preflight": {
+   "pod": "nfi-freeze-preflight-9kbpq",
+   "node": "p02r09srv02",
+   "started": "2026-10-26T11:28:42Z",
+   "finished": "2026-10-26T12:56:38Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-freeze-preflight-job.yaml; read-only, image sha-6ce0755",
+   "log": "freeze-preflight.log",
+   "log_sha256": "d643aea21ad52c92bf8d533820fc556ac50a64cdaeceac9646d4cdc0245e3c2a"
+  },
+  "nfi-support-report-r4": {
+   "pod": "nfi-support-report-r4-44vk6",
+   "node": "p02r09srv02",
+   "started": "2026-10-26T16:36:24Z",
+   "finished": "2026-10-26T18:21:45Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-support-report-job.yaml; image sha-b2ebf3c, source b2ebf3c; read-only",
+   "log": "support-report-r4.log",
+   "log_sha256": "2c378695a731d31702ebcf21e5bf80002d6fb2582f6ed0504e15105ca3653595"
+  }
+ },
+ "evidence_dir": "~/.agents/continuity/evidence/ImintEngine/nfi-index-v5-20261024/"
+}

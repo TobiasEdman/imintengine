@@ -1,0 +1,67 @@
+---
+# Read-only probe (task 0117, 2026-10-26): the support report (non-root UID
+# 2000) hit PermissionError on a cohort tile. Count, per root, the .npz files
+# that are not world-readable, with their owner uid/gid and mode, and say
+# whether UID 2000 could read them through a group. Prints counts and up to
+# five example names per root; writes nothing.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-readability-probe
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 604800
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["python", "-c"]
+          args:
+            - |
+              import os, stat
+              from collections import Counter
+              from pathlib import Path
+              roots = ["unified_v2_512", "unified_v2_512_nfi2024_staging", "holdout_eval_512",
+                       "unified_v2_512_nfi2018_staging", "unified_v2_512_nfi2019_staging",
+                       "unified_v2_512_nfi2021_staging", "unified_v2_512_nfi2022_staging",
+                       "nfi", "distill/heads", "manifests", "nmd2023", "nmd"]
+              for r in roots:
+                  d = Path("/data") / r
+                  files = [p for p in d.rglob("*") if p.is_file()] if r in ("distill/heads", "nfi", "manifests", "nmd2023", "nmd") else [p for p in d.glob("*.npz") if not p.name.endswith(".tmp.npz")]
+                  bad = []
+                  for p in files:
+                      st = p.stat()
+                      if not st.st_mode & stat.S_IROTH:
+                          bad.append((p.name, st.st_uid, st.st_gid, oct(stat.S_IMODE(st.st_mode))))
+                  owners = Counter((u, g, m) for _, u, g, m in bad)
+                  print(f"{r}: files {len(files)}, not world-readable {len(bad)}, by (uid,gid,mode) {dict(owners)}")
+                  for name, *_ in bad[:5]:
+                      print(f"    e.g. {name}")
+              ck = Path("/data/checkpoints/ladder")
+              bad = [p for p in ck.rglob("*") if p.is_file() and not p.stat().st_mode & stat.S_IROTH]
+              print(f"checkpoints/ladder: not world-readable {len(bad)}")
+              dirs = [d for d in Path("/data/distill").iterdir() if d.is_dir()]
+              nd = sum(1 for d in dirs for p in d.glob("*.npz") if not p.stat().st_mode & stat.S_IROTH)
+              print(f"distill/*/*.npz: not world-readable {nd}")
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "1", memory: 2Gi}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}

@@ -1,0 +1,137 @@
+---
+# Read-only preflight diagnostic (task 0117, 2026-10-26).
+#
+# The support report (--report-only) stopped at one freeze gate after another.
+# This Job replays the remaining gates in the same sealed image
+# (sha-6ce0755) and security context (UID 2000, PVC read-only) and lists every
+# failure instead of stopping at the first:
+# - each teacher's sidecar coverage of the cohort, head stamps, and whether
+#   any evaluation tile has a sidecar;
+# - the 28 checkpoints' input contracts (the model-interpreter child);
+# - every tile_readiness raise over the evaluation roots and indexed cohort.
+# Its result (croma/terramind miss the same 10 cohort sidecars; one campaign
+# tile raises; everything else passes) led to #109. The log names tiles and
+# stays outside the repo; this manifest names none.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-freeze-preflight
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: report
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:bd69130366ab5ce574ff474895621c341fb15b0b1990b12d7f3e1e1fdcd44a20
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/venvs/scoring/bin/python", "-u", "-c"]
+          args:
+            - |
+              import json, subprocess, sys
+              from collections import Counter
+              from pathlib import Path
+              import numpy as np, pandas as pd
+              sys.path.insert(0, "/opt/imintengine/scripts"); sys.path.insert(0, "/opt/imintengine")
+              import prepare_nfi_holdout as prep
+              from build_pinned_plot_set import npz_key_names, npz_version_ok
+              from gen_ladder_manifests import DISTILL
+              C = Path("/cephfs")
+              cohort = prep.tile_files(C / "unified_v2_512")
+              evals = {}
+              for d in ("unified_v2_512_nfi2024_staging", "holdout_eval_512", "unified_v2_512_nfi2018_staging",
+                        "unified_v2_512_nfi2019_staging", "unified_v2_512_nfi2021_staging", "unified_v2_512_nfi2022_staging"):
+                  evals.update(prep.tile_files(C / d))
+              keys = {n: npz_key_names(p) for n, p in cohort.items()}
+              print("PREFLIGHT cohort", len(cohort), "unreadable", sorted(n for n, k in keys.items() if k is None))
+              heads = C / "distill/heads"
+              for model, cfg in DISTILL.items():
+                  req = tuple(cfg.get("require_keys", ()))
+                  expected = {n for n, k in keys.items() if k is not None and set(req) <= k and npz_version_ok(cohort[n], req)}
+                  directory = C / "distill" / f"{model}_r2"
+                  present = {p.stem: p for p in directory.glob("*.npz")}
+                  missing = sorted(expected - set(present))
+                  try:
+                      head = prep.teacher_head_metadata((heads / f"{model}_r2_head.npz").read_bytes(),
+                                                        json.loads((heads / f"{model}_r2_split.json").read_text()),
+                                                        pd.read_parquet(heads / f"{model}_r2_plot_features.parquet"))
+                      sha, head_err = head["sidecar_head_sha"], None
+                  except Exception as e:
+                      sha, head_err = None, f"{type(e).__name__}: {e}"
+                  stale = 0
+                  for p in present.values():
+                      with np.load(p, allow_pickle=False) as s:
+                          st = s.get("head_sha")
+                          if st is None or st.shape != () or str(st) != sha:
+                              stale += 1
+                  print(f"PREFLIGHT teacher {model}: require {req}; expected {len(expected)}; present {len(present)}; "
+                        f"missing {len(missing)} {missing[:12]}; not-expected {len(set(present) - expected)}; "
+                        f"in-eval {len(set(present) & set(evals))}; stale-stamp {stale}; head-error {head_err}")
+              cells = {f"{m}_r{r}": {"checkpoint": prep.file_identity(C / "checkpoints/ladder" / f"{m}_r{r}" / "best_model.pt"),
+                                     "backbone": cfg["backbone"], "img_size": cfg["img_size"],
+                                     "num_classes": 23 if r == 1 else 28, "head": "class"}
+                       for m, cfg in DISTILL.items() for r in range(1, 5)}
+              out = subprocess.run(["/opt/venvs/model/bin/python", "/opt/imintengine/scripts/nfi_checkpoint_inputs.py"],
+                                   input=json.dumps(cells), capture_output=True, text=True)
+              if out.returncode:
+                  print("PREFLIGHT checkpoints FAILED:", out.stderr[-1500:])
+              else:
+                  req = json.loads(out.stdout)
+                  print("PREFLIGHT checkpoints OK; aux names:", sorted({n for c in req["cells"].values() for n in c["enabled_aux_names"]}),
+                        "nan_nodata:", req["nan_nodata_channels"])
+              index = pd.read_parquet(C / "nfi/nfi_index_v5_2026-10-24.parquet")
+              paths = {**cohort, **evals}
+              names = set(evals) | set(index["tile_name"].astype(str))
+              raised, examples = Counter(), {}
+              for n in sorted(names):
+                  try:
+                      prep.tile_readiness(paths[n])
+                  except ValueError as e:
+                      kind = str(e).split(":")[0]
+                      raised[kind] += 1
+                      examples.setdefault(kind, []).append(n)
+              print("PREFLIGHT readiness raises:", dict(raised), {k: v[:8] for k, v in examples.items()})
+              print("PREFLIGHT done")
+          env:
+            - {name: CUDA_VISIBLE_DEVICES, value: ""}
+            - {name: TMPDIR, value: /scratch}
+          resources:
+            requests: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+            limits: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: promotion, mountPath: /promotion, readOnly: true}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
+        - name: promotion
+          configMap: {name: nfi-tessera-promote-v2-job}
+        - name: scratch
+          emptyDir: {sizeLimit: 20Gi}
