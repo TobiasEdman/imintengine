@@ -7,8 +7,8 @@
 # top-up staging roots, with the training cohort for exclusion only. It runs
 # the freeze's teacher and footprint exclusion, readiness and aux audit,
 # cross-root deduplication and NMD coverage, then prints aggregate support per
-# year and role, with has_frame_2016 per plot-year, for three tile sets
-# (freeze, absent_aux_mean_fill, census_full_bar). Tobias 2026-10-24: report
+# year and role, with frame_2016 presence per year, for three tile sets
+# (freeze, absent_aux_mean_fill, freeze_with_frame_2016). Tobias 2026-10-24: report
 # every bar, choose at the quota step.
 #
 # Read-only: the PVC is mounted readOnly, there is no --out-dir, and

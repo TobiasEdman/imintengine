@@ -24,11 +24,19 @@ the freeze; the other 2,731 eligible plot-years form the extended set.
 | 2024 | 2,116 | 2,116 | 2,078 |
 | **Total** | **7,925** | **7,930** | **7,054** |
 
-Under the freeze rules, 596 of 2018's 742 plot-years sit on a tile with the
-2016 frame and 2016 SAR, and 146 do not. Those 146 stay in, as decided on
-2026-10-24, and results are to be split by a per-plot-year `has_frame_2016`
-field built before the freeze. The `frame_2016` variant's 607 for 2018 falls
-inside the 600–712 that step 3k derived from the census.
+Under the freeze rules, 596 of 2018's 742 plot-years have the 2016 frame
+and 2016 SAR on the tile that deduplication picked, and 146 do not. Those
+146 stay in, as decided on 2026-10-24, and results are to be split by a
+per-plot-year `has_frame_2016` field built before the freeze. Deduplication
+picks the campaign tile first, then by tile name; it never prefers a tile
+with the frame. So 11 of the 146 (9 in 2024) also lie on an admitted tile
+that has it: preferring that tile would give 2018 607 with the frame and 135
+without. The quota is unaffected.
+
+The `frame_2016` variant's 607 for 2018 is consistent with the 600–712 that
+step 3k derived from the census. The rules differ: the freeze also applies
+NMD coverage (53 plot-years in 2018 for this variant) and the cohort
+overlap; before NMD coverage the like-for-like figure is 660.
 
 ## How the counts were made
 
@@ -36,11 +44,14 @@ inside the 600–712 that step 3k derived from the census.
 freeze's own rules, then reports instead of freezing:
 - **teacher exposure**: 949 index rows on a teacher's recorded feature
   plot-years are dropped;
-- **cohort overlap**: 156 rows whose plot-year also lies on a training tile;
+- **cohort overlap**: 156 rows of plot-years that lie on a training tile,
+  the training-tile rows themselves included;
 - **same-year training footprint**: none;
-- **readiness and the aux audit** of every evaluation tile;
+- **readiness and the aux audit** of every evaluation tile; rows on tiles
+  the freeze does not admit, or outside the models' common crop, drop out
+  (283 rows);
 - **deduplication** to one tile per plot-year across all six evaluation
-  roots: 2,026 duplicate rows;
+  roots, campaign tile first and then by tile name: 2,026 duplicate rows;
 - **NMD coverage**: 470 plot-years dropped, all from NMD2023's coverage gaps
   (80 in 2018); NMD2018 dropped none.
 
@@ -53,8 +64,8 @@ Tiles the freeze would not admit, per evaluation root:
 
 | Root | Tiles | Not admitted | Why |
 |---|---|---|---|
-| nfi2024 campaign | 475 | 6 | markfukt all nodata 3, Tessera gap 2, Tessera flag on an empty array 1 |
-| evaluation copy | 1,241 | 4 | markfukt all nodata 2, Tessera gap 1, old S1 version 1 |
+| nfi2024 campaign | 475 | 6 | markfukt invalid or all nodata 3, Tessera gap 2, Tessera flag on an empty or invalid array 1 |
+| evaluation copy | 1,241 | 4 | markfukt invalid or all nodata 2, Tessera gap 1, old S1 version 1 |
 | top-up 2018 | 133 | 13 | height absent 10, markfukt absent 2, Tessera gap 1 |
 | top-up 2019 | 7 | 1 | markfukt absent |
 | top-up 2021 | 47 | 0 | |
@@ -67,7 +78,8 @@ them, the freeze stays strict):
 - **Tessera promotion**: 7,873 of 7,882 cohort tiles promoted; 9 have no v2.
 - **Teacher sidecars**: CROMA and TerraMind each lack sidecars for the same
   10 cohort tiles; the other five teachers are complete.
-- **Readiness**: one campaign tile has `has_tessera = 1` on an empty array.
+- **Readiness**: one campaign tile has `has_tessera = 1` on an empty or
+  invalid array.
 
 ## Getting there
 
@@ -90,4 +102,7 @@ The freeze needs Tobias's go, and these first:
 - the 10 missing CROMA and TerraMind sidecars;
 - the campaign tile's Tessera flag;
 - the 9 cohort tiles without Tessera v2;
-- the per-plot-year `has_frame_2016` field in `holdout.parquet`.
+- the per-plot-year `has_frame_2016` field in `holdout.parquet`;
+- whether deduplication should prefer a tile with the frame (above).
+  That decides which stratum 11 plot-years in 2018 and 9 in 2024 fall
+  into.

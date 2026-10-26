@@ -99,7 +99,8 @@
    ],
    "plots": 18661
   },
-  "git_sha": "8e66e2b9fa893043a6db0620fe5bd9ef88a683ec"
+  "git_sha": "8e66e2b9fa893043a6db0620fe5bd9ef88a683ec",
+  "note": "a subset of the builder's sidecar (schema and created_at left out); the sidecar is printed in index-v5.log"
  },
  "image": {
   "ref": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:e52802a6cda2c94e76ba708c9aac552a0c15b21747979a1e336af3326c25362b",
@@ -576,7 +577,8 @@
   "10 cohort tiles without croma_r2 and terramind_r2 sidecars (sidecar_inventory)",
   "one campaign tile with has_tessera=1 on an empty array (readiness_error)",
   "promotion gate: 9 no_v2 cohort tiles",
-  "a per-plot-year has_frame_2016 field in holdout.parquet"
+  "a per-plot-year has_frame_2016 field in holdout.parquet",
+  "whether deduplication prefers a tile with frame_2016 (today: campaign first, then tile name); decides the stratum of 11 plot-years in 2018 and 9 in 2024"
  ],
  "execution_evidence": {
   "nfi-index-v5": {
