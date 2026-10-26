@@ -1,0 +1,45 @@
+{
+ "schema": "nfi-freeze-exceptions/1",
+ "decided": {
+  "by": "Tobias",
+  "date": "2026-10-26",
+  "record": "docs/experiments/nfi_multiyear_support_2026-10-26.md"
+ },
+ "promotion_no_v2": {
+  "tile_481280_6201280": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array",
+  "tile_531280_6591280": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: tessera array without tessera_source",
+  "tile_621280_6781280": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array",
+  "tile_631280_6821280": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array",
+  "tile_671280_6521280": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array",
+  "tile_721280_6661280": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array",
+  "tile_791280_7091280": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array",
+  "urban_310850_6377807": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array",
+  "urban_310850_6382807": "cohort tile without Tessera v2 at promotion (tessera-promote-v2, 2026-10-08, counted no_v2); probe 2026-10-26: no tessera array"
+ },
+ "sidecars_missing": {
+  "croma": {
+   "46723944": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "46763944": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "46823940": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "47023938": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "crop_oljevaxter_417243_6233339": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "crop_oljevaxter_431822_6234766": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_441879_6235126": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_591280_6471280": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_601280_6471280": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_851280_7291280": "cohort tile with current-version s1_vv_vh but no croma_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated"
+  },
+  "terramind": {
+   "46723944": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "46763944": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "46823940": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "47023938": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "crop_oljevaxter_417243_6233339": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "crop_oljevaxter_431822_6234766": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_441879_6235126": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_591280_6471280": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_601280_6471280": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated",
+   "tile_851280_7291280": "cohort tile with current-version s1_vv_vh but no terramind_r2 sidecar: outside the teacher's dense-label inventory (preflight 2026-10-26); recorded, not regenerated"
+  }
+ }
+}
