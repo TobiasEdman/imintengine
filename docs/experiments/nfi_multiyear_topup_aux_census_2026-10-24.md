@@ -8,8 +8,8 @@ own result line. Each of this record's Jobs has its pod, node, times and
 log hash in the [JSON record](nfi_multiyear_topup_aux_census_20261024.json).
 The baseline it compares against, dry run 3 of 2026-10-22, is cited there
 with its log hashes. No plot identities, tile names or tile coordinates are
-in either file or in the Jobs: the mosaic probe reads its windows from the
-PVC.
+in either file or in the Job manifests: the mosaic probe reads its windows
+from the PVC. Pod logs, kept outside the repo, do print tile names.
 
 ## Verdict
 
@@ -24,8 +24,8 @@ evaluation copy has 389 on the bar (its own census,
 [2026-10-13](nfi_multiyear_holdout_eval_2026-10-13.md)) and the top-up 323.
 Their deduplicated union lies between 600 and 712, below the 826 counted by
 plot-years alone in step 3. The floor counts the 112 top-up plot-years that
-step 3 found already on the copy at most once (449 eligible, 337 gained). The exact figure needs the combined census of
-step 4. The other years stay above it on the same bar. With step 3's
+step 3 found already on the copy at most once (449 eligible, 337 gained).
+The exact figure needs the combined census of step 4. The other years stay above it on the same bar. With step 3's
 deduplicated gains, 2019 has at least 858 (at most 870), 2021 at least 829
 (at most 886) and 2022 at least 851 (at most 905). 2020, 2023 and 2024
 have 888, 1,062 and 1,275 on the copy alone.
@@ -149,6 +149,7 @@ no descending-orbit composite for its year.
 | `nfi-topup-aux-pass` | `k8s/nfi-topup-aux-pass-job.yaml` | exit 0, 230 tiles, counts unchanged |
 | `nfi-topup-census-r2` | `k8s/nfi-topup-census-job.yaml`, renamed | exit 0 |
 | `nfi-topup-bar-attrib-probe` | `k8s/nfi-topup-bar-attrib-probe-job.yaml` | exit 0, totals asserted |
+| `nfi-mosaic-windows-write` | cluster-only Job: wrote the seven windows to `/data/manifests/`, exclusive create | exit 0, sha256 checked |
 | `nfi-topup-mosaic-probe-r3` | `k8s/nfi-topup-mosaic-probe-job.yaml` as committed, renamed | exit 0, identical to -r2 |
 
 The mosaic probe ran as -r2 with its seven windows inline. Those windows are
@@ -158,8 +159,10 @@ sha256 check. Its re-run as -r3 (2026-10-26) reproduced -r2: the county
 table is identical, and the window table has the same values, sorted by tag.
 
 All ran `python:3.11-slim@sha256:5be45dba…` on icekube. The aux pass was
-the only writer and ran alone. The three read-only Jobs before it ran in
-parallel; the census ran after it, and the attribution probe after the
-census. Logs are saved
-under `~/.agents/continuity/evidence/ImintEngine/nfi-topup-aux-pass-dryrun4/`
-and `…/nfi-topup-aux-pass-20261024/`; their hashes are in the JSON record.
+the only writer to tiles and ran alone. The three read-only Jobs before it
+ran in parallel; the census ran after it, and the attribution probe after
+the census. On 2026-10-26 the windows Job wrote one new file to
+`/data/manifests/`, and the -r3 probe ran read-only. Logs are saved under
+`~/.agents/continuity/evidence/ImintEngine/nfi-topup-aux-pass-dryrun4/`,
+`…/nfi-topup-aux-pass-20261024/` and `…/nfi-index-v5-20261024/` (windows
+Job, -r3); their hashes are in the JSON record.

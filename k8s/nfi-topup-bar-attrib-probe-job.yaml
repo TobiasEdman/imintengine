@@ -1,5 +1,7 @@
 ---
 # Read-only attribution probe after the top-up census (2026-10-24).
+# Since the run: the banner (it printed "=== top-up census"), an unused YEARS
+# variable dropped, and ttlSecondsAfterFinished added. The logic is as run.
 #
 # The census reports, per year, plot-years that are eligible and the subset on
 # tiles meeting the full modality bar, but not why a tile misses the bar.

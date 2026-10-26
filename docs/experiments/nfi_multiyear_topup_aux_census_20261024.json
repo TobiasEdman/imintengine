@@ -214,9 +214,18 @@
    "source": "k8s/nfi-topup-mosaic-probe-job.yaml as committed (windows read from the PVC file), renamed -r3; pod ran b80658c",
    "log_sha256": "3877659d971cbfda9ce7e31a9c54ab4f6368e55246319422807642f24e1c2506",
    "result": "part B identical to -r2; part A the same seven windows and values, sorted by tag"
+  },
+  "nfi-mosaic-windows-write": {
+   "pod": "nfi-mosaic-windows-write-6gn7j",
+   "node": "p02r10srv03",
+   "started": "2026-10-26T12:24:08Z",
+   "finished": "2026-10-26T12:24:09Z",
+   "exit_code": 0,
+   "source": "cluster-only Job (its spec carries the windows via ConfigMap nfi-topup-mosaic-windows); wrote /data/manifests/nfi_topup_mosaic_windows_20261022.json with exclusive create",
+   "log_sha256": "e211c90c90dfdde161270665d4981397df45f46492b198c89957c31126081b1e"
   }
  },
- "evidence_dir": "~/.agents/continuity/evidence/ImintEngine/{nfi-topup-aux-pass-dryrun4,nfi-topup-aux-pass-20261024}/",
+ "evidence_dir": "~/.agents/continuity/evidence/ImintEngine/{nfi-topup-aux-pass-dryrun4,nfi-topup-aux-pass-20261024,nfi-index-v5-20261024}/",
  "census_by_year": {
   "2018": {
    "schema": "nfi-holdout-census-v1",
