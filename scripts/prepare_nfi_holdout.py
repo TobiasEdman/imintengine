@@ -83,13 +83,14 @@ def validate_exceptions(exceptions: dict, cohort: dict[str, Path]) -> None:
     unpromoted here. sidecars_missing: per teacher, cohort tiles without a
     sidecar. Every entry needs a nonempty reason.
     """
-    if (exceptions.get("schema") != EXCEPTIONS_SCHEMA
+    if (not isinstance(exceptions, dict) or exceptions.get("schema") != EXCEPTIONS_SCHEMA
+            or not isinstance(exceptions.get("decided"), dict)
             or set(exceptions) - {"schema", "decided", "promotion_no_v2", "sidecars_missing"}):
         raise ValueError("unsupported freeze exceptions file")
-    groups = [exceptions.get("promotion_no_v2", {}), *exceptions.get("sidecars_missing", {}).values()]
-    if (not isinstance(exceptions.get("sidecars_missing", {}), dict)
-            or set(exceptions.get("sidecars_missing", {})) - set(DISTILL)):
+    sidecars = exceptions.get("sidecars_missing", {})
+    if not isinstance(sidecars, dict) or set(sidecars) - set(DISTILL):
         raise ValueError("freeze exceptions name an unknown teacher")
+    groups = [exceptions.get("promotion_no_v2", {}), *sidecars.values()]
     for group in groups:
         if (not isinstance(group, dict) or set(group) - set(cohort)
                 or any(not isinstance(r, str) or not r.strip() for r in group.values())):
@@ -165,9 +166,8 @@ def teacher_sidecar_inventory(directory: Path, expected: set[str], head_sha: str
     paths = {p.stem: p for p in directory.glob("*.npz")}
     absent = expected - set(paths)
     # A reviewed exception must name an expected tile that really lacks its sidecar.
-    if excepted - absent:
-        raise ValueError(f"sidecar exception for a tile that is not missing in {directory}: "
-                         f"{len(excepted - absent)}")
+    if stale := excepted - absent:
+        raise ValueError(f"sidecar exception for a tile that is not missing in {directory}: {len(stale)}")
     missing = len(absent - excepted)
     if not expected or (missing and not allow_missing):
         raise ValueError(f"missing teacher sidecars in {directory}: {missing}")
@@ -458,6 +458,9 @@ def select_holdout(
     if not candidates:
         raise ValueError("no eligible observations with common input support")
     paired = pd.concat(candidates)
+    names = set(paired["tile_name"].astype(str))
+    if frame_2016 is not None and names - set(frame_2016):
+        raise ValueError("frame_2016 map does not cover every candidate tile")
     frame = frame_2016 or {}
     paired["_frame_priority"] = paired["tile_name"].astype(str).map(lambda n: 0 if frame.get(n) else 1)
     if "tile_role" in paired:
@@ -546,6 +549,13 @@ def frame_2016_on_bar(path: Path) -> bool:
         return all(name in data and bool(np.any(data[name])) for name in ("frame_2016", "s1_vv_vh_2016"))
 
 
+def frame_2016_by_year(holdout: pd.DataFrame, frame: pd.Series) -> dict:
+    """Plot-years per year whose chosen tile has (present) or lacks (absent) the 2016 baseline."""
+    years = holdout["Year"].astype(int)
+    return {str(int(y)): {"present": int(f.sum()), "absent": int((~f).sum())}
+            for y, f in frame.groupby(years, sort=True)}
+
+
 def support_summary(holdout: pd.DataFrame, frame_ok: dict[str, bool]) -> dict:
     """Aggregate support of a selected population: no identities, names or coordinates."""
     years = holdout["Year"].astype(int)
@@ -556,9 +566,7 @@ def support_summary(holdout: pd.DataFrame, frame_ok: dict[str, bool]) -> dict:
         "role_year_support": {
             str(role): {str(int(y)): int(n) for y, n in group["Year"].value_counts().sort_index().items()}
             for role, group in holdout.groupby("tile_role", sort=True)},
-        "frame_2016_by_year": {
-            str(int(y)): {"present": int(f.sum()), "absent": int((~f).sum())}
-            for y, f in frame.groupby(years, sort=True)},
+        "frame_2016_by_year": frame_2016_by_year(holdout, frame),
     }
 
 
@@ -577,7 +585,7 @@ def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: l
       2016 SAR (Tobias 2026-10-24: report every bar, choose at the quota).
     Counts are after NMD coverage, as in the freeze manifest's selection.
     """
-    candidates = (set(metadata) | set(absent_mean_filled)) & evaluation_names
+    candidates = set(frame_2016)   # admitted + mean-filled evaluation tiles (main)
     frame_ok = frame_2016
     variants = {
         "freeze": metadata,
@@ -754,11 +762,15 @@ def main() -> None:
     for path in [args.plot_index, args.teacher_index, args.promotion_job_json,
                  args.promotion_report, args.nmd2023] + ([args.nmd2018] if args.nmd2018 else []):
         capture(path)
-    exceptions = {"schema": EXCEPTIONS_SCHEMA, "promotion_no_v2": {}, "sidecars_missing": {}}
+    # Capture every cohort file before any is read (exceptions, then geometry).
+    for path in cohort.values():
+        capture(path)
+    exceptions = {"promotion_no_v2": {}, "sidecars_missing": {}}
     if args.exceptions:
         capture(args.exceptions)
-        exceptions = dict(exceptions, **read_input(args.exceptions, "json"))
-        validate_exceptions(exceptions, cohort)
+        loaded = read_input(args.exceptions, "json")
+        validate_exceptions(loaded, cohort)
+        exceptions.update(loaded)
     gate = promotion_gate(read_input(args.promotion_job_json, "json"),
                           read_input(args.promotion_report, "json"), len(cohort),
                           len(exceptions["promotion_no_v2"]))
@@ -770,10 +782,8 @@ def main() -> None:
         raise ValueError("indexed tile absent from the declared data roots")
     index["tile_path"] = index["tile_name"].map(lambda n: str(paths[str(n)].resolve()))
     index["tile_role"] = index["tile_name"].map(lambda n: roles[str(n)])
-    # Capture every cohort file before its geometry is read, not only those
-    # with NFI records. Bind exclusion inputs into the freeze manifest below.
-    for path in cohort.values():
-        capture(path)
+    # Every cohort file is captured above, before its geometry is read here.
+    # Bind exclusion inputs into the freeze manifest below.
     footprints = training_footprints(cohort)
     inputs = [args.plot_index, args.teacher_index, args.promotion_job_json,
               args.promotion_report, args.nmd2023]
@@ -910,9 +920,7 @@ def main() -> None:
     counts["primary_population"] = args.population
     counts["all_candidate_rows"] = len(index)
     holdout["has_frame_2016"] = holdout["tile_name"].astype(str).map(frame_2016.__getitem__).astype(bool)
-    counts["has_frame_2016_by_year"] = {
-        str(int(y)): {"present": int(f.sum()), "absent": int((~f).sum())}
-        for y, f in holdout["has_frame_2016"].groupby(holdout["Year"].astype(int), sort=True)}
+    counts["has_frame_2016_by_year"] = frame_2016_by_year(holdout, holdout["has_frame_2016"])
     from validate_against_nfi import derive_nfi_forest_class
     holdout["nfi_forest"] = [
         derive_nfi_forest_class(row, dominant_frac=0.7) or 0
