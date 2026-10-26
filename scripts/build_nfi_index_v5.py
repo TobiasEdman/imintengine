@@ -44,7 +44,6 @@ from imint.training.tile_config import TileConfig
 KEY = ["TractID", "PlotID", "Year"]
 RTK_FROM_YEAR = 2024  # Emlid RTK from 2024, handheld GPS before (as in v4)
 META_KEYS = ("easting", "northing", "bbox_3006", "tile_size_px", "year", "lpis_year", "dates")
-DEFAULT_SIZE_PX = 512
 
 
 def parse_root(value: str) -> tuple[str, Path]:
@@ -62,13 +61,17 @@ def root_tiles(directory: Path) -> dict[str, Path]:
 
 
 def size_px(meta: dict) -> int:
-    """Side in pixels from the stored bbox extent at 10 m, else the 512 default."""
+    """Side in pixels: from the bbox extent at 10 m, else the stored tile_size_px.
+    A tile with neither cannot be placed and stops the build."""
     if "bbox_3006" in meta:
         b = np.asarray(meta["bbox_3006"], dtype=float).ravel()
-        if b.size != 4 or not np.isfinite(b).all() or b[2] <= b[0] or (b[2] - b[0]) % 10:
+        if (b.size != 4 or not np.isfinite(b).all() or b[2] <= b[0] or b[3] <= b[1]
+                or (b[2] - b[0]) % 10):
             raise SystemExit(f"invalid bbox_3006: {b.tolist()}")
         return int((b[2] - b[0]) // 10)
-    return DEFAULT_SIZE_PX
+    if "tile_size_px" in meta:
+        return int(meta["tile_size_px"])
+    raise SystemExit("tile has neither bbox_3006 nor tile_size_px")
 
 
 def sha256_file(path: Path) -> str:
@@ -101,7 +104,7 @@ def build(roots: list[tuple[str, Path]], plots: pd.DataFrame) -> tuple[pd.DataFr
             with_plots += 1
         summary.append({"role": role, "root": str(directory.resolve()), "tiles": len(tiles),
                         "tiles_with_plots": with_plots, "rows": rows})
-    columns = list(plots.columns) + ["tile_name", "tile_path", "row", "col"]
+    columns = ["tile_name", "tile_path", *plots.columns, "row", "col"]
     index = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
     index["tier"] = np.where(index["Year"] >= RTK_FROM_YEAR, "RTK", "GPS")
     if index.duplicated(KEY + ["tile_name"]).any():
@@ -134,7 +137,8 @@ def main(argv: list[str] | None = None) -> dict:
     if sha256_file(plots_path) != plots_sha:
         raise SystemExit(f"{plots_path} changed during the build")
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    index.to_parquet(args.out, index=False)
+    with open(args.out, "xb") as f:      # exclusive create: never overwrite
+        index.to_parquet(f, index=False)
     if len(pd.read_parquet(args.out)) != len(index):
         raise SystemExit("parquet read-back mismatch")
     record = {
@@ -149,7 +153,8 @@ def main(argv: list[str] | None = None) -> dict:
         "rows_by_year": {str(int(y)): int(n) for y, n in index["Year"].value_counts().sort_index().items()},
         "parquet": {"path": str(args.out.resolve()), "sha256": sha256_file(args.out)},
     }
-    sidecar.write_text(json.dumps(record, indent=2) + "\n")
+    with open(sidecar, "x") as f:
+        f.write(json.dumps(record, indent=2) + "\n")
     print(json.dumps(record, indent=2), flush=True)
     return record
 

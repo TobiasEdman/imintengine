@@ -450,9 +450,18 @@ EMPTY_SUPPORT = frozenset({"no eligible observations with common input support",
                            "no common NMD coverage before holdout selection"})
 
 
+def mean_filled_absent_only(failures: list[str], nan_channels: set[str]) -> bool:
+    """True when every aux failure is an absent channel that training fills with
+    its mean: a NaN-nodata channel (height, markfukt). Training zero-fills any
+    other absent channel, which lands far from its mean after normalization."""
+    return bool(failures) and all(
+        reason == "missing" and name in nan_channels
+        for name, _, reason in (failure.rpartition(":") for failure in failures))
+
+
 def frame_2016_on_bar(path: Path) -> bool:
-    """The census's full-bar test for the 2016 baseline: flagged, with a
-    non-empty frame and 2016 SAR. Reported only; the freeze never requires it."""
+    """The census's test for the 2016 baseline: flagged, with a non-empty frame
+    and 2016 SAR. Reported only; the freeze never requires it."""
     with np.load(path, allow_pickle=False) as data:
         if int(data.get("has_frame_2016", 0)) != 1:
             return False
@@ -462,7 +471,7 @@ def frame_2016_on_bar(path: Path) -> bool:
 def support_summary(holdout: pd.DataFrame, frame_ok: dict[str, bool]) -> dict:
     """Aggregate support of a selected population: no identities, names or coordinates."""
     years = holdout["Year"].astype(int)
-    frame = holdout["tile_name"].astype(str).map(frame_ok).astype(bool)
+    frame = holdout["tile_name"].astype(str).map(frame_ok.__getitem__).astype(bool)
     return {
         "observations": len(holdout),
         "year_support": {str(y): int(n) for y, n in years.value_counts().sort_index().items()},
@@ -475,25 +484,27 @@ def support_summary(holdout: pd.DataFrame, frame_ok: dict[str, bool]) -> dict:
     }
 
 
-def report_support(index: pd.DataFrame, training: pd.DataFrame, footprints: list[dict],
-                   metadata: dict, absent_aux_only: dict, excluded: dict[str, str],
+def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: list[dict],
+                   metadata: dict, absent_mean_filled: dict, excluded: dict[str, str],
                    roles: dict[str, str], evaluation_names: set[str], paths: dict[str, Path],
-                   baselines: dict[str, Path], model_python: str, evaluation_roots: list[dict]) -> None:
-    """Print per-year support before any quota exists; write nothing.
+                   baselines: dict[str, Path], model_python: str, evaluation_roots: list[dict]) -> dict:
+    """Per-year support before any quota exists; reads only, writes nothing.
 
     Every variant goes through the freeze's own selection and NMD coverage:
     - freeze: exactly the tiles the freeze admits;
-    - absent_aux_mean_fill: also tiles whose only aux failure is an absent
-      channel, which training fills with its mean (Tobias 2026-10-22);
-    - census_full_bar: the freeze's tiles that also carry frame_2016 and 2016
-      SAR, the census's bar, for comparison (Tobias 2026-10-24: report every bar).
+    - absent_aux_mean_fill: also tiles whose only aux failures are absent
+      NaN-nodata channels, which training fills with their mean (Tobias
+      2026-10-22 for height);
+    - freeze_with_frame_2016: the freeze's tiles that also carry frame_2016 and
+      2016 SAR (Tobias 2026-10-24: report every bar, choose at the quota).
+    Counts are after NMD coverage, as in the freeze manifest's selection.
     """
-    candidates = (set(metadata) | set(absent_aux_only)) & evaluation_names
+    candidates = (set(metadata) | set(absent_mean_filled)) & evaluation_names
     frame_ok = {name: frame_2016_on_bar(paths[name]) for name in sorted(candidates)}
     variants = {
         "freeze": metadata,
-        "absent_aux_mean_fill": {**metadata, **absent_aux_only},
-        "census_full_bar": {n: m for n, m in metadata.items() if n not in evaluation_names or frame_ok[n]},
+        "absent_aux_mean_fill": {**metadata, **absent_mean_filled},
+        "freeze_with_frame_2016": {n: m for n, m in metadata.items() if n not in evaluation_names or frame_ok[n]},
     }
     excluded_by_role: dict[str, Counter] = {}
     for name, reason in excluded.items():
@@ -503,7 +514,7 @@ def report_support(index: pd.DataFrame, training: pd.DataFrame, footprints: list
               "excluded_evaluation_tiles": {role: dict(c) for role, c in sorted(excluded_by_role.items())},
               "variants": {}}
     for label, tiles in variants.items():
-        admitted = Counter(roles[name] for name in tiles if name in evaluation_names)
+        admitted = dict(Counter(roles[name] for name in tiles if name in evaluation_names))
         try:
             holdout, counts = select_holdout(index, training, tiles, footprints=footprints)
             holdout, coverage = filter_nmd_coverage(holdout, baselines, model_python)
@@ -512,14 +523,15 @@ def report_support(index: pd.DataFrame, training: pd.DataFrame, footprints: list
             if str(exc) not in EMPTY_SUPPORT:
                 raise
             report["variants"][label] = {"observations": 0, "empty_support": str(exc),
-                                         "admitted_tiles_by_role": dict(admitted)}
+                                         "admitted_tiles_by_role": admitted}
             continue
         if not set(holdout["tile_name"].astype(str)) <= candidates:
             raise ValueError("support selected a tile outside the evaluation roots")
+        counts.update(coverage, observations=len(holdout))
+        counts["tile_role_support"] = {str(r): int(n) for r, n in holdout["tile_role"].value_counts().items()}
         report["variants"][label] = dict(support_summary(holdout, frame_ok), selection=counts,
-                                         nmd_coverage=coverage, admitted_tiles_by_role=dict(admitted))
-    print("=== SUPPORT_REPORT_BEGIN ===", json.dumps(report, indent=2),
-          "=== SUPPORT_REPORT_END ===", sep="\n", flush=True)
+                                         admitted_tiles_by_role=admitted)
+    return report
 
 
 def select_balanced_years(holdout: pd.DataFrame, selection: dict) -> tuple[pd.DataFrame, dict]:
@@ -599,6 +611,9 @@ def main() -> None:
                     help="sealed image provenance, normally /opt/provenance/runtime.json")
     ap.add_argument("--source-git-sha", required=True, help="reviewed build source SHA")
     args = ap.parse_args()
+    # Support is measured before any quota exists, so a report is never balanced.
+    if args.report_only and (args.population != "all" or args.out_dir is not None):
+        raise ValueError("--report-only requires --population all and no --out-dir")
     year_selection = None
     if args.population == "balanced":
         year_selection = dict(NFI_YEAR_SAMPLING, years=args.inventory_years,
@@ -606,14 +621,11 @@ def main() -> None:
         validate_year_selection({"primary_population": "balanced", "year_selection": year_selection})
     elif args.inventory_years is not None or args.observations_per_year is not None:
         raise ValueError("year targets require --population balanced")
-    if args.report_only:
-        # Support is measured before any quota exists, so it cannot be balanced.
-        if args.population != "all" or args.out_dir is not None:
-            raise ValueError("--report-only requires --population all and no --out-dir")
-    elif args.out_dir is None:
-        raise ValueError("--out-dir is required unless --report-only")
-    elif args.out_dir.exists():
-        raise ValueError("freeze output already exists; never overwrite it")
+    if not args.report_only:
+        if args.out_dir is None:
+            raise ValueError("--out-dir is required unless --report-only")
+        if args.out_dir.exists():
+            raise ValueError("freeze output already exists; never overwrite it")
     root = Path(__file__).resolve().parents[1]
     runtime = preparation_runtime(root, args.runtime_manifest,
                                   args.source_git_sha, args.runtime_image)
@@ -740,7 +752,8 @@ def main() -> None:
         cells[cell]["input_contract"] = contract
     auxiliary_audit = {}
     metadata, excluded = {}, {}
-    absent_aux_only = {}  # ready tiles whose only aux failure is an absent channel
+    absent_mean_filled = {}  # ready tiles whose only aux failures are absent NaN-nodata channels
+    nan_channels = set(requirements["nan_nodata_channels"])
     # Inspect every declared evaluation tile, including those without indexed plots.
     names = evaluation_names | set(index["tile_name"].astype(str))
     for name in sorted(names):
@@ -753,8 +766,8 @@ def main() -> None:
             auxiliary_audit[name] = audit
             if failures:
                 excluded[name] = "auxiliary_gaps:" + ",".join(failures)
-                if all(f.endswith(":missing") for f in failures):
-                    absent_aux_only[name] = meta
+                if mean_filled_absent_only(failures, nan_channels):
+                    absent_mean_filled[name] = meta
             else:
                 metadata[name] = meta
     baselines = {"NMD2023": args.nmd2023}
@@ -762,8 +775,15 @@ def main() -> None:
         baselines["NMD2018"] = args.nmd2018
     model_python = runtime["environments"]["model"]["python"]["path"]
     if args.report_only:
-        report_support(index, training, footprints, metadata, absent_aux_only, excluded,
-                       roles, evaluation_names, paths, baselines, model_python, evaluation_roots)
+        report = support_report(
+            index, training, footprints=footprints, metadata=metadata,
+            absent_mean_filled=absent_mean_filled, excluded=excluded, roles=roles,
+            evaluation_names=evaluation_names, paths=paths, baselines=baselines,
+            model_python=model_python, evaluation_roots=evaluation_roots)
+        for path in list(input_stats):   # the frame_2016 reads come after the captures
+            capture(path)
+        print("=== SUPPORT_REPORT_BEGIN ===", json.dumps(report, indent=2),
+              "=== SUPPORT_REPORT_END ===", sep="\n", flush=True)
         return
     holdout, counts = select_holdout(
         index, training, metadata, footprints=footprints,
@@ -828,10 +848,8 @@ def main() -> None:
                          **({"year_selection": year_selection} if year_selection is not None else {})),
         "execution": "awaiting_user_go_no_go",
     }
-    for path, original in input_stats.items():
-        stat = path.stat()
-        if original != (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns):
-            raise ValueError(f"input changed during holdout preparation: {path}")
+    for path in list(input_stats):   # re-stat every captured input
+        capture(path)
     args.out_dir.mkdir(parents=True, exist_ok=False)
     for label, frame in (("holdout", holdout), ("training", training)):
         dest = args.out_dir / f"{label}.parquet"

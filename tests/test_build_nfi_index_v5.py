@@ -60,16 +60,28 @@ def test_rows_equal_the_v4_builder_on_the_same_root(layout, monkeypatch):
                                       "--nfi-dir", str(layout["nfi"]), "--out", str(v4_out)])
     v4.main()
     v5.main(_argv(layout, ("holdout_copy", "copy")))
-    old, new = pd.read_parquet(v4_out), pd.read_parquet(layout["out"])
-    # v4 globs recursively and keeps .tmp.npz writer files; v5 follows the freeze.
-    old = old.loc[~old.tile_path.str.endswith(".tmp.npz")].reset_index(drop=True)
-    pd.testing.assert_frame_equal(old, new)
+    pd.testing.assert_frame_equal(pd.read_parquet(v4_out), pd.read_parquet(layout["out"]))
 
 
 def test_refuses_to_overwrite(layout):
     v5.main(_argv(layout, ("holdout_copy", "copy")))
     with pytest.raises(SystemExit, match="refusing to overwrite"):
         v5.main(_argv(layout, ("holdout_copy", "copy")))
+
+
+def test_an_output_that_appears_during_the_build_is_never_overwritten(layout, monkeypatch):
+    original = v5.build
+
+    def build_then_race(*args):
+        result = original(*args)
+        layout["out"].parent.mkdir(parents=True, exist_ok=True)
+        layout["out"].write_bytes(b"another writer")
+        return result
+    monkeypatch.setattr(v5, "build", build_then_race)
+    with pytest.raises(FileExistsError):
+        v5.main(_argv(layout, ("holdout_copy", "copy")))
+    assert layout["out"].read_bytes() == b"another writer"
+    assert not layout["out"].with_suffix(".json").exists()
 
 
 def test_a_tile_name_in_two_roots_is_refused(layout):
@@ -86,8 +98,44 @@ def test_an_unreadable_tile_fails_instead_of_being_skipped(layout):
     assert not layout["out"].exists()
 
 
-def test_an_invalid_bbox_fails(layout):
+@pytest.mark.parametrize("bbox", [
+    [E, N, E - 10, N + 10],            # east before west
+    [E, N, E + 10, N - 10],            # north below south
+    [E, N, E + 5125, N + 5125],        # extent not a whole number of 10 m pixels
+    [E, N, E + 10, np.nan],
+])
+def test_an_invalid_bbox_fails(layout, bbox):
     np.savez(layout["copy"] / "odd.npz", easting=float(E), northing=float(N), year=2024,
-             bbox_3006=np.array([E, N, E - 10, N + 10]))
+             bbox_3006=np.array(bbox, dtype=float))
     with pytest.raises(SystemExit, match="invalid bbox_3006"):
         v5.main(_argv(layout, ("holdout_copy", "copy")))
+    assert not layout["out"].exists()
+
+
+def test_a_tile_without_bbox_uses_its_stored_size_or_fails(layout):
+    np.savez(layout["copy"] / "sized.npz", easting=float(E), northing=float(N), year=2024, tile_size_px=512)
+    v5.main(_argv(layout, ("holdout_copy", "copy")))
+    index = pd.read_parquet(layout["out"])
+    assert sorted(index.loc[index.tile_name == "sized", "TractID"]) == [2, 3]
+    np.savez(layout["cohort"] / "bare.npz", easting=float(E), northing=float(N), year=2023)
+    layout["out"] = layout["out"].with_name("again.parquet")
+    with pytest.raises(SystemExit, match="neither bbox_3006 nor tile_size_px"):
+        v5.main(_argv(layout, ("cohort", "cohort")))
+
+
+def test_a_duplicated_plot_year_fails(layout):
+    plots = pd.read_parquet(layout["nfi"] / "nfi_plots.parquet")
+    pd.concat([plots, plots.iloc[[1]]]).to_parquet(layout["nfi"] / "nfi_plots.parquet")
+    with pytest.raises(SystemExit, match="occurs twice on one tile"):
+        v5.main(_argv(layout, ("holdout_copy", "copy")))
+    assert not layout["out"].exists()
+
+
+def test_an_empty_index_keeps_v4_column_order(layout, tmp_path):
+    empty = tmp_path / "empty"; empty.mkdir()
+    _tile(empty / "far.npz", 2024, easting=800_000)
+    v5.main(_argv({**layout, "empty": empty}, ("holdout_copy", "empty")))
+    index = pd.read_parquet(layout["out"])
+    assert index.empty
+    assert list(index.columns[:2]) == ["tile_name", "tile_path"]
+    assert list(index.columns[-3:]) == ["row", "col", "tier"]
