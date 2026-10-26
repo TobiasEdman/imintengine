@@ -1,0 +1,81 @@
+---
+# Make seven root-only cohort tiles readable (task 0117, 2026-10-26).
+#
+# The support report runs non-root (UID 2000, the #68 security context) and
+# stopped on PermissionError in /data/unified_v2_512. A read-only probe found
+# exactly 8 cohort .npz files not world-readable: 7 root:root 0600 and one
+# root:2000 0640 that UID 2000 already reads through its group. Every other
+# input the report reads is world-readable. Tobias 2026-10-26: "chmod those 7
+# to 0644", as for the 84 holdout files on 2026-10-12.
+#
+# Only the cohort directory is mounted writable. The Job selects root-owned
+# 0600 .npz files, refuses to act unless there are exactly EXPECTED, and logs
+# each name with its mode and sha256 before and after: the bytes must not
+# change. Nothing else is touched.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-cohort-chmod
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 604800
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: chmod
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["python", "-c"]
+          args:
+            - |
+              import hashlib, os, stat, sys
+              from pathlib import Path
+
+              def sha256(p):
+                  h = hashlib.sha256()
+                  with open(p, "rb") as f:
+                      for block in iter(lambda: f.read(1 << 20), b""):
+                          h.update(block)
+                  return h.hexdigest()
+
+              root = Path("/cohort")
+              targets = sorted(p for p in root.glob("*.npz") if not p.name.endswith(".tmp.npz")
+                               and p.stat().st_uid == 0 and stat.S_IMODE(p.stat().st_mode) == 0o600)
+              expected = int(os.environ["EXPECTED"])
+              print(f"root-owned 0600 tiles: {len(targets)} (expected {expected})")
+              if len(targets) != expected:
+                  sys.exit("count differs from the probe; refusing to change anything")
+              for p in targets:
+                  before = sha256(p)
+                  os.chmod(p, 0o644)
+                  after = sha256(p)
+                  mode = oct(stat.S_IMODE(p.stat().st_mode))
+                  print(f"{p.name}: 0o600 -> {mode}  sha256 {before}  {'unchanged' if before == after else 'CHANGED'}")
+                  if before != after or mode != "0o644":
+                      sys.exit(f"{p.name}: unexpected result")
+              left = [p.name for p in root.glob("*.npz") if not p.stat().st_mode & stat.S_IROTH
+                      and not (p.stat().st_gid == 2000 and p.stat().st_mode & stat.S_IRGRP)]
+              print(f"tiles UID 2000 still cannot read: {left}")
+              sys.exit(1 if left else 0)
+          env:
+            - {name: EXPECTED, value: "7"}
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: d, mountPath: /cohort, subPath: unified_v2_512}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

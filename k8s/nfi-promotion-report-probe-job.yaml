@@ -1,0 +1,56 @@
+---
+# Read-only probe (task 0117, 2026-10-26): the freeze's check_promotion
+# refused /data/manifests/tessera_promotion.json against a cohort of 7882
+# tiles. Print only the report's aggregate fields (source, verify, states,
+# top-level keys) and the current cohort count; no tile names.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-promotion-report-probe
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 604800
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["python", "-c"]
+          args:
+            - |
+              import json, os
+              from pathlib import Path
+              r = json.load(open("/data/manifests/tessera_promotion.json"))
+              print("keys:", sorted(r))
+              for k in ("source", "verify", "states", "started_at", "finished_at", "completed_at", "root", "data_dir"):
+                  if k in r:
+                      v = r[k]
+                      print(k, "=", v if not isinstance(v, (list, dict)) or k in ("verify", "states") else f"<{type(v).__name__} len {len(v)}>")
+              for k, v in r.items():
+                  if isinstance(v, list):
+                      print(f"list {k}: len {len(v)}")
+              st = os.stat("/data/manifests/tessera_promotion.json")
+              print("report mtime:", st.st_mtime)
+              cohort = [p for p in Path("/data/unified_v2_512").glob("*.npz") if not p.name.endswith(".tmp.npz")]
+              print("cohort tiles now:", len(cohort))
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "1", memory: 2Gi}
+          volumeMounts:
+            - {name: d, mountPath: /data, readOnly: true}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
