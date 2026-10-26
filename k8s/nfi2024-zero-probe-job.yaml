@@ -7,10 +7,11 @@
 # stripped. Ran 2026-10-05T16:37:04Z → 16:42:10Z, exit 0. Read-only: every
 # open() is a read, nothing under /data is rewritten.
 #
-# What it found, verbatim from the pod log:
-#   nfi2024_455680_6487040  frame_2016 (6,512,512) ALL ZERO  has_frame_2016=1  *** FLAGGED VALID ***
-#   nfi2024_558080_7383040  frame_2016 (6,512,512) ALL ZERO  has_frame_2016=1  *** FLAGGED VALID ***
-#   nfi2024_629760_6732800  tessera    (128,512,512) ALL ZERO  has_tessera=0  MARKED
+# What it found, from the pod log (tile names withheld: nfi2024 tiles are
+# centred on NFI plots, whose locations must not be published):
+#   tile A  frame_2016 (6,512,512) ALL ZERO  has_frame_2016=1  *** FLAGGED VALID ***
+#   tile B  frame_2016 (6,512,512) ALL ZERO  has_frame_2016=1  *** FLAGGED VALID ***
+#   tile C  tessera    (128,512,512) ALL ZERO  has_tessera=0  MARKED
 # The two frame_2016 cases (cot_max=None: they passed the baseline COT gate
 # because the footprint sits in granule no-data) are what
 # nfi2024-fix-zero-frames-job.yaml then demoted to has_frame_2016=0. The

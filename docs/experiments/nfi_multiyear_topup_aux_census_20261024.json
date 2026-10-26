@@ -1,0 +1,4093 @@
+{
+ "schema": "nfi-multiyear-topup-aux-census/1",
+ "step": "3k: aux pass from the open-data mirror, then the full key census, on the 230 top-up tiles",
+ "staging_roots": [
+  "/data/unified_v2_512_nfi2018_staging",
+  "/data/unified_v2_512_nfi2019_staging",
+  "/data/unified_v2_512_nfi2021_staging",
+  "/data/unified_v2_512_nfi2022_staging"
+ ],
+ "decisions_user_stated": {
+  "2026-10-22": "Height nodata is NaN everywhere; no water class; absent height normalizes to the mean; aux pass makes height a gap above 25 % in-county NaN.",
+  "2026-10-24": "Go for the real aux pass, then the census, after the read-only dry run and probes.",
+  "2026-10-24_after_census": "Keep the 38 frame_2016-gap tiles; no sen2cor fallback ('we will not have all data for all tiles always'). Step 4 reports per-year counts under every bar (full, without frame_2016/S1-2016, eligible only) with has_frame_2016 to be carried per plot-year (built before the freeze); the bar is chosen at the quota step. The CLAUDE.md frame_2016 rule stays for training tiles; a dated exception for evaluation tiles (landed in #107). Step 4 moves from Codex (0103) to Claude."
+ },
+ "aux_pass": {
+  "by_year": {
+   "2018": {
+    "tiles": 133,
+    "outcome": {
+     "completed": 120,
+     "incomplete": 13
+    },
+    "channels_written": {
+     "height": 123
+    },
+    "gaps": {
+     "basal_area: no valid pixel in the mirror window": 1,
+     "diameter: no valid pixel in the mirror window": 1,
+     "height: 60.6% of the window inside its counties has no data in the mirror (limit 25.0%)": 1,
+     "height: no valid pixel in the mirror window": 9,
+     "markfukt: no valid pixel in the mirror window": 2,
+     "volume: no valid pixel in the mirror window": 1
+    },
+    "written_with_in_county_nan_height": 5
+   },
+   "2019": {
+    "tiles": 7,
+    "outcome": {
+     "completed": 6,
+     "incomplete": 1
+    },
+    "channels_written": {
+     "height": 7
+    },
+    "gaps": {
+     "markfukt: no valid pixel in the mirror window": 1
+    },
+    "written_with_in_county_nan_height": 0
+   },
+   "2021": {
+    "tiles": 47,
+    "outcome": {
+     "completed": 47
+    },
+    "channels_written": {
+     "height": 47
+    },
+    "gaps": {},
+    "written_with_in_county_nan_height": 2
+   },
+   "2022": {
+    "tiles": 43,
+    "outcome": {
+     "completed": 42,
+     "incomplete": 1
+    },
+    "channels_written": {
+     "height": 43
+    },
+    "gaps": {
+     "markfukt: no valid pixel in the mirror window": 1
+    },
+    "written_with_in_county_nan_height": 1
+   }
+  },
+  "dry_run_identical": true,
+  "max_missing_share": 0.25,
+  "reports": [
+   "/data/manifests/nfi2018_topup_aux_pass.json",
+   "/data/manifests/nfi2019_topup_aux_pass.json",
+   "/data/manifests/nfi2021_topup_aux_pass.json",
+   "/data/manifests/nfi2022_topup_aux_pass.json"
+  ]
+ },
+ "bar_attribution": {
+  "by_year": {
+   "2018": {
+    "eligible": 449,
+    "on_bar_modalities": 323,
+    "plot_years_on_tiles_by_cause": {
+     "aux": 16,
+     "aux+tessera": 1,
+     "frame_2016+s1_2016": 102,
+     "frame_2016+s1_2016+aux": 7,
+     "on_bar": 323
+    },
+    "tiles_by_cause": {
+     "on_bar": 99,
+     "frame_2016+s1_2016": 21,
+     "aux": 10,
+     "frame_2016+s1_2016+aux": 2,
+     "aux+tessera": 1
+    }
+   },
+   "2019": {
+    "eligible": 46,
+    "on_bar_modalities": 35,
+    "plot_years_on_tiles_by_cause": {
+     "frame_2016+s1_2016": 10,
+     "frame_2016+s1_2016+aux": 1,
+     "on_bar": 35
+    },
+    "tiles_by_cause": {
+     "on_bar": 5,
+     "frame_2016+s1_2016": 1,
+     "frame_2016+s1_2016+aux": 1
+    }
+   },
+   "2021": {
+    "eligible": 210,
+    "on_bar_modalities": 186,
+    "plot_years_on_tiles_by_cause": {
+     "frame_2016+s1_2016": 19,
+     "on_bar": 186,
+     "s1_2016": 5
+    },
+    "tiles_by_cause": {
+     "on_bar": 41,
+     "frame_2016+s1_2016": 5,
+     "s1_2016": 1
+    }
+   },
+   "2022": {
+    "eligible": 195,
+    "on_bar_modalities": 170,
+    "plot_years_on_tiles_by_cause": {
+     "aux": 1,
+     "frame_2016+s1_2016": 24,
+     "on_bar": 170,
+     "s1_2016+s1": 7
+    },
+    "tiles_by_cause": {
+     "frame_2016+s1_2016": 8,
+     "on_bar": 33,
+     "s1_2016+s1": 1,
+     "aux": 1
+    }
+   }
+  },
+  "note": "A plot-year on two tiles counts under each tile's cause, so per-cause counts can overlap; per-year eligible and on-bar totals are exact and equal the census's."
+ },
+ "image": "python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2",
+ "execution_evidence": {
+  "nfi-topup-aux-pass-dryrun4": {
+   "pod": "nfi-topup-aux-pass-dryrun4-wblxt",
+   "node": "p02r09srv02",
+   "started": "2026-10-24T10:42:01Z",
+   "finished": "2026-10-24T10:44:30Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-topup-aux-pass-job.yaml at b80658c + --dry-run, PVC readOnly; pod ran 0f3fd26",
+   "log_sha256": "9421b42999d49c9eb015d6db80b7e1deafd82b1ef8c45ad5fca5b633849df0b0"
+  },
+  "nfi-topup-mosaic-probe-r2": {
+   "pod": "nfi-topup-mosaic-probe-r2-tdpgz",
+   "node": "p02r10srv04",
+   "started": "2026-10-24T10:42:05Z",
+   "finished": "2026-10-24T10:57:16Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-topup-mosaic-probe-job.yaml; pod ran b80658c",
+   "log_sha256": "93da73c3991e1e974a9c14022e6e6748b780a71860a3ed009491fccc3c746a0e"
+  },
+  "nfi-topup-impact-probe-r2": {
+   "pod": "nfi-topup-impact-probe-r2-mvdl6",
+   "node": "p02r10srv03",
+   "started": "2026-10-24T10:42:00Z",
+   "finished": "2026-10-24T10:46:20Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-topup-impact-probe-job.yaml; pod ran b80658c",
+   "log_sha256": "ead11f6d1e46b2512aed0bf82cad97679e935d74a16ac6efcd652eca9247fa04"
+  },
+  "nfi-topup-aux-pass": {
+   "pod": "nfi-topup-aux-pass-dpz75",
+   "node": "p02r09srv02",
+   "started": "2026-10-24T11:01:36Z",
+   "finished": "2026-10-24T11:07:03Z",
+   "exit_code": 0,
+   "source": "kubectl apply -f k8s/nfi-topup-aux-pass-job.yaml from main b80658c; pod ran 0f3fd26, script sha256 793f6764… checked",
+   "log_sha256": "ab3aaaf244f1425bf957e2bd21046e5cfd1eae6729d9a5a00f39299ac8febba1"
+  },
+  "nfi-topup-census-r2": {
+   "pod": "nfi-topup-census-r2-s2hsx",
+   "node": "p02r09srv02",
+   "started": "2026-10-24T11:07:34Z",
+   "finished": "2026-10-24T11:42:28Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-topup-census-job.yaml at b80658c renamed -r2; pod ran census 7317d7e (script sha256 9244f7bc… checked), fieldtruth ba31235c, sizing 94b26bb",
+   "log_sha256": "019d5dd8bcf3cdf51fa82045a52072e6e255b74f3404c2e61631eb1e05008d85"
+  },
+  "nfi-topup-bar-attrib-probe": {
+   "pod": "nfi-topup-bar-attrib-probe-shrjv",
+   "node": "p02r09srv02",
+   "started": "2026-10-24T11:44:22Z",
+   "finished": "2026-10-24T11:50:06Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-topup-bar-attrib-probe-job.yaml; census pins as above",
+   "log_sha256": "736ca4b22d70279ced432f2e25948574003f4bafe633e85ab39ee89ce4798603"
+  },
+  "nfi-topup-mosaic-probe-r3": {
+   "pod": "nfi-topup-mosaic-probe-r3-tqkh5",
+   "node": "p02r10srv04",
+   "started": "2026-10-26T12:29:56Z",
+   "finished": "2026-10-26T12:45:09Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-topup-mosaic-probe-job.yaml as committed (windows read from the PVC file), renamed -r3; pod ran b80658c",
+   "log_sha256": "3877659d971cbfda9ce7e31a9c54ab4f6368e55246319422807642f24e1c2506",
+   "result": "part B identical to -r2; part A the same seven windows and values, sorted by tag"
+  },
+  "nfi-mosaic-windows-write": {
+   "pod": "nfi-mosaic-windows-write-6gn7j",
+   "node": "p02r10srv03",
+   "started": "2026-10-26T12:24:08Z",
+   "finished": "2026-10-26T12:24:09Z",
+   "exit_code": 0,
+   "source": "cluster-only Job (its spec carries the windows via ConfigMap nfi-topup-mosaic-windows); wrote /data/manifests/nfi_topup_mosaic_windows_20261022.json with exclusive create",
+   "log_sha256": "e211c90c90dfdde161270665d4981397df45f46492b198c89957c31126081b1e"
+  }
+ },
+ "evidence_dir": "~/.agents/continuity/evidence/ImintEngine/{nfi-topup-aux-pass-dryrun4,nfi-topup-aux-pass-20261024,nfi-index-v5-20261024}/",
+ "census_by_year": {
+  "2018": {
+   "schema": "nfi-holdout-census-v1",
+   "read_only": true,
+   "generated_at": "2026-10-24T11:18:54Z",
+   "elapsed_s": 577.3,
+   "years": [
+    2018
+   ],
+   "identity": [
+    "TractID",
+    "PlotID",
+    "Year"
+   ],
+   "common_crop_px": 496,
+   "target_per_year": 1000,
+   "holdout_dir": "/data/unified_v2_512_nfi2018_staging",
+   "inputs": {
+    "/workspace/ie/imint/eval/fieldtruth.py": {
+     "sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c"
+    },
+    "/data/manifests/nfi2018_topup_512.json": {
+     "bytes": 33932,
+     "sha256": "7676e1a8a458a1b8e0f2541c9e4d40757ecf3b7c3dd7fb6d5cdca1a3005fafad"
+    },
+    "/data/nfi/nfi_plots.parquet": {
+     "bytes": 4336303,
+     "sha256": "70d4daedeba4536362a22c23b84eee40e499f271c6d203829407e38290ff9de0"
+    },
+    "/data/nfi/nfi_index_unified_v2_512.parquet": {
+     "bytes": 141999,
+     "sha256": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33"
+    },
+    "/data/distill/heads/clay_r2_plot_features.parquet": {
+     "bytes": 1378800,
+     "sha256": "49e0c1ec0b3f3e7e88ae680d58827ca62817b624bc6b409b53220dcdfaab7ddb"
+    },
+    "/data/distill/heads/croma_r2_plot_features.parquet": {
+     "bytes": 1389354,
+     "sha256": "c123b84c9b6e67890fa68534e4ec396f74a8d7f500ca2240f9f73b463828df4c"
+    },
+    "/data/distill/heads/prithvi300m_r2_plot_features.parquet": {
+     "bytes": 1452224,
+     "sha256": "e19d1dc154fe362c64e69c6d23adc0a632bc160aa21b98981f558fc85b6d5868"
+    },
+    "/data/distill/heads/prithvi300m4f_r2_plot_features.parquet": {
+     "bytes": 1487769,
+     "sha256": "3a70e178757d5d860208f829dd8eec218454ffa5fcc4175c0ee86d68d18ad92e"
+    },
+    "/data/distill/heads/prithvi600m_r2_plot_features.parquet": {
+     "bytes": 1608422,
+     "sha256": "ae5d6dfae5afc414b86dfc664b881b58a880d07c583e7f0341f61b35bd01057c"
+    },
+    "/data/distill/heads/terramind_r2_plot_features.parquet": {
+     "bytes": 1434286,
+     "sha256": "92ae4609d66d04cf11ffbdd9a0587df1ad22145fbb4ce80b901be1f7dd7df53c"
+    },
+    "/data/distill/heads/tessera_r2_plot_features.parquet": {
+     "bytes": 971347,
+     "sha256": "6193f5ca4bf49641a8d73e98e320861f87ac6658dbebc5b2df58a2fa26b42355"
+    },
+    "/data/nfi/nfi_index_v4_2026-09-30.parquet": {
+     "bytes": 413251,
+     "sha256": "bf08903edda0527241209ef5572b4e989b7554e9dbecaad91b09f917427dbc84"
+    }
+   },
+   "teacher_feature_union": 841,
+   "files": {
+    "present": 133,
+    "readable": 133,
+    "unreadable": [],
+    "admitted": 133,
+    "quarantined_year_conflict": [],
+    "quarantined_by_manifest_year": {},
+    "not_world_readable": 0,
+    "not_world_readable_names": [],
+    "not_world_readable_by_year": {},
+    "not_world_readable_modes": {},
+    "not_in_manifest": [],
+    "planned_in_manifest": 145,
+    "planned_but_missing_by_year": {
+     "2018": 12
+    }
+   },
+   "census": {
+    "tiles_readable": 133,
+    "key_presence": {
+     "aux_complete": 133,
+     "aux_gap_reason": 13,
+     "aux_missing": 13,
+     "aux_provenance": 133,
+     "b01": 133,
+     "b01_dates": 133,
+     "b08": 133,
+     "b08_dates": 133,
+     "b09": 133,
+     "b09_dates": 133,
+     "basal_area": 132,
+     "bbox_3006": 133,
+     "coreg_anchor_valid_frac": 133,
+     "coreg_m2": 133,
+     "coreg_max_shift": 133,
+     "coreg_n_aligned": 133,
+     "coreg_ref_frame": 133,
+     "coreg_shifts": 133,
+     "dates": 133,
+     "dem": 133,
+     "diameter": 132,
+     "doy": 133,
+     "easting": 133,
+     "frame_2016": 110,
+     "frame_2016_bands": 110,
+     "frame_2016_date": 110,
+     "frame_2016_gap_reason": 23,
+     "frame_2016_scene": 110,
+     "frame_2016_year": 110,
+     "harvest_mask": 108,
+     "has_b01": 133,
+     "has_b08": 133,
+     "has_b09": 133,
+     "has_frame_2016": 133,
+     "has_rededge": 133,
+     "has_s1": 133,
+     "has_tessera": 133,
+     "height": 123,
+     "label": 133,
+     "label_mask": 91,
+     "markfukt": 131,
+     "multitemporal": 133,
+     "n_harvest_polygons": 108,
+     "n_mature_polygons": 107,
+     "n_parcels": 91,
+     "nmd_area_ha": 133,
+     "nmd_label_raw": 133,
+     "northing": 133,
+     "num_bands": 133,
+     "num_frames": 133,
+     "parcel_area_ha": 91,
+     "rededge": 133,
+     "rededge_dates": 133,
+     "s1_dates": 133,
+     "s1_dates_2016": 110,
+     "s1_enrich_v": 133,
+     "s1_orbit": 133,
+     "s1_source": 133,
+     "s1_vv_vh": 133,
+     "s1_vv_vh_2016": 110,
+     "scl": 133,
+     "source": 133,
+     "spectral": 133,
+     "temporal_mask": 133,
+     "tessera": 132,
+     "tessera_gap_reason": 1,
+     "tessera_source": 133,
+     "tessera_year": 132,
+     "tile_size_px": 133,
+     "volume": 132,
+     "vpp_eosd": 133,
+     "vpp_length": 133,
+     "vpp_maxv": 133,
+     "vpp_minv": 133,
+     "vpp_sosd": 133,
+     "vpp_year": 133
+    },
+    "keys_behind_nfi2024_bar": {
+     "frame_2016": {
+      "holdout": 110,
+      "holdout_share": 0.8271,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_bands": {
+      "holdout": 110,
+      "holdout_share": 0.8271,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_date": {
+      "holdout": 110,
+      "holdout_share": 0.8271,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_scene": {
+      "holdout": 110,
+      "holdout_share": 0.8271,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_year": {
+      "holdout": 110,
+      "holdout_share": 0.8271,
+      "nfi2024_share": 0.9832
+     },
+     "harvest_mask": {
+      "holdout": 108,
+      "holdout_share": 0.812,
+      "nfi2024_share": 0.92
+     },
+     "height": {
+      "holdout": 123,
+      "holdout_share": 0.9248,
+      "nfi2024_share": 1.0
+     },
+     "label_mask": {
+      "holdout": 91,
+      "holdout_share": 0.6842,
+      "nfi2024_share": 0.7453
+     },
+     "n_harvest_polygons": {
+      "holdout": 108,
+      "holdout_share": 0.812,
+      "nfi2024_share": 0.92
+     },
+     "n_mature_polygons": {
+      "holdout": 107,
+      "holdout_share": 0.8045,
+      "nfi2024_share": 0.8842
+     },
+     "n_parcels": {
+      "holdout": 91,
+      "holdout_share": 0.6842,
+      "nfi2024_share": 0.7453
+     },
+     "parcel_area_ha": {
+      "holdout": 91,
+      "holdout_share": 0.6842,
+      "nfi2024_share": 0.7453
+     },
+     "s1_dates_2016": {
+      "holdout": 110,
+      "holdout_share": 0.8271,
+      "nfi2024_share": 0.9768
+     },
+     "s1_vv_vh_2016": {
+      "holdout": 110,
+      "holdout_share": 0.8271,
+      "nfi2024_share": 0.9768
+     }
+    },
+    "all_zero": {
+     "spectral": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "label": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "s1_vv_vh": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "s1_vv_vh_2016": {
+      "present": 110,
+      "all_zero": 0
+     },
+     "tessera": {
+      "present": 132,
+      "all_zero": 0
+     },
+     "height": {
+      "present": 123,
+      "all_zero": 0
+     },
+     "volume": {
+      "present": 132,
+      "all_zero": 0
+     },
+     "basal_area": {
+      "present": 132,
+      "all_zero": 0
+     },
+     "diameter": {
+      "present": 132,
+      "all_zero": 0
+     },
+     "dem": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "markfukt": {
+      "present": 131,
+      "all_zero": 0
+     },
+     "frame_2016": {
+      "present": 110,
+      "all_zero": 0
+     },
+     "vpp_sosd": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "vpp_eosd": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "vpp_length": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "vpp_maxv": {
+      "present": 133,
+      "all_zero": 0
+     },
+     "vpp_minv": {
+      "present": 133,
+      "all_zero": 0
+     }
+    },
+    "flag_on_empty_array": {},
+    "spectral_ok": 133,
+    "bbox_on_grid": 133,
+    "bbox_matches_manifest": 133
+   },
+   "modalities": {
+    "tiles_admitted": 133,
+    "tiles_by_year": {
+     "2018": 133
+    },
+    "year_matches_manifest": {
+     "2018": 133
+    },
+    "year_conflict_strict": 0,
+    "year_unknown": 0,
+    "temporal_mask": {
+     "0111": 133
+    },
+    "tessera_source": {
+     "geotessera-0.10.2": 133
+    },
+    "tessera_year_equals_tile_year": 132,
+    "has_tessera": {
+     "1": 132,
+     "0": 1
+    },
+    "tessera_usable": {
+     "2018": 132
+    },
+    "has_frame_2016": {
+     "1": 110,
+     "0": 23
+    },
+    "frame_2016_usable": {
+     "2018": 110
+    },
+    "frame_2016_year": {
+     "2016": 100,
+     "2015": 10,
+     "None": 23
+    },
+    "s1_vv_vh_2016_usable": {
+     "2018": 110
+    },
+    "s1_enrich_v": {
+     "4": 133
+    },
+    "vpp_year_present": 133,
+    "vpp_year_equals_tile_year": {
+     "2018": 133
+    },
+    "aux_11_complete": {
+     "2018": 120
+    },
+    "label_present": {
+     "2018": 133
+    },
+    "bar_modalities": {
+     "2018": 99
+    },
+    "bar_full_promoted_tessera": {
+     "2018": 99
+    }
+   },
+   "eligibility_by_year": {
+    "2018": {
+     "rows": 651,
+     "plot_years_on_tiles": 449,
+     "in_common_crop": 449,
+     "excluded_teacher_pool": 0,
+     "invalid_values": 0,
+     "eligible": 449,
+     "eligible_world_readable": 449,
+     "eligible_restricted_files": 0,
+     "eligible_on_bar_modalities": 323,
+     "eligible_on_bar_full": 323,
+     "eligible_also_in_v4_crop": 0,
+     "eligible_new_vs_v4": 449,
+     "tiles_with_plots": 133,
+     "tiles_world_readable_with_plots": 133,
+     "tiles_excluded_same_year_overlap": 0,
+     "eligible_excl_same_year_overlap": 449,
+     "eligible_excl_same_year_overlap_world_readable": 449,
+     "eligible_excl_same_year_overlap_on_bar_modalities": 323,
+     "gap_to_target_all_files": 551,
+     "gap_to_target_world_readable": 551,
+     "gap_to_target_bar_full": 677,
+     "gap_to_target_excl_same_year_overlap": 551,
+     "gap_to_target_excl_same_year_overlap_world_readable": 551
+    }
+   },
+   "provenance": {
+    "verdict": "no_named_tile_use_detected",
+    "verdict_basis": "tile names in split files, feature tables, plot indexes and training directories; not an imagery-independence proof",
+    "named_tile_use_detected": false,
+    "scan_inconclusive_reasons": [],
+    "spatial_independence": {
+     "status": "unresolved_by_this_check",
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "excluded_same_year_overlap_tiles": 0,
+     "note": "decision 2026-10-12: tiles overlapping a same-year training tile are excluded; other-year overlap is allowed (D6)"
+    },
+    "holdout_tile_names": 133,
+    "names_in_training_cohort_dir": 0,
+    "names_in_nfi2024_staging_dir": 0,
+    "split_files_scanned": [
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/clay/training_log.json",
+      "bytes": 239690,
+      "sha256": "0ad62bd24d89ff653f6e8f85ceaaaaa4e76ce1afc27af4f79ee61d5f36be87b2",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/croma_v3/training_log.json",
+      "bytes": 317678,
+      "sha256": "db4ed9a0c490a0e1b42dcb24f12b6762124cb41ba2987c19ee0e5731a9559b83",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/prithvi_300m_512/training_log.json",
+      "bytes": 344643,
+      "sha256": "a847afbb26b475302cbc1fc5528f26a51b330881f8469167bd77600dfafd7b7a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/terramind_v3/training_log.json",
+      "bytes": 331169,
+      "sha256": "c9bcdf8e9385e9dbeb5eb7838ef728ebade9c34568a44ba90f2acd073860bb9e",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/tessera_gated/training_log.json",
+      "bytes": 289589,
+      "sha256": "b6e3487ed5fa18349c51c440d1466221f43f4ddf61c64de2b3afb194c6718243",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/v8b_nmd2023_long/training_log.json",
+      "bytes": 196681,
+      "sha256": "4da61601a2799aaf145d4a94db8826c17592d78a6186a872cfc2c36b011e39e4",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma/training_log.json",
+      "bytes": 136138,
+      "sha256": "43b03f866c696339033412db2521ba6310bc92f40d07fbbcce8bfe45a8caa276",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma_v3/training_log.json",
+      "bytes": 4974,
+      "sha256": "33864870ef48376becf26f9fc0fcba29e012053144ca598b281df313c0c59039",
+      "tile_names": 153,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/base_git_sha.txt",
+      "bytes": 41,
+      "sha256": "eef2fc66d97f24a8e6a2fae5df6ccbb85a22f1894c3b3714e581bf28544982de",
+      "tile_names": 1,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_code_sha256.txt",
+      "bytes": 804,
+      "sha256": "fdfdc6263e5f1a27415877a191a743682dede2895384e22cb093544b99fb8d9b",
+      "tile_names": 9,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_nvidia_smi.txt",
+      "bytes": 11287,
+      "sha256": "1ada874b1c1a392135375bbe86927a10c489f3ab41bf760234c8024b21cc9a87",
+      "tile_names": 184,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_pip_freeze.txt",
+      "bytes": 888,
+      "sha256": "ed0c99411a0f514278551d06fa1cb94473fdf064fae39c12ced7f82ecdece620",
+      "tile_names": 42,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r1/training_log.json",
+      "bytes": 235613,
+      "sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r2/training_log.json",
+      "bytes": 291234,
+      "sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r3/training_log.json",
+      "bytes": 331003,
+      "sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r4/training_log.json",
+      "bytes": 292343,
+      "sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r1/training_log.json",
+      "bytes": 225668,
+      "sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r2/training_log.json",
+      "bytes": 316190,
+      "sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r3/training_log.json",
+      "bytes": 342710,
+      "sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r4/training_log.json",
+      "bytes": 291096,
+      "sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r1/training_log.json",
+      "bytes": 225349,
+      "sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r2/training_log.json",
+      "bytes": 302990,
+      "sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r3/training_log.json",
+      "bytes": 316080,
+      "sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r4/training_log.json",
+      "bytes": 317199,
+      "sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r1/training_log.json",
+      "bytes": 244214,
+      "sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r2/training_log.json",
+      "bytes": 290509,
+      "sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r3/training_log.json",
+      "bytes": 303119,
+      "sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r4/training_log.json",
+      "bytes": 317213,
+      "sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r1/training_log.json",
+      "bytes": 216006,
+      "sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r2/training_log.json",
+      "bytes": 250431,
+      "sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r3/training_log.json",
+      "bytes": 276528,
+      "sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r4/training_log.json",
+      "bytes": 329156,
+      "sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r1/training_log.json",
+      "bytes": 253419,
+      "sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r2/training_log.json",
+      "bytes": 316753,
+      "sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r3/training_log.json",
+      "bytes": 303378,
+      "sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r4/training_log.json",
+      "bytes": 330811,
+      "sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r1/training_log.json",
+      "bytes": 205944,
+      "sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r2/training_log.json",
+      "bytes": 288304,
+      "sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r3/training_log.json",
+      "bytes": 288178,
+      "sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r4/training_log.json",
+      "bytes": 289201,
+      "sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/prithvi_300m_512/training_log.json",
+      "bytes": 33887,
+      "sha256": "3ad235973679154a5f961eb775f05d9de81a5f27e0e3b2aeb4ccb7c63efa547c",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind/training_log.json",
+      "bytes": 265631,
+      "sha256": "7807d0217d3a864410790f6935773d12fc09ff4798f094720e372041d1391b6a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind_v3/training_log.json",
+      "bytes": 181589,
+      "sha256": "f07ddc16574d03ce49d4f3909b4da9cdb274dc9ba507987d07fb5deff22735bb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_distill/training_log.json",
+      "bytes": 316530,
+      "sha256": "ba5b07b5972de1be88d6beb747bfa7b001c7bab345a007f18548c91b42f5382c",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_gated/training_log.json",
+      "bytes": 163386,
+      "sha256": "309e4809c7ff111c27cb6091a66a797b02df82c8978bb6d6ee1cda5d735c01a8",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_markfukt/training_log.json",
+      "bytes": 127774,
+      "sha256": "935b50a2f4218144c0d957f005e760b3bdf07bacbecd5121247f91c0ec91280b",
+      "tile_names": 161,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023/training_log.json",
+      "bytes": 166121,
+      "sha256": "911d9f47e22a216ecddd2b1e767e7f7c7f6078de3682906a3fe3949d9ae59e65",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_distill/training_log.json",
+      "bytes": 153369,
+      "sha256": "7a9779c2937e7ecbd643ba217628bd1ab9b85dcf6ad7c7a1e081bf314903edb4",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_long/training_log.json",
+      "bytes": 171339,
+      "sha256": "6acb620a8bdf96c49ec71206f3b7057c2d50f88d43dcc89ae2fa5168ccec64eb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_tradslag/training_log.json",
+      "bytes": 140703,
+      "sha256": "c93665505d1b40a1e36a3289684f19aad5038fdaae8fc83e296c368fa0126c04",
+      "tile_names": 172,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/clay_r2_split.json",
+      "bytes": 7392,
+      "sha256": "cea694cff2dfa5c260a490b30dcce421ff0e18e052d68e0c9e8769ef009a2c81",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/croma_r2_split.json",
+      "bytes": 7349,
+      "sha256": "2deaa867e543c979b7a25e3d7f13fcb47ba7953be32916c728ba6ecf40c4c50e",
+      "tile_names": 278,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m4f_r2_split.json",
+      "bytes": 7221,
+      "sha256": "c2b44041533fe8e7aacabebececa66f59de9c282edab5e4158561841d94065ad",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m_r2_split.json",
+      "bytes": 7219,
+      "sha256": "c85809d64bf4ab4ce2acfc2bc846eff6b7df5f75e282408f490599dcbe690a4c",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi600m_r2_split.json",
+      "bytes": 7399,
+      "sha256": "3d4e83595b8983015635335919f26ce4072bdd7156894608910364815724217f",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/terramind_r2_split.json",
+      "bytes": 7175,
+      "sha256": "95a69581963eccf924ca2d327f42135bd6877755fbb4f210c230619e73b05750",
+      "tile_names": 271,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/tessera_r2_split.json",
+      "bytes": 7395,
+      "sha256": "89251428f036f61d424a49d403f25de53055cc0937e6cd86c7dd17820224c928",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/pinned_plots.json",
+      "bytes": 76482,
+      "sha256": "4fa47962b510c3e8d31d3518c1ed86e6d58d980b10223fabcdaa1a68db31f94c",
+      "tile_names": 266,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "bytes": 1336,
+      "sha256": "829b8f411941026f1ae77cf7fad2ea117a16e42a22a307546deb458e827f04ad",
+      "tile_names": 23,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/unified_v2_512/manifest.json",
+      "bytes": 220,
+      "sha256": "3a8c4643e4030bf1cadfb13d65f76ef7e90068038d4dbf9d49dfcd02f8921de7",
+      "tile_names": 13,
+      "holdout_names_found": 0
+     }
+    ],
+    "split_files_not_parsed": [],
+    "split_files_naming_holdout_tiles": [],
+    "visualisation_files_naming_holdout_tiles": [],
+    "teacher_feature_tables_naming_holdout_tiles": {
+     "clay": 0,
+     "croma": 0,
+     "prithvi300m": 0,
+     "prithvi300m4f": 0,
+     "prithvi600m": 0,
+     "terramind": 0,
+     "tessera": 0
+    },
+    "plot_indexes_naming_holdout_tiles": {
+     "pinned_index": 0,
+     "v4_index": 0
+    },
+    "text_files_mentioning_holdout": [
+     {
+      "path": "/data/debug/sen2cor_frame2016_nfi2018_topup_plan.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 133,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "visualisation",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/holdout_eval_512_copy.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2018_topup_512.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 133,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2018_topup_aux_incomplete.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 133,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2018_topup_aux_pass.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 133,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2018_topup_frame2016_gaps.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 23,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2018_topup_tessera_retry.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 22,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     }
+    ],
+    "footprint": {
+     "cohort_tiles_with_geometry": 7882,
+     "holdout_tiles_overlapping_any_year_training_tile": {
+      "2018": 123
+     },
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "training_tile_overlaps_any_year": {
+      "2018": 207
+     },
+     "training_tile_overlaps_same_year": {},
+     "excluded_same_year_overlap_names": []
+    }
+   },
+   "sizing_cross_check": {
+    "file": "/workspace/codex_sizing.json",
+    "inputs_compared": 11,
+    "input_hash_mismatches": [],
+    "teacher_feature_union_expected": 841,
+    "teacher_feature_union_here": 841,
+    "legacy_permission_errors_expected": 84,
+    "legacy_files_expected": 1463
+   }
+  },
+  "2019": {
+   "schema": "nfi-holdout-census-v1",
+   "read_only": true,
+   "generated_at": "2026-10-24T11:26:12Z",
+   "elapsed_s": 436.3,
+   "years": [
+    2019
+   ],
+   "identity": [
+    "TractID",
+    "PlotID",
+    "Year"
+   ],
+   "common_crop_px": 496,
+   "target_per_year": 1000,
+   "holdout_dir": "/data/unified_v2_512_nfi2019_staging",
+   "inputs": {
+    "/workspace/ie/imint/eval/fieldtruth.py": {
+     "sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c"
+    },
+    "/data/manifests/nfi2019_topup_512.json": {
+     "bytes": 2110,
+     "sha256": "68d1a2442be1c928bee0bbd5943f0dda24b7a7cbf29694c41c83cf45c0dc15ec"
+    },
+    "/data/nfi/nfi_plots.parquet": {
+     "bytes": 4336303,
+     "sha256": "70d4daedeba4536362a22c23b84eee40e499f271c6d203829407e38290ff9de0"
+    },
+    "/data/nfi/nfi_index_unified_v2_512.parquet": {
+     "bytes": 141999,
+     "sha256": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33"
+    },
+    "/data/distill/heads/clay_r2_plot_features.parquet": {
+     "bytes": 1378800,
+     "sha256": "49e0c1ec0b3f3e7e88ae680d58827ca62817b624bc6b409b53220dcdfaab7ddb"
+    },
+    "/data/distill/heads/croma_r2_plot_features.parquet": {
+     "bytes": 1389354,
+     "sha256": "c123b84c9b6e67890fa68534e4ec396f74a8d7f500ca2240f9f73b463828df4c"
+    },
+    "/data/distill/heads/prithvi300m_r2_plot_features.parquet": {
+     "bytes": 1452224,
+     "sha256": "e19d1dc154fe362c64e69c6d23adc0a632bc160aa21b98981f558fc85b6d5868"
+    },
+    "/data/distill/heads/prithvi300m4f_r2_plot_features.parquet": {
+     "bytes": 1487769,
+     "sha256": "3a70e178757d5d860208f829dd8eec218454ffa5fcc4175c0ee86d68d18ad92e"
+    },
+    "/data/distill/heads/prithvi600m_r2_plot_features.parquet": {
+     "bytes": 1608422,
+     "sha256": "ae5d6dfae5afc414b86dfc664b881b58a880d07c583e7f0341f61b35bd01057c"
+    },
+    "/data/distill/heads/terramind_r2_plot_features.parquet": {
+     "bytes": 1434286,
+     "sha256": "92ae4609d66d04cf11ffbdd9a0587df1ad22145fbb4ce80b901be1f7dd7df53c"
+    },
+    "/data/distill/heads/tessera_r2_plot_features.parquet": {
+     "bytes": 971347,
+     "sha256": "6193f5ca4bf49641a8d73e98e320861f87ac6658dbebc5b2df58a2fa26b42355"
+    },
+    "/data/nfi/nfi_index_v4_2026-09-30.parquet": {
+     "bytes": 413251,
+     "sha256": "bf08903edda0527241209ef5572b4e989b7554e9dbecaad91b09f917427dbc84"
+    }
+   },
+   "teacher_feature_union": 841,
+   "files": {
+    "present": 7,
+    "readable": 7,
+    "unreadable": [],
+    "admitted": 7,
+    "quarantined_year_conflict": [],
+    "quarantined_by_manifest_year": {},
+    "not_world_readable": 0,
+    "not_world_readable_names": [],
+    "not_world_readable_by_year": {},
+    "not_world_readable_modes": {},
+    "not_in_manifest": [],
+    "planned_in_manifest": 9,
+    "planned_but_missing_by_year": {
+     "2019": 2
+    }
+   },
+   "census": {
+    "tiles_readable": 7,
+    "key_presence": {
+     "aux_complete": 7,
+     "aux_gap_reason": 1,
+     "aux_missing": 1,
+     "aux_provenance": 7,
+     "b01": 7,
+     "b01_dates": 7,
+     "b08": 7,
+     "b08_dates": 7,
+     "b09": 7,
+     "b09_dates": 7,
+     "basal_area": 7,
+     "bbox_3006": 7,
+     "coreg_anchor_valid_frac": 7,
+     "coreg_m2": 7,
+     "coreg_max_shift": 7,
+     "coreg_n_aligned": 7,
+     "coreg_ref_frame": 7,
+     "coreg_shifts": 7,
+     "dates": 7,
+     "dem": 7,
+     "diameter": 7,
+     "doy": 7,
+     "easting": 7,
+     "frame_2016": 5,
+     "frame_2016_bands": 5,
+     "frame_2016_date": 5,
+     "frame_2016_gap_reason": 2,
+     "frame_2016_scene": 5,
+     "frame_2016_year": 5,
+     "harvest_mask": 7,
+     "has_b01": 7,
+     "has_b08": 7,
+     "has_b09": 7,
+     "has_frame_2016": 7,
+     "has_rededge": 7,
+     "has_s1": 7,
+     "has_tessera": 7,
+     "height": 7,
+     "label": 7,
+     "label_mask": 6,
+     "markfukt": 6,
+     "multitemporal": 7,
+     "n_harvest_polygons": 7,
+     "n_mature_polygons": 6,
+     "n_parcels": 6,
+     "nmd_area_ha": 7,
+     "nmd_label_raw": 7,
+     "northing": 7,
+     "num_bands": 7,
+     "num_frames": 7,
+     "parcel_area_ha": 6,
+     "rededge": 7,
+     "rededge_dates": 7,
+     "s1_dates": 7,
+     "s1_dates_2016": 5,
+     "s1_enrich_v": 7,
+     "s1_orbit": 7,
+     "s1_source": 7,
+     "s1_vv_vh": 7,
+     "s1_vv_vh_2016": 5,
+     "scl": 7,
+     "source": 7,
+     "spectral": 7,
+     "temporal_mask": 7,
+     "tessera": 7,
+     "tessera_source": 7,
+     "tessera_year": 7,
+     "tile_size_px": 7,
+     "volume": 7,
+     "vpp_eosd": 7,
+     "vpp_length": 7,
+     "vpp_maxv": 7,
+     "vpp_minv": 7,
+     "vpp_sosd": 7,
+     "vpp_year": 7
+    },
+    "keys_behind_nfi2024_bar": {
+     "frame_2016": {
+      "holdout": 5,
+      "holdout_share": 0.7143,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_bands": {
+      "holdout": 5,
+      "holdout_share": 0.7143,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_date": {
+      "holdout": 5,
+      "holdout_share": 0.7143,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_scene": {
+      "holdout": 5,
+      "holdout_share": 0.7143,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_year": {
+      "holdout": 5,
+      "holdout_share": 0.7143,
+      "nfi2024_share": 0.9832
+     },
+     "markfukt": {
+      "holdout": 6,
+      "holdout_share": 0.8571,
+      "nfi2024_share": 1.0
+     },
+     "n_mature_polygons": {
+      "holdout": 6,
+      "holdout_share": 0.8571,
+      "nfi2024_share": 0.8842
+     },
+     "s1_dates_2016": {
+      "holdout": 5,
+      "holdout_share": 0.7143,
+      "nfi2024_share": 0.9768
+     },
+     "s1_vv_vh_2016": {
+      "holdout": 5,
+      "holdout_share": 0.7143,
+      "nfi2024_share": 0.9768
+     }
+    },
+    "all_zero": {
+     "spectral": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "label": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "s1_vv_vh": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "s1_vv_vh_2016": {
+      "present": 5,
+      "all_zero": 0
+     },
+     "tessera": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "height": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "volume": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "basal_area": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "diameter": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "dem": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "markfukt": {
+      "present": 6,
+      "all_zero": 0
+     },
+     "frame_2016": {
+      "present": 5,
+      "all_zero": 0
+     },
+     "vpp_sosd": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "vpp_eosd": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "vpp_length": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "vpp_maxv": {
+      "present": 7,
+      "all_zero": 0
+     },
+     "vpp_minv": {
+      "present": 7,
+      "all_zero": 0
+     }
+    },
+    "flag_on_empty_array": {},
+    "spectral_ok": 7,
+    "bbox_on_grid": 7,
+    "bbox_matches_manifest": 7
+   },
+   "modalities": {
+    "tiles_admitted": 7,
+    "tiles_by_year": {
+     "2019": 7
+    },
+    "year_matches_manifest": {
+     "2019": 7
+    },
+    "year_conflict_strict": 0,
+    "year_unknown": 0,
+    "temporal_mask": {
+     "1111": 7
+    },
+    "tessera_source": {
+     "geotessera-0.10.2": 7
+    },
+    "tessera_year_equals_tile_year": 7,
+    "has_tessera": {
+     "1": 7
+    },
+    "tessera_usable": {
+     "2019": 7
+    },
+    "has_frame_2016": {
+     "1": 5,
+     "0": 2
+    },
+    "frame_2016_usable": {
+     "2019": 5
+    },
+    "frame_2016_year": {
+     "2016": 5,
+     "None": 2
+    },
+    "s1_vv_vh_2016_usable": {
+     "2019": 5
+    },
+    "s1_enrich_v": {
+     "4": 7
+    },
+    "vpp_year_present": 7,
+    "vpp_year_equals_tile_year": {
+     "2019": 7
+    },
+    "aux_11_complete": {
+     "2019": 6
+    },
+    "label_present": {
+     "2019": 7
+    },
+    "bar_modalities": {
+     "2019": 5
+    },
+    "bar_full_promoted_tessera": {
+     "2019": 5
+    }
+   },
+   "eligibility_by_year": {
+    "2019": {
+     "rows": 46,
+     "plot_years_on_tiles": 46,
+     "in_common_crop": 46,
+     "excluded_teacher_pool": 0,
+     "invalid_values": 0,
+     "eligible": 46,
+     "eligible_world_readable": 46,
+     "eligible_restricted_files": 0,
+     "eligible_on_bar_modalities": 35,
+     "eligible_on_bar_full": 35,
+     "eligible_also_in_v4_crop": 0,
+     "eligible_new_vs_v4": 46,
+     "tiles_with_plots": 7,
+     "tiles_world_readable_with_plots": 7,
+     "tiles_excluded_same_year_overlap": 0,
+     "eligible_excl_same_year_overlap": 46,
+     "eligible_excl_same_year_overlap_world_readable": 46,
+     "eligible_excl_same_year_overlap_on_bar_modalities": 35,
+     "gap_to_target_all_files": 954,
+     "gap_to_target_world_readable": 954,
+     "gap_to_target_bar_full": 965,
+     "gap_to_target_excl_same_year_overlap": 954,
+     "gap_to_target_excl_same_year_overlap_world_readable": 954
+    }
+   },
+   "provenance": {
+    "verdict": "no_named_tile_use_detected",
+    "verdict_basis": "tile names in split files, feature tables, plot indexes and training directories; not an imagery-independence proof",
+    "named_tile_use_detected": false,
+    "scan_inconclusive_reasons": [],
+    "spatial_independence": {
+     "status": "unresolved_by_this_check",
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "excluded_same_year_overlap_tiles": 0,
+     "note": "decision 2026-10-12: tiles overlapping a same-year training tile are excluded; other-year overlap is allowed (D6)"
+    },
+    "holdout_tile_names": 7,
+    "names_in_training_cohort_dir": 0,
+    "names_in_nfi2024_staging_dir": 0,
+    "split_files_scanned": [
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/clay/training_log.json",
+      "bytes": 239690,
+      "sha256": "0ad62bd24d89ff653f6e8f85ceaaaaa4e76ce1afc27af4f79ee61d5f36be87b2",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/croma_v3/training_log.json",
+      "bytes": 317678,
+      "sha256": "db4ed9a0c490a0e1b42dcb24f12b6762124cb41ba2987c19ee0e5731a9559b83",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/prithvi_300m_512/training_log.json",
+      "bytes": 344643,
+      "sha256": "a847afbb26b475302cbc1fc5528f26a51b330881f8469167bd77600dfafd7b7a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/terramind_v3/training_log.json",
+      "bytes": 331169,
+      "sha256": "c9bcdf8e9385e9dbeb5eb7838ef728ebade9c34568a44ba90f2acd073860bb9e",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/tessera_gated/training_log.json",
+      "bytes": 289589,
+      "sha256": "b6e3487ed5fa18349c51c440d1466221f43f4ddf61c64de2b3afb194c6718243",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/v8b_nmd2023_long/training_log.json",
+      "bytes": 196681,
+      "sha256": "4da61601a2799aaf145d4a94db8826c17592d78a6186a872cfc2c36b011e39e4",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma/training_log.json",
+      "bytes": 136138,
+      "sha256": "43b03f866c696339033412db2521ba6310bc92f40d07fbbcce8bfe45a8caa276",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma_v3/training_log.json",
+      "bytes": 4974,
+      "sha256": "33864870ef48376becf26f9fc0fcba29e012053144ca598b281df313c0c59039",
+      "tile_names": 153,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/base_git_sha.txt",
+      "bytes": 41,
+      "sha256": "eef2fc66d97f24a8e6a2fae5df6ccbb85a22f1894c3b3714e581bf28544982de",
+      "tile_names": 1,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_code_sha256.txt",
+      "bytes": 804,
+      "sha256": "fdfdc6263e5f1a27415877a191a743682dede2895384e22cb093544b99fb8d9b",
+      "tile_names": 9,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_nvidia_smi.txt",
+      "bytes": 11287,
+      "sha256": "1ada874b1c1a392135375bbe86927a10c489f3ab41bf760234c8024b21cc9a87",
+      "tile_names": 184,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_pip_freeze.txt",
+      "bytes": 888,
+      "sha256": "ed0c99411a0f514278551d06fa1cb94473fdf064fae39c12ced7f82ecdece620",
+      "tile_names": 42,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r1/training_log.json",
+      "bytes": 235613,
+      "sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r2/training_log.json",
+      "bytes": 291234,
+      "sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r3/training_log.json",
+      "bytes": 331003,
+      "sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r4/training_log.json",
+      "bytes": 292343,
+      "sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r1/training_log.json",
+      "bytes": 225668,
+      "sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r2/training_log.json",
+      "bytes": 316190,
+      "sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r3/training_log.json",
+      "bytes": 342710,
+      "sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r4/training_log.json",
+      "bytes": 291096,
+      "sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r1/training_log.json",
+      "bytes": 225349,
+      "sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r2/training_log.json",
+      "bytes": 302990,
+      "sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r3/training_log.json",
+      "bytes": 316080,
+      "sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r4/training_log.json",
+      "bytes": 317199,
+      "sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r1/training_log.json",
+      "bytes": 244214,
+      "sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r2/training_log.json",
+      "bytes": 290509,
+      "sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r3/training_log.json",
+      "bytes": 303119,
+      "sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r4/training_log.json",
+      "bytes": 317213,
+      "sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r1/training_log.json",
+      "bytes": 216006,
+      "sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r2/training_log.json",
+      "bytes": 250431,
+      "sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r3/training_log.json",
+      "bytes": 276528,
+      "sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r4/training_log.json",
+      "bytes": 329156,
+      "sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r1/training_log.json",
+      "bytes": 253419,
+      "sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r2/training_log.json",
+      "bytes": 316753,
+      "sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r3/training_log.json",
+      "bytes": 303378,
+      "sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r4/training_log.json",
+      "bytes": 330811,
+      "sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r1/training_log.json",
+      "bytes": 205944,
+      "sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r2/training_log.json",
+      "bytes": 288304,
+      "sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r3/training_log.json",
+      "bytes": 288178,
+      "sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r4/training_log.json",
+      "bytes": 289201,
+      "sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/prithvi_300m_512/training_log.json",
+      "bytes": 33887,
+      "sha256": "3ad235973679154a5f961eb775f05d9de81a5f27e0e3b2aeb4ccb7c63efa547c",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind/training_log.json",
+      "bytes": 265631,
+      "sha256": "7807d0217d3a864410790f6935773d12fc09ff4798f094720e372041d1391b6a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind_v3/training_log.json",
+      "bytes": 181589,
+      "sha256": "f07ddc16574d03ce49d4f3909b4da9cdb274dc9ba507987d07fb5deff22735bb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_distill/training_log.json",
+      "bytes": 316530,
+      "sha256": "ba5b07b5972de1be88d6beb747bfa7b001c7bab345a007f18548c91b42f5382c",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_gated/training_log.json",
+      "bytes": 163386,
+      "sha256": "309e4809c7ff111c27cb6091a66a797b02df82c8978bb6d6ee1cda5d735c01a8",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_markfukt/training_log.json",
+      "bytes": 127774,
+      "sha256": "935b50a2f4218144c0d957f005e760b3bdf07bacbecd5121247f91c0ec91280b",
+      "tile_names": 161,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023/training_log.json",
+      "bytes": 166121,
+      "sha256": "911d9f47e22a216ecddd2b1e767e7f7c7f6078de3682906a3fe3949d9ae59e65",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_distill/training_log.json",
+      "bytes": 153369,
+      "sha256": "7a9779c2937e7ecbd643ba217628bd1ab9b85dcf6ad7c7a1e081bf314903edb4",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_long/training_log.json",
+      "bytes": 171339,
+      "sha256": "6acb620a8bdf96c49ec71206f3b7057c2d50f88d43dcc89ae2fa5168ccec64eb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_tradslag/training_log.json",
+      "bytes": 140703,
+      "sha256": "c93665505d1b40a1e36a3289684f19aad5038fdaae8fc83e296c368fa0126c04",
+      "tile_names": 172,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/clay_r2_split.json",
+      "bytes": 7392,
+      "sha256": "cea694cff2dfa5c260a490b30dcce421ff0e18e052d68e0c9e8769ef009a2c81",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/croma_r2_split.json",
+      "bytes": 7349,
+      "sha256": "2deaa867e543c979b7a25e3d7f13fcb47ba7953be32916c728ba6ecf40c4c50e",
+      "tile_names": 278,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m4f_r2_split.json",
+      "bytes": 7221,
+      "sha256": "c2b44041533fe8e7aacabebececa66f59de9c282edab5e4158561841d94065ad",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m_r2_split.json",
+      "bytes": 7219,
+      "sha256": "c85809d64bf4ab4ce2acfc2bc846eff6b7df5f75e282408f490599dcbe690a4c",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi600m_r2_split.json",
+      "bytes": 7399,
+      "sha256": "3d4e83595b8983015635335919f26ce4072bdd7156894608910364815724217f",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/terramind_r2_split.json",
+      "bytes": 7175,
+      "sha256": "95a69581963eccf924ca2d327f42135bd6877755fbb4f210c230619e73b05750",
+      "tile_names": 271,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/tessera_r2_split.json",
+      "bytes": 7395,
+      "sha256": "89251428f036f61d424a49d403f25de53055cc0937e6cd86c7dd17820224c928",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/pinned_plots.json",
+      "bytes": 76482,
+      "sha256": "4fa47962b510c3e8d31d3518c1ed86e6d58d980b10223fabcdaa1a68db31f94c",
+      "tile_names": 266,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "bytes": 1336,
+      "sha256": "829b8f411941026f1ae77cf7fad2ea117a16e42a22a307546deb458e827f04ad",
+      "tile_names": 23,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/unified_v2_512/manifest.json",
+      "bytes": 220,
+      "sha256": "3a8c4643e4030bf1cadfb13d65f76ef7e90068038d4dbf9d49dfcd02f8921de7",
+      "tile_names": 13,
+      "holdout_names_found": 0
+     }
+    ],
+    "split_files_not_parsed": [],
+    "split_files_naming_holdout_tiles": [],
+    "visualisation_files_naming_holdout_tiles": [],
+    "teacher_feature_tables_naming_holdout_tiles": {
+     "clay": 0,
+     "croma": 0,
+     "prithvi300m": 0,
+     "prithvi300m4f": 0,
+     "prithvi600m": 0,
+     "terramind": 0,
+     "tessera": 0
+    },
+    "plot_indexes_naming_holdout_tiles": {
+     "pinned_index": 0,
+     "v4_index": 0
+    },
+    "text_files_mentioning_holdout": [
+     {
+      "path": "/data/debug/sen2cor_frame2016_nfi2019_topup_plan.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 7,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "visualisation",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/holdout_eval_512_copy.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2019_topup_512.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 7,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2019_topup_aux_incomplete.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 7,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2019_topup_aux_pass.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 7,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2019_topup_frame2016_gaps.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 2,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2019_topup_tessera_retry.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 1,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     }
+    ],
+    "footprint": {
+     "cohort_tiles_with_geometry": 7882,
+     "holdout_tiles_overlapping_any_year_training_tile": {
+      "2019": 6
+     },
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "training_tile_overlaps_any_year": {
+      "2019": 6
+     },
+     "training_tile_overlaps_same_year": {},
+     "excluded_same_year_overlap_names": []
+    }
+   },
+   "sizing_cross_check": {
+    "file": "/workspace/codex_sizing.json",
+    "inputs_compared": 11,
+    "input_hash_mismatches": [],
+    "teacher_feature_union_expected": 841,
+    "teacher_feature_union_here": 841,
+    "legacy_permission_errors_expected": 84,
+    "legacy_files_expected": 1463
+   }
+  },
+  "2021": {
+   "schema": "nfi-holdout-census-v1",
+   "read_only": true,
+   "generated_at": "2026-10-24T11:34:21Z",
+   "elapsed_s": 487.6,
+   "years": [
+    2021
+   ],
+   "identity": [
+    "TractID",
+    "PlotID",
+    "Year"
+   ],
+   "common_crop_px": 496,
+   "target_per_year": 1000,
+   "holdout_dir": "/data/unified_v2_512_nfi2021_staging",
+   "inputs": {
+    "/workspace/ie/imint/eval/fieldtruth.py": {
+     "sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c"
+    },
+    "/data/manifests/nfi2021_topup_512.json": {
+     "bytes": 11000,
+     "sha256": "4b4bce569d0df49ee480ea42c28d211b580247420c993e5339a114b27e87f34f"
+    },
+    "/data/nfi/nfi_plots.parquet": {
+     "bytes": 4336303,
+     "sha256": "70d4daedeba4536362a22c23b84eee40e499f271c6d203829407e38290ff9de0"
+    },
+    "/data/nfi/nfi_index_unified_v2_512.parquet": {
+     "bytes": 141999,
+     "sha256": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33"
+    },
+    "/data/distill/heads/clay_r2_plot_features.parquet": {
+     "bytes": 1378800,
+     "sha256": "49e0c1ec0b3f3e7e88ae680d58827ca62817b624bc6b409b53220dcdfaab7ddb"
+    },
+    "/data/distill/heads/croma_r2_plot_features.parquet": {
+     "bytes": 1389354,
+     "sha256": "c123b84c9b6e67890fa68534e4ec396f74a8d7f500ca2240f9f73b463828df4c"
+    },
+    "/data/distill/heads/prithvi300m_r2_plot_features.parquet": {
+     "bytes": 1452224,
+     "sha256": "e19d1dc154fe362c64e69c6d23adc0a632bc160aa21b98981f558fc85b6d5868"
+    },
+    "/data/distill/heads/prithvi300m4f_r2_plot_features.parquet": {
+     "bytes": 1487769,
+     "sha256": "3a70e178757d5d860208f829dd8eec218454ffa5fcc4175c0ee86d68d18ad92e"
+    },
+    "/data/distill/heads/prithvi600m_r2_plot_features.parquet": {
+     "bytes": 1608422,
+     "sha256": "ae5d6dfae5afc414b86dfc664b881b58a880d07c583e7f0341f61b35bd01057c"
+    },
+    "/data/distill/heads/terramind_r2_plot_features.parquet": {
+     "bytes": 1434286,
+     "sha256": "92ae4609d66d04cf11ffbdd9a0587df1ad22145fbb4ce80b901be1f7dd7df53c"
+    },
+    "/data/distill/heads/tessera_r2_plot_features.parquet": {
+     "bytes": 971347,
+     "sha256": "6193f5ca4bf49641a8d73e98e320861f87ac6658dbebc5b2df58a2fa26b42355"
+    },
+    "/data/nfi/nfi_index_v4_2026-09-30.parquet": {
+     "bytes": 413251,
+     "sha256": "bf08903edda0527241209ef5572b4e989b7554e9dbecaad91b09f917427dbc84"
+    }
+   },
+   "teacher_feature_union": 841,
+   "files": {
+    "present": 47,
+    "readable": 47,
+    "unreadable": [],
+    "admitted": 47,
+    "quarantined_year_conflict": [],
+    "quarantined_by_manifest_year": {},
+    "not_world_readable": 0,
+    "not_world_readable_names": [],
+    "not_world_readable_by_year": {},
+    "not_world_readable_modes": {},
+    "not_in_manifest": [],
+    "planned_in_manifest": 47,
+    "planned_but_missing_by_year": {}
+   },
+   "census": {
+    "tiles_readable": 47,
+    "key_presence": {
+     "aux_complete": 47,
+     "aux_provenance": 47,
+     "b01": 47,
+     "b01_dates": 47,
+     "b08": 47,
+     "b08_dates": 47,
+     "b09": 47,
+     "b09_dates": 47,
+     "basal_area": 47,
+     "bbox_3006": 47,
+     "coreg_anchor_valid_frac": 47,
+     "coreg_m2": 47,
+     "coreg_max_shift": 47,
+     "coreg_n_aligned": 47,
+     "coreg_ref_frame": 47,
+     "coreg_shifts": 47,
+     "dates": 47,
+     "dem": 47,
+     "diameter": 47,
+     "doy": 47,
+     "easting": 47,
+     "frame_2016": 42,
+     "frame_2016_bands": 42,
+     "frame_2016_date": 42,
+     "frame_2016_gap_reason": 5,
+     "frame_2016_scene": 42,
+     "frame_2016_year": 42,
+     "harvest_mask": 47,
+     "has_b01": 47,
+     "has_b08": 47,
+     "has_b09": 47,
+     "has_frame_2016": 47,
+     "has_rededge": 47,
+     "has_s1": 47,
+     "has_tessera": 47,
+     "height": 47,
+     "label": 47,
+     "label_mask": 42,
+     "markfukt": 47,
+     "multitemporal": 47,
+     "n_harvest_polygons": 47,
+     "n_mature_polygons": 47,
+     "n_parcels": 42,
+     "nmd_area_ha": 47,
+     "nmd_label_raw": 47,
+     "northing": 47,
+     "num_bands": 47,
+     "num_frames": 47,
+     "parcel_area_ha": 42,
+     "rededge": 47,
+     "rededge_dates": 47,
+     "s1_dates": 47,
+     "s1_dates_2016": 41,
+     "s1_enrich_v": 47,
+     "s1_orbit": 47,
+     "s1_source": 47,
+     "s1_vv_vh": 47,
+     "s1_vv_vh_2016": 41,
+     "scl": 47,
+     "source": 47,
+     "spectral": 47,
+     "temporal_mask": 47,
+     "tessera": 47,
+     "tessera_source": 47,
+     "tessera_year": 47,
+     "tile_size_px": 47,
+     "volume": 47,
+     "vpp_eosd": 47,
+     "vpp_length": 47,
+     "vpp_maxv": 47,
+     "vpp_minv": 47,
+     "vpp_sosd": 47,
+     "vpp_year": 47
+    },
+    "keys_behind_nfi2024_bar": {
+     "frame_2016": {
+      "holdout": 42,
+      "holdout_share": 0.8936,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_bands": {
+      "holdout": 42,
+      "holdout_share": 0.8936,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_date": {
+      "holdout": 42,
+      "holdout_share": 0.8936,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_scene": {
+      "holdout": 42,
+      "holdout_share": 0.8936,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_year": {
+      "holdout": 42,
+      "holdout_share": 0.8936,
+      "nfi2024_share": 0.9832
+     },
+     "s1_dates_2016": {
+      "holdout": 41,
+      "holdout_share": 0.8723,
+      "nfi2024_share": 0.9768
+     },
+     "s1_vv_vh_2016": {
+      "holdout": 41,
+      "holdout_share": 0.8723,
+      "nfi2024_share": 0.9768
+     }
+    },
+    "all_zero": {
+     "spectral": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "label": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "s1_vv_vh": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "s1_vv_vh_2016": {
+      "present": 41,
+      "all_zero": 0
+     },
+     "tessera": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "height": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "volume": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "basal_area": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "diameter": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "dem": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "markfukt": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "frame_2016": {
+      "present": 42,
+      "all_zero": 0
+     },
+     "vpp_sosd": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "vpp_eosd": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "vpp_length": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "vpp_maxv": {
+      "present": 47,
+      "all_zero": 0
+     },
+     "vpp_minv": {
+      "present": 47,
+      "all_zero": 0
+     }
+    },
+    "flag_on_empty_array": {},
+    "spectral_ok": 47,
+    "bbox_on_grid": 47,
+    "bbox_matches_manifest": 47
+   },
+   "modalities": {
+    "tiles_admitted": 47,
+    "tiles_by_year": {
+     "2021": 47
+    },
+    "year_matches_manifest": {
+     "2021": 47
+    },
+    "year_conflict_strict": 0,
+    "year_unknown": 0,
+    "temporal_mask": {
+     "1111": 43,
+     "0111": 4
+    },
+    "tessera_source": {
+     "geotessera-0.10.2": 47
+    },
+    "tessera_year_equals_tile_year": 47,
+    "has_tessera": {
+     "1": 47
+    },
+    "tessera_usable": {
+     "2021": 47
+    },
+    "has_frame_2016": {
+     "1": 42,
+     "0": 5
+    },
+    "frame_2016_usable": {
+     "2021": 42
+    },
+    "frame_2016_year": {
+     "2016": 42,
+     "None": 5
+    },
+    "s1_vv_vh_2016_usable": {
+     "2021": 41
+    },
+    "s1_enrich_v": {
+     "4": 47
+    },
+    "vpp_year_present": 47,
+    "vpp_year_equals_tile_year": {
+     "2021": 47
+    },
+    "aux_11_complete": {
+     "2021": 47
+    },
+    "label_present": {
+     "2021": 47
+    },
+    "bar_modalities": {
+     "2021": 41
+    },
+    "bar_full_promoted_tessera": {
+     "2021": 41
+    }
+   },
+   "eligibility_by_year": {
+    "2021": {
+     "rows": 210,
+     "plot_years_on_tiles": 210,
+     "in_common_crop": 210,
+     "excluded_teacher_pool": 0,
+     "invalid_values": 0,
+     "eligible": 210,
+     "eligible_world_readable": 210,
+     "eligible_restricted_files": 0,
+     "eligible_on_bar_modalities": 186,
+     "eligible_on_bar_full": 186,
+     "eligible_also_in_v4_crop": 0,
+     "eligible_new_vs_v4": 210,
+     "tiles_with_plots": 47,
+     "tiles_world_readable_with_plots": 47,
+     "tiles_excluded_same_year_overlap": 0,
+     "eligible_excl_same_year_overlap": 210,
+     "eligible_excl_same_year_overlap_world_readable": 210,
+     "eligible_excl_same_year_overlap_on_bar_modalities": 186,
+     "gap_to_target_all_files": 790,
+     "gap_to_target_world_readable": 790,
+     "gap_to_target_bar_full": 814,
+     "gap_to_target_excl_same_year_overlap": 790,
+     "gap_to_target_excl_same_year_overlap_world_readable": 790
+    }
+   },
+   "provenance": {
+    "verdict": "no_named_tile_use_detected",
+    "verdict_basis": "tile names in split files, feature tables, plot indexes and training directories; not an imagery-independence proof",
+    "named_tile_use_detected": false,
+    "scan_inconclusive_reasons": [],
+    "spatial_independence": {
+     "status": "unresolved_by_this_check",
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "excluded_same_year_overlap_tiles": 0,
+     "note": "decision 2026-10-12: tiles overlapping a same-year training tile are excluded; other-year overlap is allowed (D6)"
+    },
+    "holdout_tile_names": 47,
+    "names_in_training_cohort_dir": 0,
+    "names_in_nfi2024_staging_dir": 0,
+    "split_files_scanned": [
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/clay/training_log.json",
+      "bytes": 239690,
+      "sha256": "0ad62bd24d89ff653f6e8f85ceaaaaa4e76ce1afc27af4f79ee61d5f36be87b2",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/croma_v3/training_log.json",
+      "bytes": 317678,
+      "sha256": "db4ed9a0c490a0e1b42dcb24f12b6762124cb41ba2987c19ee0e5731a9559b83",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/prithvi_300m_512/training_log.json",
+      "bytes": 344643,
+      "sha256": "a847afbb26b475302cbc1fc5528f26a51b330881f8469167bd77600dfafd7b7a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/terramind_v3/training_log.json",
+      "bytes": 331169,
+      "sha256": "c9bcdf8e9385e9dbeb5eb7838ef728ebade9c34568a44ba90f2acd073860bb9e",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/tessera_gated/training_log.json",
+      "bytes": 289589,
+      "sha256": "b6e3487ed5fa18349c51c440d1466221f43f4ddf61c64de2b3afb194c6718243",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/v8b_nmd2023_long/training_log.json",
+      "bytes": 196681,
+      "sha256": "4da61601a2799aaf145d4a94db8826c17592d78a6186a872cfc2c36b011e39e4",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma/training_log.json",
+      "bytes": 136138,
+      "sha256": "43b03f866c696339033412db2521ba6310bc92f40d07fbbcce8bfe45a8caa276",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma_v3/training_log.json",
+      "bytes": 4974,
+      "sha256": "33864870ef48376becf26f9fc0fcba29e012053144ca598b281df313c0c59039",
+      "tile_names": 153,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/base_git_sha.txt",
+      "bytes": 41,
+      "sha256": "eef2fc66d97f24a8e6a2fae5df6ccbb85a22f1894c3b3714e581bf28544982de",
+      "tile_names": 1,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_code_sha256.txt",
+      "bytes": 804,
+      "sha256": "fdfdc6263e5f1a27415877a191a743682dede2895384e22cb093544b99fb8d9b",
+      "tile_names": 9,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_nvidia_smi.txt",
+      "bytes": 11287,
+      "sha256": "1ada874b1c1a392135375bbe86927a10c489f3ab41bf760234c8024b21cc9a87",
+      "tile_names": 184,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_pip_freeze.txt",
+      "bytes": 888,
+      "sha256": "ed0c99411a0f514278551d06fa1cb94473fdf064fae39c12ced7f82ecdece620",
+      "tile_names": 42,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r1/training_log.json",
+      "bytes": 235613,
+      "sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r2/training_log.json",
+      "bytes": 291234,
+      "sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r3/training_log.json",
+      "bytes": 331003,
+      "sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r4/training_log.json",
+      "bytes": 292343,
+      "sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r1/training_log.json",
+      "bytes": 225668,
+      "sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r2/training_log.json",
+      "bytes": 316190,
+      "sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r3/training_log.json",
+      "bytes": 342710,
+      "sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r4/training_log.json",
+      "bytes": 291096,
+      "sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r1/training_log.json",
+      "bytes": 225349,
+      "sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r2/training_log.json",
+      "bytes": 302990,
+      "sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r3/training_log.json",
+      "bytes": 316080,
+      "sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r4/training_log.json",
+      "bytes": 317199,
+      "sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r1/training_log.json",
+      "bytes": 244214,
+      "sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r2/training_log.json",
+      "bytes": 290509,
+      "sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r3/training_log.json",
+      "bytes": 303119,
+      "sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r4/training_log.json",
+      "bytes": 317213,
+      "sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r1/training_log.json",
+      "bytes": 216006,
+      "sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r2/training_log.json",
+      "bytes": 250431,
+      "sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r3/training_log.json",
+      "bytes": 276528,
+      "sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r4/training_log.json",
+      "bytes": 329156,
+      "sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r1/training_log.json",
+      "bytes": 253419,
+      "sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r2/training_log.json",
+      "bytes": 316753,
+      "sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r3/training_log.json",
+      "bytes": 303378,
+      "sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r4/training_log.json",
+      "bytes": 330811,
+      "sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r1/training_log.json",
+      "bytes": 205944,
+      "sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r2/training_log.json",
+      "bytes": 288304,
+      "sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r3/training_log.json",
+      "bytes": 288178,
+      "sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r4/training_log.json",
+      "bytes": 289201,
+      "sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/prithvi_300m_512/training_log.json",
+      "bytes": 33887,
+      "sha256": "3ad235973679154a5f961eb775f05d9de81a5f27e0e3b2aeb4ccb7c63efa547c",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind/training_log.json",
+      "bytes": 265631,
+      "sha256": "7807d0217d3a864410790f6935773d12fc09ff4798f094720e372041d1391b6a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind_v3/training_log.json",
+      "bytes": 181589,
+      "sha256": "f07ddc16574d03ce49d4f3909b4da9cdb274dc9ba507987d07fb5deff22735bb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_distill/training_log.json",
+      "bytes": 316530,
+      "sha256": "ba5b07b5972de1be88d6beb747bfa7b001c7bab345a007f18548c91b42f5382c",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_gated/training_log.json",
+      "bytes": 163386,
+      "sha256": "309e4809c7ff111c27cb6091a66a797b02df82c8978bb6d6ee1cda5d735c01a8",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_markfukt/training_log.json",
+      "bytes": 127774,
+      "sha256": "935b50a2f4218144c0d957f005e760b3bdf07bacbecd5121247f91c0ec91280b",
+      "tile_names": 161,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023/training_log.json",
+      "bytes": 166121,
+      "sha256": "911d9f47e22a216ecddd2b1e767e7f7c7f6078de3682906a3fe3949d9ae59e65",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_distill/training_log.json",
+      "bytes": 153369,
+      "sha256": "7a9779c2937e7ecbd643ba217628bd1ab9b85dcf6ad7c7a1e081bf314903edb4",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_long/training_log.json",
+      "bytes": 171339,
+      "sha256": "6acb620a8bdf96c49ec71206f3b7057c2d50f88d43dcc89ae2fa5168ccec64eb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_tradslag/training_log.json",
+      "bytes": 140703,
+      "sha256": "c93665505d1b40a1e36a3289684f19aad5038fdaae8fc83e296c368fa0126c04",
+      "tile_names": 172,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/clay_r2_split.json",
+      "bytes": 7392,
+      "sha256": "cea694cff2dfa5c260a490b30dcce421ff0e18e052d68e0c9e8769ef009a2c81",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/croma_r2_split.json",
+      "bytes": 7349,
+      "sha256": "2deaa867e543c979b7a25e3d7f13fcb47ba7953be32916c728ba6ecf40c4c50e",
+      "tile_names": 278,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m4f_r2_split.json",
+      "bytes": 7221,
+      "sha256": "c2b44041533fe8e7aacabebececa66f59de9c282edab5e4158561841d94065ad",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m_r2_split.json",
+      "bytes": 7219,
+      "sha256": "c85809d64bf4ab4ce2acfc2bc846eff6b7df5f75e282408f490599dcbe690a4c",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi600m_r2_split.json",
+      "bytes": 7399,
+      "sha256": "3d4e83595b8983015635335919f26ce4072bdd7156894608910364815724217f",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/terramind_r2_split.json",
+      "bytes": 7175,
+      "sha256": "95a69581963eccf924ca2d327f42135bd6877755fbb4f210c230619e73b05750",
+      "tile_names": 271,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/tessera_r2_split.json",
+      "bytes": 7395,
+      "sha256": "89251428f036f61d424a49d403f25de53055cc0937e6cd86c7dd17820224c928",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/pinned_plots.json",
+      "bytes": 76482,
+      "sha256": "4fa47962b510c3e8d31d3518c1ed86e6d58d980b10223fabcdaa1a68db31f94c",
+      "tile_names": 266,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "bytes": 1336,
+      "sha256": "829b8f411941026f1ae77cf7fad2ea117a16e42a22a307546deb458e827f04ad",
+      "tile_names": 23,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/unified_v2_512/manifest.json",
+      "bytes": 220,
+      "sha256": "3a8c4643e4030bf1cadfb13d65f76ef7e90068038d4dbf9d49dfcd02f8921de7",
+      "tile_names": 13,
+      "holdout_names_found": 0
+     }
+    ],
+    "split_files_not_parsed": [],
+    "split_files_naming_holdout_tiles": [],
+    "visualisation_files_naming_holdout_tiles": [],
+    "teacher_feature_tables_naming_holdout_tiles": {
+     "clay": 0,
+     "croma": 0,
+     "prithvi300m": 0,
+     "prithvi300m4f": 0,
+     "prithvi600m": 0,
+     "terramind": 0,
+     "tessera": 0
+    },
+    "plot_indexes_naming_holdout_tiles": {
+     "pinned_index": 0,
+     "v4_index": 0
+    },
+    "text_files_mentioning_holdout": [
+     {
+      "path": "/data/debug/sen2cor_frame2016_nfi2021_topup_plan.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 47,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "visualisation",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/holdout_eval_512_copy.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2021_topup_512.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 47,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2021_topup_aux_incomplete.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 47,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2021_topup_aux_pass.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 47,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2021_topup_frame2016_gaps.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 5,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2021_topup_retry.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 1,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2021_topup_tessera_retry.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 3,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     }
+    ],
+    "footprint": {
+     "cohort_tiles_with_geometry": 7882,
+     "holdout_tiles_overlapping_any_year_training_tile": {
+      "2021": 47
+     },
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "training_tile_overlaps_any_year": {
+      "2021": 98
+     },
+     "training_tile_overlaps_same_year": {},
+     "excluded_same_year_overlap_names": []
+    }
+   },
+   "sizing_cross_check": {
+    "file": "/workspace/codex_sizing.json",
+    "inputs_compared": 11,
+    "input_hash_mismatches": [],
+    "teacher_feature_union_expected": 841,
+    "teacher_feature_union_here": 841,
+    "legacy_permission_errors_expected": 84,
+    "legacy_files_expected": 1463
+   }
+  },
+  "2022": {
+   "schema": "nfi-holdout-census-v1",
+   "read_only": true,
+   "generated_at": "2026-10-24T11:42:28Z",
+   "elapsed_s": 485.4,
+   "years": [
+    2022
+   ],
+   "identity": [
+    "TractID",
+    "PlotID",
+    "Year"
+   ],
+   "common_crop_px": 496,
+   "target_per_year": 1000,
+   "holdout_dir": "/data/unified_v2_512_nfi2022_staging",
+   "inputs": {
+    "/workspace/ie/imint/eval/fieldtruth.py": {
+     "sha256": "3f7143f2fceda3104ea61925000547f6cd6baac49d9112acce6c49be208ad68c"
+    },
+    "/data/manifests/nfi2022_topup_512.json": {
+     "bytes": 11469,
+     "sha256": "9cfd6331e5b89a4aaacf1f923a09805b8eba9c12592a4bd8b00dceeffde41a6c"
+    },
+    "/data/nfi/nfi_plots.parquet": {
+     "bytes": 4336303,
+     "sha256": "70d4daedeba4536362a22c23b84eee40e499f271c6d203829407e38290ff9de0"
+    },
+    "/data/nfi/nfi_index_unified_v2_512.parquet": {
+     "bytes": 141999,
+     "sha256": "671d4bbb0d168f15635f09fc93fe04ec66845575adcb5342e4c3d82de6fcda33"
+    },
+    "/data/distill/heads/clay_r2_plot_features.parquet": {
+     "bytes": 1378800,
+     "sha256": "49e0c1ec0b3f3e7e88ae680d58827ca62817b624bc6b409b53220dcdfaab7ddb"
+    },
+    "/data/distill/heads/croma_r2_plot_features.parquet": {
+     "bytes": 1389354,
+     "sha256": "c123b84c9b6e67890fa68534e4ec396f74a8d7f500ca2240f9f73b463828df4c"
+    },
+    "/data/distill/heads/prithvi300m_r2_plot_features.parquet": {
+     "bytes": 1452224,
+     "sha256": "e19d1dc154fe362c64e69c6d23adc0a632bc160aa21b98981f558fc85b6d5868"
+    },
+    "/data/distill/heads/prithvi300m4f_r2_plot_features.parquet": {
+     "bytes": 1487769,
+     "sha256": "3a70e178757d5d860208f829dd8eec218454ffa5fcc4175c0ee86d68d18ad92e"
+    },
+    "/data/distill/heads/prithvi600m_r2_plot_features.parquet": {
+     "bytes": 1608422,
+     "sha256": "ae5d6dfae5afc414b86dfc664b881b58a880d07c583e7f0341f61b35bd01057c"
+    },
+    "/data/distill/heads/terramind_r2_plot_features.parquet": {
+     "bytes": 1434286,
+     "sha256": "92ae4609d66d04cf11ffbdd9a0587df1ad22145fbb4ce80b901be1f7dd7df53c"
+    },
+    "/data/distill/heads/tessera_r2_plot_features.parquet": {
+     "bytes": 971347,
+     "sha256": "6193f5ca4bf49641a8d73e98e320861f87ac6658dbebc5b2df58a2fa26b42355"
+    },
+    "/data/nfi/nfi_index_v4_2026-09-30.parquet": {
+     "bytes": 413251,
+     "sha256": "bf08903edda0527241209ef5572b4e989b7554e9dbecaad91b09f917427dbc84"
+    }
+   },
+   "teacher_feature_union": 841,
+   "files": {
+    "present": 43,
+    "readable": 43,
+    "unreadable": [],
+    "admitted": 43,
+    "quarantined_year_conflict": [],
+    "quarantined_by_manifest_year": {},
+    "not_world_readable": 0,
+    "not_world_readable_names": [],
+    "not_world_readable_by_year": {},
+    "not_world_readable_modes": {},
+    "not_in_manifest": [],
+    "planned_in_manifest": 49,
+    "planned_but_missing_by_year": {
+     "2022": 6
+    }
+   },
+   "census": {
+    "tiles_readable": 43,
+    "key_presence": {
+     "aux_complete": 43,
+     "aux_gap_reason": 1,
+     "aux_missing": 1,
+     "aux_provenance": 43,
+     "b01": 43,
+     "b01_dates": 43,
+     "b08": 43,
+     "b08_dates": 43,
+     "b09": 43,
+     "b09_dates": 43,
+     "basal_area": 43,
+     "bbox_3006": 43,
+     "coreg_anchor_valid_frac": 43,
+     "coreg_m2": 43,
+     "coreg_max_shift": 43,
+     "coreg_n_aligned": 43,
+     "coreg_ref_frame": 43,
+     "coreg_shifts": 43,
+     "dates": 43,
+     "dem": 43,
+     "diameter": 43,
+     "doy": 43,
+     "easting": 43,
+     "frame_2016": 35,
+     "frame_2016_bands": 35,
+     "frame_2016_date": 35,
+     "frame_2016_gap_reason": 8,
+     "frame_2016_scene": 35,
+     "frame_2016_year": 35,
+     "harvest_mask": 41,
+     "has_b01": 43,
+     "has_b08": 43,
+     "has_b09": 43,
+     "has_frame_2016": 43,
+     "has_rededge": 43,
+     "has_s1": 42,
+     "has_tessera": 43,
+     "height": 43,
+     "label": 43,
+     "label_mask": 24,
+     "markfukt": 42,
+     "multitemporal": 43,
+     "n_harvest_polygons": 41,
+     "n_mature_polygons": 39,
+     "n_parcels": 24,
+     "nmd_area_ha": 43,
+     "nmd_label_raw": 43,
+     "northing": 43,
+     "num_bands": 43,
+     "num_frames": 43,
+     "parcel_area_ha": 24,
+     "rededge": 43,
+     "rededge_dates": 43,
+     "s1_dates": 42,
+     "s1_dates_2016": 34,
+     "s1_enrich_v": 42,
+     "s1_orbit": 42,
+     "s1_source": 42,
+     "s1_vv_vh": 42,
+     "s1_vv_vh_2016": 34,
+     "scl": 43,
+     "source": 43,
+     "spectral": 43,
+     "temporal_mask": 43,
+     "tessera": 43,
+     "tessera_source": 43,
+     "tessera_year": 43,
+     "tile_size_px": 43,
+     "volume": 43,
+     "vpp_eosd": 43,
+     "vpp_length": 43,
+     "vpp_maxv": 43,
+     "vpp_minv": 43,
+     "vpp_sosd": 43,
+     "vpp_year": 43
+    },
+    "keys_behind_nfi2024_bar": {
+     "frame_2016": {
+      "holdout": 35,
+      "holdout_share": 0.814,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_bands": {
+      "holdout": 35,
+      "holdout_share": 0.814,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_date": {
+      "holdout": 35,
+      "holdout_share": 0.814,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_scene": {
+      "holdout": 35,
+      "holdout_share": 0.814,
+      "nfi2024_share": 0.9832
+     },
+     "frame_2016_year": {
+      "holdout": 35,
+      "holdout_share": 0.814,
+      "nfi2024_share": 0.9832
+     },
+     "has_s1": {
+      "holdout": 42,
+      "holdout_share": 0.9767,
+      "nfi2024_share": 1.0
+     },
+     "label_mask": {
+      "holdout": 24,
+      "holdout_share": 0.5581,
+      "nfi2024_share": 0.7453
+     },
+     "markfukt": {
+      "holdout": 42,
+      "holdout_share": 0.9767,
+      "nfi2024_share": 1.0
+     },
+     "n_parcels": {
+      "holdout": 24,
+      "holdout_share": 0.5581,
+      "nfi2024_share": 0.7453
+     },
+     "parcel_area_ha": {
+      "holdout": 24,
+      "holdout_share": 0.5581,
+      "nfi2024_share": 0.7453
+     },
+     "s1_dates": {
+      "holdout": 42,
+      "holdout_share": 0.9767,
+      "nfi2024_share": 1.0
+     },
+     "s1_dates_2016": {
+      "holdout": 34,
+      "holdout_share": 0.7907,
+      "nfi2024_share": 0.9768
+     },
+     "s1_enrich_v": {
+      "holdout": 42,
+      "holdout_share": 0.9767,
+      "nfi2024_share": 1.0
+     },
+     "s1_orbit": {
+      "holdout": 42,
+      "holdout_share": 0.9767,
+      "nfi2024_share": 1.0
+     },
+     "s1_source": {
+      "holdout": 42,
+      "holdout_share": 0.9767,
+      "nfi2024_share": 1.0
+     },
+     "s1_vv_vh": {
+      "holdout": 42,
+      "holdout_share": 0.9767,
+      "nfi2024_share": 1.0
+     },
+     "s1_vv_vh_2016": {
+      "holdout": 34,
+      "holdout_share": 0.7907,
+      "nfi2024_share": 0.9768
+     }
+    },
+    "all_zero": {
+     "spectral": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "label": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "s1_vv_vh": {
+      "present": 42,
+      "all_zero": 0
+     },
+     "s1_vv_vh_2016": {
+      "present": 34,
+      "all_zero": 0
+     },
+     "tessera": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "height": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "volume": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "basal_area": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "diameter": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "dem": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "markfukt": {
+      "present": 42,
+      "all_zero": 0
+     },
+     "frame_2016": {
+      "present": 35,
+      "all_zero": 0
+     },
+     "vpp_sosd": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "vpp_eosd": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "vpp_length": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "vpp_maxv": {
+      "present": 43,
+      "all_zero": 0
+     },
+     "vpp_minv": {
+      "present": 43,
+      "all_zero": 0
+     }
+    },
+    "flag_on_empty_array": {},
+    "spectral_ok": 43,
+    "bbox_on_grid": 43,
+    "bbox_matches_manifest": 43
+   },
+   "modalities": {
+    "tiles_admitted": 43,
+    "tiles_by_year": {
+     "2022": 43
+    },
+    "year_matches_manifest": {
+     "2022": 43
+    },
+    "year_conflict_strict": 0,
+    "year_unknown": 0,
+    "temporal_mask": {
+     "1111": 37,
+     "0111": 6
+    },
+    "tessera_source": {
+     "geotessera-0.10.2": 43
+    },
+    "tessera_year_equals_tile_year": 43,
+    "has_tessera": {
+     "1": 43
+    },
+    "tessera_usable": {
+     "2022": 43
+    },
+    "has_frame_2016": {
+     "0": 8,
+     "1": 35
+    },
+    "frame_2016_usable": {
+     "2022": 35
+    },
+    "frame_2016_year": {
+     "None": 8,
+     "2016": 33,
+     "2015": 2
+    },
+    "s1_vv_vh_2016_usable": {
+     "2022": 34
+    },
+    "s1_enrich_v": {
+     "4": 42,
+     "None": 1
+    },
+    "vpp_year_present": 43,
+    "vpp_year_equals_tile_year": {
+     "2022": 43
+    },
+    "aux_11_complete": {
+     "2022": 42
+    },
+    "label_present": {
+     "2022": 43
+    },
+    "bar_modalities": {
+     "2022": 33
+    },
+    "bar_full_promoted_tessera": {
+     "2022": 33
+    }
+   },
+   "eligibility_by_year": {
+    "2022": {
+     "rows": 207,
+     "plot_years_on_tiles": 195,
+     "in_common_crop": 195,
+     "excluded_teacher_pool": 0,
+     "invalid_values": 0,
+     "eligible": 195,
+     "eligible_world_readable": 195,
+     "eligible_restricted_files": 0,
+     "eligible_on_bar_modalities": 170,
+     "eligible_on_bar_full": 170,
+     "eligible_also_in_v4_crop": 0,
+     "eligible_new_vs_v4": 195,
+     "tiles_with_plots": 43,
+     "tiles_world_readable_with_plots": 43,
+     "tiles_excluded_same_year_overlap": 0,
+     "eligible_excl_same_year_overlap": 195,
+     "eligible_excl_same_year_overlap_world_readable": 195,
+     "eligible_excl_same_year_overlap_on_bar_modalities": 170,
+     "gap_to_target_all_files": 805,
+     "gap_to_target_world_readable": 805,
+     "gap_to_target_bar_full": 830,
+     "gap_to_target_excl_same_year_overlap": 805,
+     "gap_to_target_excl_same_year_overlap_world_readable": 805
+    }
+   },
+   "provenance": {
+    "verdict": "no_named_tile_use_detected",
+    "verdict_basis": "tile names in split files, feature tables, plot indexes and training directories; not an imagery-independence proof",
+    "named_tile_use_detected": false,
+    "scan_inconclusive_reasons": [],
+    "spatial_independence": {
+     "status": "unresolved_by_this_check",
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "excluded_same_year_overlap_tiles": 0,
+     "note": "decision 2026-10-12: tiles overlapping a same-year training tile are excluded; other-year overlap is allowed (D6)"
+    },
+    "holdout_tile_names": 43,
+    "names_in_training_cohort_dir": 0,
+    "names_in_nfi2024_staging_dir": 0,
+    "split_files_scanned": [
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/clay/training_log.json",
+      "bytes": 239690,
+      "sha256": "0ad62bd24d89ff653f6e8f85ceaaaaa4e76ce1afc27af4f79ee61d5f36be87b2",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/croma_v3/training_log.json",
+      "bytes": 317678,
+      "sha256": "db4ed9a0c490a0e1b42dcb24f12b6762124cb41ba2987c19ee0e5731a9559b83",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/prithvi_300m_512/training_log.json",
+      "bytes": 344643,
+      "sha256": "a847afbb26b475302cbc1fc5528f26a51b330881f8469167bd77600dfafd7b7a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/terramind_v3/training_log.json",
+      "bytes": 331169,
+      "sha256": "c9bcdf8e9385e9dbeb5eb7838ef728ebade9c34568a44ba90f2acd073860bb9e",
+      "tile_names": 176,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/tessera_gated/training_log.json",
+      "bytes": 289589,
+      "sha256": "b6e3487ed5fa18349c51c440d1466221f43f4ddf61c64de2b3afb194c6718243",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/backup_prephenology_20260828/v8b_nmd2023_long/training_log.json",
+      "bytes": 196681,
+      "sha256": "4da61601a2799aaf145d4a94db8826c17592d78a6186a872cfc2c36b011e39e4",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma/training_log.json",
+      "bytes": 136138,
+      "sha256": "43b03f866c696339033412db2521ba6310bc92f40d07fbbcce8bfe45a8caa276",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/croma_v3/training_log.json",
+      "bytes": 4974,
+      "sha256": "33864870ef48376becf26f9fc0fcba29e012053144ca598b281df313c0c59039",
+      "tile_names": 153,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/base_git_sha.txt",
+      "bytes": 41,
+      "sha256": "eef2fc66d97f24a8e6a2fae5df6ccbb85a22f1894c3b3714e581bf28544982de",
+      "tile_names": 1,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_code_sha256.txt",
+      "bytes": 804,
+      "sha256": "fdfdc6263e5f1a27415877a191a743682dede2895384e22cb093544b99fb8d9b",
+      "tile_names": 9,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_nvidia_smi.txt",
+      "bytes": 11287,
+      "sha256": "1ada874b1c1a392135375bbe86927a10c489f3ab41bf760234c8024b21cc9a87",
+      "tile_names": 184,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/era5_smoke_prithvi600m/control_pip_freeze.txt",
+      "bytes": 888,
+      "sha256": "ed0c99411a0f514278551d06fa1cb94473fdf064fae39c12ced7f82ecdece620",
+      "tile_names": 42,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r1/training_log.json",
+      "bytes": 235613,
+      "sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r2/training_log.json",
+      "bytes": 291234,
+      "sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r3/training_log.json",
+      "bytes": 331003,
+      "sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/clay_r4/training_log.json",
+      "bytes": 292343,
+      "sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r1/training_log.json",
+      "bytes": 225668,
+      "sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r2/training_log.json",
+      "bytes": 316190,
+      "sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r3/training_log.json",
+      "bytes": 342710,
+      "sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/croma_r4/training_log.json",
+      "bytes": 291096,
+      "sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r1/training_log.json",
+      "bytes": 225349,
+      "sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r2/training_log.json",
+      "bytes": 302990,
+      "sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r3/training_log.json",
+      "bytes": 316080,
+      "sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m4f_r4/training_log.json",
+      "bytes": 317199,
+      "sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r1/training_log.json",
+      "bytes": 244214,
+      "sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r2/training_log.json",
+      "bytes": 290509,
+      "sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r3/training_log.json",
+      "bytes": 303119,
+      "sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi300m_r4/training_log.json",
+      "bytes": 317213,
+      "sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r1/training_log.json",
+      "bytes": 216006,
+      "sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r2/training_log.json",
+      "bytes": 250431,
+      "sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r3/training_log.json",
+      "bytes": 276528,
+      "sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/prithvi600m_r4/training_log.json",
+      "bytes": 329156,
+      "sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r1/training_log.json",
+      "bytes": 253419,
+      "sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r2/training_log.json",
+      "bytes": 316753,
+      "sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r3/training_log.json",
+      "bytes": 303378,
+      "sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/terramind_r4/training_log.json",
+      "bytes": 330811,
+      "sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r1/training_log.json",
+      "bytes": 205944,
+      "sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+      "tile_names": 186,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r2/training_log.json",
+      "bytes": 288304,
+      "sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r3/training_log.json",
+      "bytes": 288178,
+      "sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+      "tile_names": 191,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/ladder/tessera_r4/training_log.json",
+      "bytes": 289201,
+      "sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/prithvi_300m_512/training_log.json",
+      "bytes": 33887,
+      "sha256": "3ad235973679154a5f961eb775f05d9de81a5f27e0e3b2aeb4ccb7c63efa547c",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind/training_log.json",
+      "bytes": 265631,
+      "sha256": "7807d0217d3a864410790f6935773d12fc09ff4798f094720e372041d1391b6a",
+      "tile_names": 173,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/terramind_v3/training_log.json",
+      "bytes": 181589,
+      "sha256": "f07ddc16574d03ce49d4f3909b4da9cdb274dc9ba507987d07fb5deff22735bb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_distill/training_log.json",
+      "bytes": 316530,
+      "sha256": "ba5b07b5972de1be88d6beb747bfa7b001c7bab345a007f18548c91b42f5382c",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/tessera_gated/training_log.json",
+      "bytes": 163386,
+      "sha256": "309e4809c7ff111c27cb6091a66a797b02df82c8978bb6d6ee1cda5d735c01a8",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_markfukt/training_log.json",
+      "bytes": 127774,
+      "sha256": "935b50a2f4218144c0d957f005e760b3bdf07bacbecd5121247f91c0ec91280b",
+      "tile_names": 161,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023/training_log.json",
+      "bytes": 166121,
+      "sha256": "911d9f47e22a216ecddd2b1e767e7f7c7f6078de3682906a3fe3949d9ae59e65",
+      "tile_names": 166,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_distill/training_log.json",
+      "bytes": 153369,
+      "sha256": "7a9779c2937e7ecbd643ba217628bd1ab9b85dcf6ad7c7a1e081bf314903edb4",
+      "tile_names": 171,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_long/training_log.json",
+      "bytes": 171339,
+      "sha256": "6acb620a8bdf96c49ec71206f3b7057c2d50f88d43dcc89ae2fa5168ccec64eb",
+      "tile_names": 192,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/checkpoints/v8b_nmd2023_tradslag/training_log.json",
+      "bytes": 140703,
+      "sha256": "c93665505d1b40a1e36a3289684f19aad5038fdaae8fc83e296c368fa0126c04",
+      "tile_names": 172,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/crop_consumer/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.MANIFEST.json",
+      "bytes": 1977,
+      "sha256": "0d4e21d01a87de203eaa04408a11210e193dabbfa12bd440cdf0659bfc6179ed",
+      "tile_names": 49,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/crop_split/lucas_crop_split.json",
+      "bytes": 787580,
+      "sha256": "8d5e65f9fcae8e8ca6ae5fd44cb3858c93052d81c04a19f89b05fbddbc58171e",
+      "tile_names": 4216,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/clay_r2_split.json",
+      "bytes": 7392,
+      "sha256": "cea694cff2dfa5c260a490b30dcce421ff0e18e052d68e0c9e8769ef009a2c81",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/croma_r2_split.json",
+      "bytes": 7349,
+      "sha256": "2deaa867e543c979b7a25e3d7f13fcb47ba7953be32916c728ba6ecf40c4c50e",
+      "tile_names": 278,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m4f_r2_split.json",
+      "bytes": 7221,
+      "sha256": "c2b44041533fe8e7aacabebececa66f59de9c282edab5e4158561841d94065ad",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi300m_r2_split.json",
+      "bytes": 7219,
+      "sha256": "c85809d64bf4ab4ce2acfc2bc846eff6b7df5f75e282408f490599dcbe690a4c",
+      "tile_names": 273,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/prithvi600m_r2_split.json",
+      "bytes": 7399,
+      "sha256": "3d4e83595b8983015635335919f26ce4072bdd7156894608910364815724217f",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/terramind_r2_split.json",
+      "bytes": 7175,
+      "sha256": "95a69581963eccf924ca2d327f42135bd6877755fbb4f210c230619e73b05750",
+      "tile_names": 271,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/heads/tessera_r2_split.json",
+      "bytes": 7395,
+      "sha256": "89251428f036f61d424a49d403f25de53055cc0937e6cd86c7dd17820224c928",
+      "tile_names": 280,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/distill/pinned_plots.json",
+      "bytes": 76482,
+      "sha256": "4fa47962b510c3e8d31d3518c1ed86e6d58d980b10223fabcdaa1a68db31f94c",
+      "tile_names": 266,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "bytes": 1336,
+      "sha256": "829b8f411941026f1ae77cf7fad2ea117a16e42a22a307546deb458e827f04ad",
+      "tile_names": 23,
+      "holdout_names_found": 0
+     },
+     {
+      "path": "/data/unified_v2_512/manifest.json",
+      "bytes": 220,
+      "sha256": "3a8c4643e4030bf1cadfb13d65f76ef7e90068038d4dbf9d49dfcd02f8921de7",
+      "tile_names": 13,
+      "holdout_names_found": 0
+     }
+    ],
+    "split_files_not_parsed": [],
+    "split_files_naming_holdout_tiles": [],
+    "visualisation_files_naming_holdout_tiles": [],
+    "teacher_feature_tables_naming_holdout_tiles": {
+     "clay": 0,
+     "croma": 0,
+     "prithvi300m": 0,
+     "prithvi300m4f": 0,
+     "prithvi600m": 0,
+     "terramind": 0,
+     "tessera": 0
+    },
+    "plot_indexes_naming_holdout_tiles": {
+     "pinned_index": 0,
+     "v4_index": 0
+    },
+    "text_files_mentioning_holdout": [
+     {
+      "path": "/data/debug/sen2cor_frame2016_nfi2022_topup_plan.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 43,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/ladder_inference/tiles.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "visualisation",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/holdout_eval_512_copy.json",
+      "mentions_holdout_dir": 1,
+      "holdout_tile_names": 0,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2022_topup_512.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 43,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2022_topup_aux_incomplete.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 43,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2022_topup_aux_pass.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 43,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2022_topup_frame2016_gaps.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 8,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2022_topup_retry.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 1,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     },
+     {
+      "path": "/data/manifests/nfi2022_topup_tessera_retry.json",
+      "mentions_holdout_dir": 0,
+      "holdout_tile_names": 6,
+      "class": "provenance_record",
+      "unaccounted_tile_names": 0
+     }
+    ],
+    "footprint": {
+     "cohort_tiles_with_geometry": 7882,
+     "holdout_tiles_overlapping_any_year_training_tile": {
+      "2022": 40
+     },
+     "holdout_tiles_overlapping_same_year_training_tile": {},
+     "training_tile_overlaps_any_year": {
+      "2022": 62
+     },
+     "training_tile_overlaps_same_year": {},
+     "excluded_same_year_overlap_names": []
+    }
+   },
+   "sizing_cross_check": {
+    "file": "/workspace/codex_sizing.json",
+    "inputs_compared": 11,
+    "input_hash_mismatches": [],
+    "teacher_feature_union_expected": 841,
+    "teacher_feature_union_here": 841,
+    "legacy_permission_errors_expected": 84,
+    "legacy_files_expected": 1463
+   }
+  }
+ },
+ "evaluation_copy_on_bar_20261013": {
+  "source": "docs/experiments/nfi_multiyear_holdout_eval_20261013.json (census of /data/holdout_eval_512)",
+  "by_year": {
+   "2018": {
+    "eligible": 489,
+    "eligible_on_bar_modalities": 389
+   },
+   "2019": {
+    "eligible": 967,
+    "eligible_on_bar_modalities": 835
+   },
+   "2020": {
+    "eligible": 1030,
+    "eligible_on_bar_modalities": 888
+   },
+   "2021": {
+    "eligible": 848,
+    "eligible_on_bar_modalities": 700
+   },
+   "2022": {
+    "eligible": 838,
+    "eligible_on_bar_modalities": 735
+   },
+   "2023": {
+    "eligible": 1234,
+    "eligible_on_bar_modalities": 1062
+   },
+   "2024": {
+    "eligible": 1396,
+    "eligible_on_bar_modalities": 1275
+   }
+  }
+ },
+ "on_bar_upper_bound_copy_plus_topup": {
+  "2018": 712,
+  "2019": 870,
+  "2021": 886,
+  "2022": 905
+ },
+ "on_bar_lower_bound_dedup": {
+  "method": "copy on bar + top-up on bar - (top-up eligible - step-3 deduplicated gain): plot-years the top-up shares with the copy count once at most",
+  "step3_gained": {
+   "2018": 337,
+   "2019": 34,
+   "2021": 153,
+   "2022": 141
+  },
+  "by_year": {
+   "2018": 600,
+   "2019": 858,
+   "2021": 829,
+   "2022": 851
+  }
+ },
+ "dry_run_3_baseline": {
+  "date": "2026-10-22",
+  "session": "Foundation [7c9c49]",
+  "evidence_dir": "~/.agents/continuity/evidence/ImintEngine/nfi-topup-aux-pass-dryrun3/",
+  "jobs": {
+   "nfi-topup-mosaic-probe": {
+    "pod": "nfi-topup-mosaic-probe-pjrss",
+    "log_sha256": "7e8370ce88291acbf058f847c505aa2c66a05112ec87d6b52d51d0fb38802245"
+   },
+   "nfi-topup-impact-probe": {
+    "pod": "nfi-topup-impact-probe-ckwgg",
+    "log_sha256": "21f52920f0b078bf4b5438b3ddb3b0321544013946890b02f53f662ec5a4ec5b"
+   }
+  }
+ },
+ "mosaic_windows": {
+  "path": "/data/manifests/nfi_topup_mosaic_windows_20261022.json",
+  "sha256": "e33ddf7431555ba50e611c5f66e2e2e75ddae05f7c9433f59b4dd1393c2cad65",
+  "note": "seven top-up tile origins; on the PVC only. The runs had them inline in the Job; the committed probe reads this file."
+ }
+}
