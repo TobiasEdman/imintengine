@@ -148,6 +148,15 @@ def teacher_sidecar_inventory(directory: Path, expected: set[str], head_sha: str
             "missing_tiles": missing, "head_sha": head_sha, "files": records}
 
 
+def readiness_error_reason(exc: ValueError) -> str:
+    """A tile_readiness error as an exclusion reason, without its path.
+
+    Every raise in tile_readiness reads "<message>: <path>"; the report
+    holds no tile names, so only the message is kept.
+    """
+    return "readiness_error:" + str(exc).split(": ")[0]
+
+
 def tile_readiness(path: Path) -> tuple[dict, str | None]:
     """Read data prerequisites before inference; all decisions ignore scores."""
     keys = npz_key_names(path)
@@ -785,10 +794,11 @@ def main() -> None:
         try:
             meta, reason = tile_readiness(paths[name])
         except ValueError as exc:
-            if not args.report_only:
+            # Only a report, and only for evaluation tiles (Tobias 2026-10-26);
+            # a cohort tile that fails here stays fatal.
+            if not args.report_only or name not in evaluation_names:
                 raise
-            # Recorded without its path: the report holds no tile names.
-            meta, reason = None, "readiness_error:" + str(exc).split(": ")[0]
+            meta, reason = {}, readiness_error_reason(exc)
         if reason:
             excluded[name] = reason
         else:
