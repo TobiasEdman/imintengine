@@ -453,7 +453,8 @@ EMPTY_SUPPORT = frozenset({"no eligible observations with common input support",
 def mean_filled_absent_only(failures: list[str], nan_channels: set[str]) -> bool:
     """True when every aux failure is an absent channel that training fills with
     its mean: a NaN-nodata channel (height, markfukt). Training zero-fills any
-    other absent channel, which lands far from its mean after normalization."""
+    other absent channel; after normalization that is far from the mean for
+    most of them (dem, the forestry layers)."""
     return bool(failures) and all(
         reason == "missing" and name in nan_channels
         for name, _, reason in (failure.rpartition(":") for failure in failures))

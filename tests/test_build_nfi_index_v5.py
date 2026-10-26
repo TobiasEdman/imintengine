@@ -84,6 +84,20 @@ def test_an_output_that_appears_during_the_build_is_never_overwritten(layout, mo
     assert not layout["out"].with_suffix(".json").exists()
 
 
+def test_a_sidecar_that_appears_during_the_build_is_never_overwritten(layout, monkeypatch):
+    original = v5.build
+
+    def build_then_race(*args):
+        result = original(*args)
+        layout["out"].parent.mkdir(parents=True, exist_ok=True)
+        layout["out"].with_suffix(".json").write_text("another writer")
+        return result
+    monkeypatch.setattr(v5, "build", build_then_race)
+    with pytest.raises(FileExistsError):
+        v5.main(_argv(layout, ("holdout_copy", "copy")))
+    assert layout["out"].with_suffix(".json").read_text() == "another writer"
+
+
 def test_a_tile_name_in_two_roots_is_refused(layout):
     _tile(layout["cohort"] / "h2024.npz", 2024)
     with pytest.raises(SystemExit, match="h2024 is in roots cohort and holdout_copy"):

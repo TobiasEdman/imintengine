@@ -250,7 +250,8 @@ def _support_report(text):
 
 
 def _files(root):
-    return {p: p.stat().st_mtime_ns for p in root.rglob("*") if p.is_file()}
+    """Every path and its mtime, directories included."""
+    return {p: p.stat().st_mtime_ns for p in root.rglob("*")}
 
 
 def _add_evaluation_root(prepared_inputs, tiles):
@@ -284,6 +285,10 @@ def test_report_only_prints_every_variant_and_writes_nothing(prepared_inputs, mo
         "full": _with(**BASELINE_2016),
         "nodem": _without("dem"),   # dem is zero-filled by training, never mean-filled
     })
+    # A second plot-year on "full", outside the NMD raster: dropped by coverage.
+    frame = pd.read_parquet(prepared_inputs["plot-index"])
+    outside = frame.loc[frame.tile_name == "full"].assign(TractID=99, Easting=600000.)
+    pd.concat([frame, outside]).to_parquet(prepared_inputs["plot-index"], index=False)
     monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv) + ["--evaluation-root", f"topup:2024:{root}"])
     before = _files(prepared_inputs["out-dir"].parent)
     prep.main()
@@ -293,7 +298,10 @@ def test_report_only_prints_every_variant_and_writes_nothing(prepared_inputs, mo
     assert v["freeze"]["year_support"] == {"2024": 2}
     assert v["freeze"]["role_year_support"] == {"campaign": {"2024": 1}, "topup": {"2024": 1}}
     assert v["freeze"]["frame_2016_by_year"] == {"2024": {"present": 1, "absent": 1}}
+    # Selection counts are after NMD coverage, as in the freeze manifest.
     assert v["freeze"]["selection"]["observations"] == 2
+    assert v["freeze"]["selection"]["pre_nmd_coverage_observations"] == 3
+    assert v["freeze"]["selection"]["tile_role_support"] == {"campaign": 1, "topup": 1}
     assert v["absent_aux_mean_fill"]["year_support"] == {"2024": 2}
     assert v["freeze_with_frame_2016"]["role_year_support"] == {"topup": {"2024": 1}}
     assert report["excluded_evaluation_tiles"] == {"topup": {"auxiliary_gaps:dem:missing": 1}}
