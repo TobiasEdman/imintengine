@@ -586,11 +586,10 @@ def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: l
     Counts are after NMD coverage, as in the freeze manifest's selection.
     """
     candidates = set(frame_2016)   # admitted + mean-filled evaluation tiles (main)
-    frame_ok = frame_2016
     variants = {
         "freeze": metadata,
         "absent_aux_mean_fill": {**metadata, **absent_mean_filled},
-        "freeze_with_frame_2016": {n: m for n, m in metadata.items() if n not in evaluation_names or frame_ok[n]},
+        "freeze_with_frame_2016": {n: m for n, m in metadata.items() if n not in evaluation_names or frame_2016[n]},
     }
     excluded_by_role: dict[str, Counter] = {}
     for name, reason in excluded.items():
@@ -603,7 +602,7 @@ def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: l
         admitted = dict(Counter(roles[name] for name in tiles if name in evaluation_names))
         try:
             holdout, counts = select_holdout(index, training, tiles, footprints=footprints,
-                                             frame_2016=frame_ok)
+                                             frame_2016=frame_2016)
             holdout, coverage = filter_nmd_coverage(holdout, baselines, model_python)
         except ValueError as exc:
             # A variant may legitimately have no support; any other failure stays fatal.
@@ -616,7 +615,7 @@ def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: l
             raise ValueError("support selected a tile outside the evaluation roots")
         counts.update(coverage, observations=len(holdout))
         counts["tile_role_support"] = {str(r): int(n) for r, n in holdout["tile_role"].value_counts().items()}
-        report["variants"][label] = dict(support_summary(holdout, frame_ok), selection=counts,
+        report["variants"][label] = dict(support_summary(holdout, frame_2016), selection=counts,
                                          admitted_tiles_by_role=admitted)
     return report
 
