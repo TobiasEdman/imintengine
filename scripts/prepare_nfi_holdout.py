@@ -67,6 +67,18 @@ def check_promotion(job: dict, report: dict, cohort_count: int) -> None:
         raise ValueError("promotion report lacks complete, clean v2 coverage")
 
 
+def promotion_gate(job: dict, report: dict, cohort_count: int) -> dict:
+    """check_promotion as a recorded outcome. The freeze raises on a failed
+    gate; a support report records it and continues (Tobias 2026-10-26: nine
+    cohort tiles have no Tessera v2, so the report can never be fully clean)."""
+    try:
+        check_promotion(job, report, cohort_count)
+    except ValueError as exc:
+        counters = {k: report[k] for k in ("verify", "states") if isinstance(report.get(k), dict)}
+        return {"passed": False, "reason": str(exc), "cohort_tiles": cohort_count, **counters}
+    return {"passed": True, "cohort_tiles": cohort_count}
+
+
 def teacher_training_set(
     features: pd.DataFrame, split: dict, source_index: pd.DataFrame,
     staging_names: set[str],
@@ -674,8 +686,10 @@ def main() -> None:
     for path in [args.plot_index, args.teacher_index, args.promotion_job_json,
                  args.promotion_report, args.nmd2023] + ([args.nmd2018] if args.nmd2018 else []):
         capture(path)
-    check_promotion(read_input(args.promotion_job_json, "json"),
-                    read_input(args.promotion_report, "json"), len(cohort))
+    gate = promotion_gate(read_input(args.promotion_job_json, "json"),
+                          read_input(args.promotion_report, "json"), len(cohort))
+    if not gate["passed"] and not args.report_only:
+        raise ValueError(gate["reason"])
     index = read_input(args.plot_index, "parquet")
     source = read_input(args.teacher_index, "parquet")
     if not set(index["tile_name"].astype(str)) <= set(paths):
@@ -781,6 +795,7 @@ def main() -> None:
             absent_mean_filled=absent_mean_filled, excluded=excluded, roles=roles,
             evaluation_names=evaluation_names, paths=paths, baselines=baselines,
             model_python=model_python, evaluation_roots=evaluation_roots)
+        report["promotion_gate"] = gate
         for path in list(input_stats):   # the frame_2016 reads come after the captures
             capture(path)
         print("=== SUPPORT_REPORT_BEGIN ===", json.dumps(report, indent=2),
