@@ -1,0 +1,87 @@
+---
+# NFI plot index v5 (task 0117, step 4 of docs/ops/nfi_multiyear_control_tiles_plan.md).
+#
+# Colocates the NFI plots, year-exact, onto every root the freeze declares:
+# the training cohort (exclusion only), the nfi2024 campaign, the evaluation
+# copy and the four top-up staging roots. scripts/build_nfi_index_v5.py fails
+# on an unreadable tile or a tile name in two roots, lists roots as the
+# freeze does, and never overwrites. Rows and columns are index v4's.
+#
+# The only write is the new index and its JSON sidecar under /data/nfi/
+# (Tobias 2026-10-24: "Yes, write it as a new file"), created exclusively.
+# The PVC is mounted read-only except the nfi/ subPath. The sidecar holds
+# aggregates and hashes only; the log prints it.
+#
+# Code pin: IMINT_COMMIT (full sha) and BUILDER_SHA256 (sha256 of the script
+# at that commit); the pod refuses to run if either check fails.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-index-v5
+  namespace: prithvi-training-default
+  labels: {app: fieldtruth-prep, purpose: nfi-index-v5}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: fieldtruth-prep}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # p02r09srv04 + srv06 fail pod-sandbox creation (runc bug)
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: index
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              echo "=== nfi-index-v5 — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libexpat1 >/dev/null 2>&1
+              pip install -q --no-cache-dir numpy pandas pyarrow rasterio
+              mkdir -p /workspace && cd /workspace
+              git init -q ie && cd ie
+              git fetch -q --depth 1 https://github.com/TobiasEdman/ImintEngine.git "${IMINT_COMMIT}"
+              git checkout -q FETCH_HEAD
+              export IMINT_GIT_SHA="$(git rev-parse HEAD)"
+              test "${IMINT_GIT_SHA}" = "${IMINT_COMMIT}"
+              echo "${BUILDER_SHA256}  scripts/build_nfi_index_v5.py" | sha256sum -c -
+              echo "HEAD: ${IMINT_GIT_SHA}"
+              # colocate_plots imports rasterio lazily, so --help alone would not prove it
+              python scripts/build_nfi_index_v5.py --help > /dev/null
+              python -c "import rasterio.transform" && echo "imports OK"
+              python scripts/build_nfi_index_v5.py --nfi-dir /data/nfi \
+                --root cohort:/data/unified_v2_512 \
+                --root campaign:/data/unified_v2_512_nfi2024_staging \
+                --root holdout_copy:/data/holdout_eval_512 \
+                --root topup2018:/data/unified_v2_512_nfi2018_staging \
+                --root topup2019:/data/unified_v2_512_nfi2019_staging \
+                --root topup2021:/data/unified_v2_512_nfi2021_staging \
+                --root topup2022:/data/unified_v2_512_nfi2022_staging \
+                --out "${INDEX_OUT}"
+              echo "=== done: $(date -u) ==="
+          env:
+            - {name: IMINT_COMMIT, value: "8e66e2b9fa893043a6db0620fe5bd9ef88a683ec"}
+            - {name: BUILDER_SHA256, value: "fdc1c1c31c75ea8000db6baf62c7024aa099c1741e2dcdf9cde9de9e73da7e9f"}
+            - {name: INDEX_OUT, value: "/data/nfi/nfi_index_v5_2026-10-24.parquet"}
+          resources:
+            requests: {cpu: "2", memory: "8Gi"}
+            limits: {cpu: "2", memory: "8Gi"}
+          volumeMounts:
+            # Everything read-only except /data/nfi, the one directory written.
+            - {name: d, mountPath: /data, readOnly: true}
+            - {name: d, mountPath: /data/nfi, subPath: nfi}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}

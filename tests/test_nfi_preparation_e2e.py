@@ -1,6 +1,7 @@
 """Synthetic CPU preparation through main, including real checkpoint meta loads."""
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import numpy as np
@@ -234,3 +235,193 @@ def test_evaluation_root_name_collision_is_rejected_early(prepared_inputs, monke
     with pytest.raises(ValueError, match="globally unique tile names"):
         prep.main()
     assert not prepared_inputs["out-dir"].exists()
+
+
+def _report_only_argv(argv):
+    """Drop --out-dir; report-only must never be given one."""
+    argv = list(argv)
+    i = argv.index("--out-dir"); del argv[i:i+2]
+    return argv + ["--report-only"]
+
+
+def _support_report(text):
+    begin, end = "=== SUPPORT_REPORT_BEGIN ===\n", "\n=== SUPPORT_REPORT_END ==="
+    return json.loads(text[text.index(begin) + len(begin):text.index(end)])
+
+
+def _files(root):
+    """Every path and its mtime, directories included."""
+    return {p: p.stat().st_mtime_ns for p in root.rglob("*")}
+
+
+def _add_evaluation_root(prepared_inputs, tiles):
+    """A topup:2024 root of campaign000 variants, one indexed plot-year each."""
+    root = prepared_inputs["out-dir"].parent / "topup2024"
+    root.mkdir()
+    with np.load(prepared_inputs["staging-dir"] / "campaign000.npz", allow_pickle=False) as tile:
+        base = dict(tile)
+    frame = pd.read_parquet(prepared_inputs["plot-index"])
+    rows = []
+    for tract, (name, change) in enumerate(tiles.items(), start=5):
+        np.savez(root / f"{name}.npz", **change(dict(base)))
+        rows.append(frame.iloc[[2]].assign(TractID=tract, tile_name=name))
+    pd.concat([frame, *rows]).to_parquet(prepared_inputs["plot-index"], index=False)
+    return root
+
+
+def _with(**arrays):
+    return lambda data: {**data, **arrays}
+
+
+def _without(*names, **arrays):
+    return lambda data: {**{k: v for k, v in data.items() if k not in names}, **arrays}
+
+
+BASELINE_2016 = dict(has_frame_2016=1, frame_2016=np.ones((6, 8, 8)), s1_vv_vh_2016=np.ones((2, 8, 8)))
+
+
+def test_report_only_prints_every_variant_and_writes_nothing(prepared_inputs, monkeypatch, capsys):
+    root = _add_evaluation_root(prepared_inputs, {
+        "full": _with(**BASELINE_2016),
+        "nodem": _without("dem"),   # dem is zero-filled by training, never mean-filled
+    })
+    # A second plot-year on "full", outside the NMD raster: dropped by coverage.
+    frame = pd.read_parquet(prepared_inputs["plot-index"])
+    outside = frame.loc[frame.tile_name == "full"].assign(TractID=99, Easting=600000.)
+    pd.concat([frame, outside]).to_parquet(prepared_inputs["plot-index"], index=False)
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv) + ["--evaluation-root", f"topup:2024:{root}"])
+    before = _files(prepared_inputs["out-dir"].parent)
+    prep.main()
+    assert _files(prepared_inputs["out-dir"].parent) == before
+    report = _support_report(capsys.readouterr().out)
+    v = report["variants"]
+    assert v["freeze"]["year_support"] == {"2024": 2}
+    assert v["freeze"]["role_year_support"] == {"campaign": {"2024": 1}, "topup": {"2024": 1}}
+    assert v["freeze"]["frame_2016_by_year"] == {"2024": {"present": 1, "absent": 1}}
+    # Selection counts are after NMD coverage, as in the freeze manifest.
+    assert v["freeze"]["selection"]["observations"] == 2
+    assert v["freeze"]["selection"]["pre_nmd_coverage_observations"] == 3
+    assert v["freeze"]["selection"]["tile_role_support"] == {"campaign": 1, "topup": 1}
+    assert v["absent_aux_mean_fill"]["year_support"] == {"2024": 2}
+    assert v["freeze_with_frame_2016"]["role_year_support"] == {"topup": {"2024": 1}}
+    assert report["excluded_evaluation_tiles"] == {"topup": {"auxiliary_gaps:dem:missing": 1}}
+    assert [r["tiles"] for r in report["evaluation_roots"]] == [475, 2]
+    # Aggregates only: no tile name or plot identity leaves the data environment.
+    text = json.dumps(report)
+    assert not any(name in text for name in ("campaign000", "full.npz", "nodem", "TractID"))
+
+
+def test_report_only_mean_fills_only_absent_nan_nodata_channels(prepared_inputs, monkeypatch, capsys):
+    """height is a NaN-nodata channel: absent, training fills it with its mean.
+    dem is not: absent, training zero-fills it, so the tile stays out."""
+    for checkpoint in prepared_inputs["checkpoint-root"].glob("*/best_model.pt"):
+        torch.save({"config": {"n_aux_channels": 2, "enabled_aux_names": ["dem", "height"]},
+                    "model_state_dict": {"lidar_branch.net.0.conv.weight": torch.zeros(2, 2, 3, 3)}}, checkpoint)
+    height = np.ones((8, 8))
+    with np.load(prepared_inputs["staging-dir"] / "campaign000.npz", allow_pickle=False) as tile:
+        np.savez(prepared_inputs["staging-dir"] / "campaign000.npz", **dict(tile), height=height)
+    # The base tile (campaign000) now carries height.
+    root = _add_evaluation_root(prepared_inputs, {
+        "full": _with(**BASELINE_2016),
+        "flag0": _with(**dict(BASELINE_2016, has_frame_2016=0)),
+        "s1zero": _with(**dict(BASELINE_2016, s1_vv_vh_2016=np.zeros((2, 8, 8)))),
+        "noheight": _without("height"),
+        "nodem": _without("dem"),
+        "nodem_noheight": _without("dem", "height"),
+        "badheight": _with(height=np.ones((4, 4))),
+    })
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv) + ["--evaluation-root", f"topup:2024:{root}"])
+    prep.main()
+    report = _support_report(capsys.readouterr().out)
+    v = report["variants"]
+    assert v["freeze"]["role_year_support"] == {"campaign": {"2024": 1}, "topup": {"2024": 3}}
+    assert v["freeze"]["frame_2016_by_year"] == {"2024": {"present": 1, "absent": 3}}
+    assert v["absent_aux_mean_fill"]["role_year_support"] == {"campaign": {"2024": 1}, "topup": {"2024": 4}}
+    # The 474 other campaign tiles lack height: mean-filled, not admitted by the freeze.
+    assert v["freeze"]["admitted_tiles_by_role"]["campaign"] == 1
+    assert v["absent_aux_mean_fill"]["admitted_tiles_by_role"]["campaign"] == 475
+    assert v["freeze_with_frame_2016"]["role_year_support"] == {"topup": {"2024": 1}}
+    assert report["excluded_evaluation_tiles"]["topup"] == {
+        "auxiliary_gaps:height:missing": 1, "auxiliary_gaps:dem:missing": 1,
+        "auxiliary_gaps:dem:missing,height:missing": 1, "auxiliary_gaps:height:invalid_shape_or_dtype": 1}
+
+
+def test_report_only_reports_an_empty_variant_instead_of_failing(prepared_inputs, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    prep.main()
+    v = _support_report(capsys.readouterr().out)["variants"]
+    assert v["freeze"]["observations"] == 1
+    assert v["freeze_with_frame_2016"] == {"observations": 0, "admitted_tiles_by_role": {},
+                                           "empty_support": "no eligible observations with common input support"}
+
+
+def test_report_only_does_not_swallow_other_selection_errors(prepared_inputs, monkeypatch, capsys):
+    def mismatch(*args, **kwargs):
+        raise ValueError("NFI observation year differs from spectral year: x")
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
+    monkeypatch.setattr(prep, "select_holdout", mismatch)
+    with pytest.raises(ValueError, match="observation year differs"):
+        prep.main()
+    assert "SUPPORT_REPORT_BEGIN" not in capsys.readouterr().out
+
+
+def test_report_only_refuses_a_tile_changed_during_the_report(prepared_inputs, monkeypatch, capsys):
+    root = _add_evaluation_root(prepared_inputs, {"full": _with(**BASELINE_2016)})
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv) + ["--evaluation-root", f"topup:2024:{root}"])
+    original = prep.frame_2016_on_bar
+
+    def read_then_touch(path):
+        result = original(path)
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+        return result
+    monkeypatch.setattr(prep, "frame_2016_on_bar", read_then_touch)
+    with pytest.raises(ValueError, match="input changed during holdout preparation"):
+        prep.main()
+    assert "SUPPORT_REPORT_BEGIN" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("failures, admitted", [
+    (["height:missing"], True),
+    (["height:missing", "markfukt:missing"], True),
+    (["dem:missing"], False),
+    (["dem:missing", "height:missing"], False),
+    (["height:missing", "dem:invalid_shape_or_dtype"], False),
+    (["height:nonfinite"], False),
+    ([], False),
+])
+def test_mean_fill_admits_only_absent_nan_nodata_channels(failures, admitted):
+    assert prep.mean_filled_absent_only(failures, {"height", "markfukt"}) is admitted
+
+
+@pytest.mark.parametrize("arrays, on_bar", [
+    (BASELINE_2016, True),
+    (dict(BASELINE_2016, has_frame_2016=0), False),
+    (dict(BASELINE_2016, s1_vv_vh_2016=np.zeros((2, 8, 8))), False),
+    (dict(BASELINE_2016, frame_2016=np.zeros((6, 8, 8))), False),
+    ({k: v for k, v in BASELINE_2016.items() if k != "frame_2016"}, False),
+    ({k: v for k, v in BASELINE_2016.items() if k != "s1_vv_vh_2016"}, False),
+])
+def test_frame_2016_on_bar_mirrors_the_census(tmp_path, arrays, on_bar):
+    path = tmp_path / "t.npz"
+    np.savez(path, **arrays)
+    assert prep.frame_2016_on_bar(path) is on_bar
+
+
+@pytest.mark.parametrize("extra, message", [
+    (["--population", "balanced", "--inventory-years", "2023", "2024", "--observations-per-year", "1"],
+     "requires --population all"),
+    (["--out-dir", "/never/created"], "requires --population all and no --out-dir"),
+])
+def test_report_only_refuses_quotas_and_outputs_before_any_read(prepared_inputs, monkeypatch, extra, message):
+    monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv) + extra)
+    monkeypatch.setattr(prep, "preparation_runtime", lambda *a: pytest.fail("runtime read before validation"))
+    with pytest.raises(ValueError, match=message):
+        prep.main()
+
+
+def test_freeze_still_requires_an_out_dir(prepared_inputs, monkeypatch):
+    argv = list(sys.argv); i = argv.index("--out-dir"); del argv[i:i+2]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(ValueError, match="--out-dir is required"):
+        prep.main()
