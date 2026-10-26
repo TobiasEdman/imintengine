@@ -37,8 +37,13 @@ from scripts.crop_distill_provenance import (
 )
 
 
-def check_promotion(job: dict, report: dict, cohort_count: int) -> None:
-    """Counter reports omit zero-valued FLAG_ON_EMPTY; require full coverage."""
+def check_promotion(job: dict, report: dict, cohort_count: int, no_v2_excepted: int = 0) -> None:
+    """Counter reports omit zero-valued FLAG_ON_EMPTY; require full coverage.
+
+    no_v2_excepted is the number of cohort tiles a reviewed exceptions file
+    lists as having no Tessera v2 (verified unpromoted by the caller): the
+    report must count exactly those as no_v2 and every other tile promoted.
+    """
     status = job.get("status", {})
     complete = any(c.get("type") == "Complete" and c.get("status") == "True"
                    for c in status.get("conditions", []))
@@ -55,19 +60,47 @@ def check_promotion(job: dict, report: dict, cohort_count: int) -> None:
     for counters in (verify, states):
         if any(type(v) is not int or v < 0 for v in counters.values()):
             raise ValueError("promotion counters must be nonnegative integers")
+    promoted = cohort_count - no_v2_excepted
     if (report.get("source") != "geotessera-0.10.2"
-            or not cohort_count
-            or verify.get("has_v1") != cohort_count
-            or verify.get("stamped") != cohort_count
+            or not cohort_count or not 0 <= no_v2_excepted < cohort_count
+            or verify.get("has_v1") != promoted
+            or verify.get("stamped") != promoted
             or verify.get("FLAG_ON_EMPTY", 0) != 0
             or verify["has_v2_left"] != 0
-            or states.get("promoted", 0) + states.get("already", 0) != cohort_count
+            or states.get("promoted", 0) + states.get("already", 0) != promoted
             or states.get("unreadable", 0) != 0
-            or states.get("no_v2", 0) != 0):
+            or states.get("no_v2", 0) != no_v2_excepted):
         raise ValueError("promotion report lacks complete, clean v2 coverage")
 
 
-def promotion_gate(job: dict, report: dict, cohort_count: int) -> dict:
+EXCEPTIONS_SCHEMA = "nfi-freeze-exceptions/1"
+
+
+def validate_exceptions(exceptions: dict, cohort: dict[str, Path]) -> None:
+    """A reviewed list of known gaps the freeze accepts; anything unlisted stays fatal.
+
+    promotion_no_v2: cohort tiles with no Tessera v2 at promotion, each verified
+    unpromoted here. sidecars_missing: per teacher, cohort tiles without a
+    sidecar. Every entry needs a nonempty reason.
+    """
+    if (exceptions.get("schema") != EXCEPTIONS_SCHEMA
+            or set(exceptions) - {"schema", "decided", "promotion_no_v2", "sidecars_missing"}):
+        raise ValueError("unsupported freeze exceptions file")
+    groups = [exceptions.get("promotion_no_v2", {}), *exceptions.get("sidecars_missing", {}).values()]
+    if (not isinstance(exceptions.get("sidecars_missing", {}), dict)
+            or set(exceptions.get("sidecars_missing", {})) - set(DISTILL)):
+        raise ValueError("freeze exceptions name an unknown teacher")
+    for group in groups:
+        if (not isinstance(group, dict) or set(group) - set(cohort)
+                or any(not isinstance(r, str) or not r.strip() for r in group.values())):
+            raise ValueError("freeze exceptions need cohort tiles with nonempty reasons")
+    for name in exceptions.get("promotion_no_v2", {}):
+        with np.load(cohort[name], allow_pickle=False) as data:
+            if str(data.get("tessera_source", "")) == "geotessera-0.10.2":
+                raise ValueError("a promotion exception lists a promoted tile")
+
+
+def promotion_gate(job: dict, report: dict, cohort_count: int, no_v2_excepted: int = 0) -> dict:
     """check_promotion as a recorded outcome. The freeze raises on a failed
     gate; a support report records it and continues (Tobias 2026-10-26: nine
     cohort tiles have no Tessera v2, so the report can never be fully clean)."""
@@ -75,7 +108,7 @@ def promotion_gate(job: dict, report: dict, cohort_count: int) -> dict:
     counters = {k: {name: v for name, v in report[k].items() if type(v) is int}
                 for k in ("verify", "states") if isinstance(report.get(k), dict)}
     try:
-        check_promotion(job, report, cohort_count)
+        check_promotion(job, report, cohort_count, no_v2_excepted)
     except ValueError as exc:
         return {"passed": False, "reason": str(exc), "cohort_tiles": cohort_count, **counters}
     return {"passed": True, "cohort_tiles": cohort_count, **counters}
@@ -121,7 +154,8 @@ def teacher_head_metadata(payload: bytes, split: dict, features: pd.DataFrame) -
 
 
 def teacher_sidecar_inventory(directory: Path, expected: set[str], head_sha: str,
-                              staging: set[str], *, allow_missing: bool = False) -> dict:
+                              staging: set[str], *, allow_missing: bool = False,
+                              excepted: frozenset[str] = frozenset()) -> dict:
     """Authenticate all dense-label files, including tiles without NFI plots.
 
     allow_missing (support reports only) records expected tiles without a
@@ -129,7 +163,12 @@ def teacher_sidecar_inventory(directory: Path, expected: set[str], head_sha: str
     stamps stay fatal in every mode.
     """
     paths = {p.stem: p for p in directory.glob("*.npz")}
-    missing = len(expected - set(paths))
+    absent = expected - set(paths)
+    # A reviewed exception must name an expected tile that really lacks its sidecar.
+    if excepted - absent:
+        raise ValueError(f"sidecar exception for a tile that is not missing in {directory}: "
+                         f"{len(excepted - absent)}")
+    missing = len(absent - excepted)
     if not expected or (missing and not allow_missing):
         raise ValueError(f"missing teacher sidecars in {directory}: {missing}")
     if set(paths) & staging:
@@ -145,7 +184,8 @@ def teacher_sidecar_inventory(directory: Path, expected: set[str], head_sha: str
         records[name] = {"path": str(path.resolve()), "bytes": len(payload),
                          "sha256": hashlib.sha256(payload).hexdigest()}
     return {"expected_tiles": len(expected), "verified_tiles": len(records),
-            "missing_tiles": missing, "head_sha": head_sha, "files": records}
+            "missing_tiles": missing, "excepted_tiles": len(excepted),
+            "head_sha": head_sha, "files": records}
 
 
 def readiness_error_reason(exc: ValueError) -> str:
@@ -376,7 +416,11 @@ def exclude_training_footprints(index: pd.DataFrame, footprints: list[dict]) -> 
 def select_holdout(
     index: pd.DataFrame, training: pd.DataFrame, tile_meta: dict,
     *, footprints: list[dict] | None = None, campaign_only: bool = False,
+    frame_2016: dict[str, bool] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
+    """One tile per plot-year: the campaign tile first, then a tile carrying the
+    2016 frame and 2016 SAR (``frame_2016``, Tobias 2026-10-26), then by name.
+    The order depends only on which inputs exist, never on truth or scores."""
     require_columns(index, NFI_KEY + ["tile_name", "row", "col"])
     if index.duplicated(NFI_KEY + ["tile_name"]).any():
         raise ValueError("duplicate plot-year/tile in the NFI index")
@@ -414,13 +458,17 @@ def select_holdout(
     if not candidates:
         raise ValueError("no eligible observations with common input support")
     paired = pd.concat(candidates)
+    frame = frame_2016 or {}
+    paired["_frame_priority"] = paired["tile_name"].astype(str).map(lambda n: 0 if frame.get(n) else 1)
     if "tile_role" in paired:
         paired["_tile_priority"] = paired["tile_role"].map(lambda role: 0 if role == "campaign" else 1)
         if paired["_tile_priority"].isna().any():
             raise ValueError("unknown tile role")
-        paired = paired.sort_values(NFI_KEY + ["_tile_priority", "tile_name"]).drop(columns="_tile_priority")
+        order = ["_tile_priority", "_frame_priority", "tile_name"]
     else:
-        paired = paired.sort_values(NFI_KEY + ["tile_name"])
+        order = ["_frame_priority", "tile_name"]
+    paired = (paired.sort_values(NFI_KEY + order)
+              .drop(columns=[c for c in ("_tile_priority", "_frame_priority") if c in paired]))
     holdout = paired.drop_duplicates(NFI_KEY).reset_index(drop=True)
     if holdout.empty:
         raise ValueError("holdout is empty")
@@ -516,7 +564,7 @@ def support_summary(holdout: pd.DataFrame, frame_ok: dict[str, bool]) -> dict:
 
 def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: list[dict],
                    metadata: dict, absent_mean_filled: dict, excluded: dict[str, str],
-                   roles: dict[str, str], evaluation_names: set[str], paths: dict[str, Path],
+                   roles: dict[str, str], evaluation_names: set[str], frame_2016: dict[str, bool],
                    baselines: dict[str, Path], model_python: str, evaluation_roots: list[dict]) -> dict:
     """Per-year support before any quota exists; reads only, writes nothing.
 
@@ -530,7 +578,7 @@ def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: l
     Counts are after NMD coverage, as in the freeze manifest's selection.
     """
     candidates = (set(metadata) | set(absent_mean_filled)) & evaluation_names
-    frame_ok = {name: frame_2016_on_bar(paths[name]) for name in sorted(candidates)}
+    frame_ok = frame_2016
     variants = {
         "freeze": metadata,
         "absent_aux_mean_fill": {**metadata, **absent_mean_filled},
@@ -546,7 +594,8 @@ def support_report(index: pd.DataFrame, training: pd.DataFrame, *, footprints: l
     for label, tiles in variants.items():
         admitted = dict(Counter(roles[name] for name in tiles if name in evaluation_names))
         try:
-            holdout, counts = select_holdout(index, training, tiles, footprints=footprints)
+            holdout, counts = select_holdout(index, training, tiles, footprints=footprints,
+                                             frame_2016=frame_ok)
             holdout, coverage = filter_nmd_coverage(holdout, baselines, model_python)
         except ValueError as exc:
             # A variant may legitimately have no support; any other failure stays fatal.
@@ -627,6 +676,8 @@ def main() -> None:
     ap.add_argument("--report-only", action="store_true",
                     help="print per-year support under the freeze's rules and its report variants; write nothing")
     ap.add_argument("--nmd2018", type=Path)
+    ap.add_argument("--exceptions", type=Path,
+                    help="reviewed freeze exceptions (config/nfi_freeze_exceptions.json)")
     ap.add_argument("--evaluation-root", type=parse_evaluation_root, action="append", default=[],
                     help="repeat ROLE:YEAR:PATH; use any for a mixed-year root")
     ap.add_argument("--population", choices=("balanced", "all", "campaign"), default="balanced",
@@ -703,8 +754,14 @@ def main() -> None:
     for path in [args.plot_index, args.teacher_index, args.promotion_job_json,
                  args.promotion_report, args.nmd2023] + ([args.nmd2018] if args.nmd2018 else []):
         capture(path)
+    exceptions = {"schema": EXCEPTIONS_SCHEMA, "promotion_no_v2": {}, "sidecars_missing": {}}
+    if args.exceptions:
+        capture(args.exceptions)
+        exceptions = dict(exceptions, **read_input(args.exceptions, "json"))
+        validate_exceptions(exceptions, cohort)
     gate = promotion_gate(read_input(args.promotion_job_json, "json"),
-                          read_input(args.promotion_report, "json"), len(cohort))
+                          read_input(args.promotion_report, "json"), len(cohort),
+                          len(exceptions["promotion_no_v2"]))
     if not gate["passed"] and not args.report_only:
         raise ValueError(gate["reason"])
     index = read_input(args.plot_index, "parquet")
@@ -722,6 +779,8 @@ def main() -> None:
               args.promotion_report, args.nmd2023]
     if args.nmd2018:
         inputs.append(args.nmd2018)
+    if args.exceptions:
+        inputs.append(args.exceptions)
     trained, exposure = [], []
     teacher_provenance = {}
     campaign_training_names = set()
@@ -755,8 +814,9 @@ def main() -> None:
         directory = args.distill_root / f"{model}_r2"
         for path in directory.glob("*.npz"):
             capture(path)
-        sidecars = teacher_sidecar_inventory(directory, expected, head["sidecar_head_sha"], evaluation_names,
-                                             allow_missing=args.report_only)
+        sidecars = teacher_sidecar_inventory(
+            directory, expected, head["sidecar_head_sha"], evaluation_names, allow_missing=args.report_only,
+            excepted=frozenset(exceptions["sidecars_missing"].get(model, {})))
         teacher_provenance[model] = {"head": head, "sidecars": sidecars,
                                    "historical_split_digest_available": False}
         inputs.extend([features, split, head_path])
@@ -814,16 +874,24 @@ def main() -> None:
     if args.nmd2018:
         baselines["NMD2018"] = args.nmd2018
     model_python = runtime["environments"]["model"]["python"]["path"]
+    # The 2016 baseline per admitted evaluation tile: the tie-break prefers it,
+    # and every frozen plot-year records it for stratified results.
+    frame_2016 = {name: frame_2016_on_bar(paths[name])
+                  for name in sorted((set(metadata) | set(absent_mean_filled)) & evaluation_names)}
     if args.report_only:
         report = support_report(
             index, training, footprints=footprints, metadata=metadata,
             absent_mean_filled=absent_mean_filled, excluded=excluded, roles=roles,
-            evaluation_names=evaluation_names, paths=paths, baselines=baselines,
+            evaluation_names=evaluation_names, frame_2016=frame_2016, baselines=baselines,
             model_python=model_python, evaluation_roots=evaluation_roots)
         report["promotion_gate"] = gate
         report["sidecar_inventory"] = {
-            model: {k: p["sidecars"][k] for k in ("expected_tiles", "verified_tiles", "missing_tiles")}
+            model: {k: p["sidecars"][k] for k in ("expected_tiles", "verified_tiles", "missing_tiles",
+                                                  "excepted_tiles")}
             for model, p in teacher_provenance.items()}
+        report["exceptions"] = {   # counts only: the report names no tile
+            "promotion_no_v2": len(exceptions["promotion_no_v2"]),
+            "sidecars_missing": {m: len(t) for m, t in sorted(exceptions["sidecars_missing"].items())}}
         for path in list(input_stats):   # the frame_2016 reads come after the captures
             capture(path)
         print("=== SUPPORT_REPORT_BEGIN ===", json.dumps(report, indent=2),
@@ -831,7 +899,7 @@ def main() -> None:
         return
     holdout, counts = select_holdout(
         index, training, metadata, footprints=footprints,
-        campaign_only=args.population == "campaign")
+        campaign_only=args.population == "campaign", frame_2016=frame_2016)
     holdout, coverage_counts = filter_nmd_coverage(holdout, baselines, model_python)
     counts.update(coverage_counts, observations=len(holdout))
     counts["tile_role_support"] = {str(role): int(n) for role, n in holdout["tile_role"].value_counts().items()}
@@ -841,6 +909,10 @@ def main() -> None:
         counts["tile_role_support"] = {str(role): int(n) for role, n in holdout["tile_role"].value_counts().items()}
     counts["primary_population"] = args.population
     counts["all_candidate_rows"] = len(index)
+    holdout["has_frame_2016"] = holdout["tile_name"].astype(str).map(frame_2016.__getitem__).astype(bool)
+    counts["has_frame_2016_by_year"] = {
+        str(int(y)): {"present": int(f.sum()), "absent": int((~f).sum())}
+        for y, f in holdout["has_frame_2016"].groupby(holdout["Year"].astype(int), sort=True)}
     from validate_against_nfi import derive_nfi_forest_class
     holdout["nfi_forest"] = [
         derive_nfi_forest_class(row, dominant_frac=0.7) or 0
@@ -884,6 +956,7 @@ def main() -> None:
         "recorded_training_plot_years": len(observed_training),
         "excluded_teacher_feature_plot_years": len(training),
         "evaluation_roots": evaluation_roots,
+        "exceptions": exceptions,
         "training_footprint_policy": "exclude_same_year_plot_points_in_any_cohort_bbox_inclusive",
         "training_footprint_inputs": {n: file_identity(p) for n, p in sorted(cohort.items())},
         "campaign": {"tiles": len(staging), "training_tiles": campaign_training_tiles,
