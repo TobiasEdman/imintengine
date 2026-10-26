@@ -1,0 +1,128 @@
+---
+# Demote a positive Tessera flag on an empty array in the nfi2024 campaign
+# (task 0117, freeze prerequisite; Tobias 2026-10-26: "demote it to 0, as for
+# the zero frames on 10-12").
+#
+# The step-4 support report found one campaign tile with has_tessera=1 on an
+# empty or invalid Tessera array; the freeze's tile_readiness raises on it.
+# This Job selects the tile by that condition, never by name: nfi2024 tiles
+# are centred on NFI plots, so their names stay out of the repo. It refuses
+# unless exactly EXPECTED tiles match and each carries the promoted source
+# (geotessera-0.10.2), so that after demotion the freeze reads it as an
+# ordinary Tessera gap. For each: has_tessera -> 0 (same dtype) and a dated
+# tessera_gap_reason; every other array is byte-for-byte unchanged, verified
+# on read-back; written atomically with the tile's own compression. The
+# record (names, sha256 before and after) goes to /data/manifests/ by
+# exclusive create. A re-census must find no positive flag on an empty array.
+#
+# Only the campaign root and manifests/ are mounted writable.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi2024-demote-empty-tessera
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 604800
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: demote
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              pip install -q --no-cache-dir numpy
+              python - <<'PY'
+              import hashlib, json, os, sys, zipfile
+              from pathlib import Path
+              import numpy as np
+
+              ROOT = Path(os.environ["CAMPAIGN_DIR"])
+              RECORD = Path(os.environ["MANIFEST_DIR"]) / "nfi2024_empty_tessera_demoted_20261026.json"
+              REASON = "tessera_flag_on_empty_or_invalid_array__demoted_2026-10-26__task_0117"
+              EXPECTED = int(os.environ["EXPECTED"])
+              if RECORD.exists():
+                  sys.exit(f"{RECORD} exists: already demoted; refusing")
+
+              def sha256(p):
+                  return hashlib.sha256(p.read_bytes()).hexdigest()
+
+              def invalid(t):
+                  return not (t.ndim == 3 and t.size and np.isfinite(t).all() and np.any(t))
+
+              targets = []
+              for p in sorted(ROOT.glob("*.npz")):
+                  if p.name.endswith(".tmp.npz"):
+                      continue
+                  with np.load(p, allow_pickle=False) as d:
+                      if int(d.get("has_tessera", 0)) == 1 and "tessera" in d and invalid(d["tessera"]):
+                          targets.append(p)
+              print(f"campaign tiles with has_tessera=1 on an empty/invalid array: {len(targets)} (expected {EXPECTED})")
+              if len(targets) != EXPECTED:
+                  sys.exit("count differs from the support report; refusing to change anything")
+
+              record = []
+              for p in targets:
+                  with np.load(p, allow_pickle=False) as d:
+                      data = {k: d[k] for k in d.files}
+                  if str(data.get("tessera_source", "")) != "geotessera-0.10.2":
+                      sys.exit(f"{p.name}: tessera_source is not geotessera-0.10.2; refusing")
+                  with zipfile.ZipFile(p) as z:
+                      compressed = any(i.compress_type == zipfile.ZIP_DEFLATED for i in z.infolist())
+                  before = sha256(p)
+                  changed = dict(data, has_tessera=np.array(0, dtype=data["has_tessera"].dtype),
+                                 tessera_gap_reason=np.array(REASON))
+                  tmp = p.with_name(p.stem + ".tmp.npz")
+                  (np.savez_compressed if compressed else np.savez)(tmp, **changed)
+                  with np.load(tmp, allow_pickle=False) as back:
+                      for k, v in data.items():
+                          if k in ("has_tessera", "tessera_gap_reason"):
+                              continue
+                          if not np.array_equal(back[k], v) or back[k].dtype != v.dtype:
+                              tmp.unlink()
+                              sys.exit(f"{p.name}: array {k} changed on rewrite; refusing")
+                      assert int(back["has_tessera"]) == 0 and str(back["tessera_gap_reason"]) == REASON
+                  os.replace(tmp, p)
+                  record.append({"tile": p.stem, "sha256_before": before, "sha256_after": sha256(p),
+                                 "reason": REASON, "compressed": compressed})
+                  print(f"demoted 1 tile: sha256 {before} -> {record[-1]['sha256_after']}")
+
+              still = 0
+              for p in sorted(ROOT.glob("*.npz")):
+                  if p.name.endswith(".tmp.npz"):
+                      continue
+                  with np.load(p, allow_pickle=False) as d:
+                      if int(d.get("has_tessera", 0)) == 1 and "tessera" in d and invalid(d["tessera"]):
+                          still += 1
+              print(f"re-census: positive Tessera flags on empty/invalid arrays left: {still}")
+              with open(RECORD, "x") as f:
+                  json.dump({"demoted": record, "remaining": still}, f, indent=2)
+              sys.exit(1 if still else 0)
+              PY
+          env:
+            - {name: EXPECTED, value: "1"}
+            - {name: CAMPAIGN_DIR, value: /campaign}
+            - {name: MANIFEST_DIR, value: /manifests}
+          resources:
+            requests: {cpu: "2", memory: 8Gi}
+            limits: {cpu: "2", memory: 8Gi}
+          volumeMounts:
+            - {name: d, mountPath: /campaign, subPath: unified_v2_512_nfi2024_staging}
+            - {name: d, mountPath: /manifests, subPath: manifests}
+      volumes:
+        - name: d
+          persistentVolumeClaim: {claimName: training-data-cephfs}
