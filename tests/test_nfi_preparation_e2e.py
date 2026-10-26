@@ -444,7 +444,8 @@ def test_report_only_records_missing_teacher_sidecars(prepared_inputs, monkeypat
     monkeypatch.setattr(sys, "argv", _report_only_argv(sys.argv))
     prep.main()
     report = _support_report(capsys.readouterr().out)
-    assert report["sidecar_inventory"]["clay"] == {"expected_tiles": 2, "verified_tiles": 1, "missing_tiles": 1}
+    assert report["sidecar_inventory"]["clay"] == {"expected_tiles": 2, "verified_tiles": 1, "missing_tiles": 1,
+                                                   "excepted_tiles": 0}
     assert all(v["missing_tiles"] == 0 for m, v in report["sidecar_inventory"].items() if m != "clay")
     assert report["variants"]["freeze"]["observations"] == 1
 
@@ -513,6 +514,158 @@ def test_report_only_does_not_swallow_a_non_value_readiness_error(prepared_input
 def test_the_freeze_still_raises_a_readiness_error(prepared_inputs):
     _flag_empty_tessera(prepared_inputs)
     with pytest.raises(ValueError, match="positive has_tessera on empty/invalid array"):
+        prep.main()
+    assert not prepared_inputs["out-dir"].exists()
+
+
+def _tie(roles):
+    """One plot-year on several tiles (name -> role), all admitted, same year."""
+    index = pd.DataFrame({"TractID": [9] * len(roles), "PlotID": [1] * len(roles), "Year": [2024] * len(roles),
+                          "tile_name": list(roles), "tile_role": list(roles.values()),
+                          "row": [4] * len(roles), "col": [4] * len(roles)})
+    meta = {name: {"height": 8, "width": 8, "year": 2024} for name in roles}
+    training = index.iloc[0:0][["TractID", "PlotID", "Year"]]
+    return index, training, meta
+
+
+@pytest.mark.parametrize("roles, frame, chosen", [
+    ({"a_tile": "topup", "b_tile": "holdout_copy"}, None, "a_tile"),                  # by name
+    ({"a_tile": "topup", "b_tile": "holdout_copy"}, {"a_tile": False, "b_tile": True}, "b_tile"),  # frame wins a tie
+    ({"a_tile": "campaign", "b_tile": "topup"}, {"a_tile": False, "b_tile": True}, "a_tile"),  # campaign first
+])
+def test_tie_break_prefers_campaign_then_the_2016_frame(roles, frame, chosen):
+    index, training, meta = _tie(roles)
+    holdout, _ = prep.select_holdout(index, training, meta, frame_2016=frame)
+    assert holdout.tile_name.tolist() == [chosen]
+
+
+def test_the_freeze_records_has_frame_2016_per_plot_year(prepared_inputs):
+    path = prepared_inputs["staging-dir"] / "campaign000.npz"
+    with np.load(path, allow_pickle=False) as data:
+        np.savez(path, **dict(data), **BASELINE_2016)
+    prep.main()
+    manifest_path = prepared_inputs["out-dir"] / "manifest.json"
+    held, manifest = load_frozen_holdout(manifest_path, sha256_file(manifest_path))
+    assert held.has_frame_2016.tolist() == [True]
+    assert manifest["selection"]["has_frame_2016_by_year"] == {"2024": {"present": 1, "absent": 0}}
+
+
+def _exceptions(**groups):
+    return {"schema": "nfi-freeze-exceptions/1", "decided": {"by": "test", "date": "2026-10-26"},
+            "promotion_no_v2": {}, "sidecars_missing": {}, **groups}
+
+
+@pytest.mark.parametrize("exceptions, message", [
+    ({"schema": "other"}, "unsupported"),
+    ({k: v for k, v in _exceptions().items() if k != "schema"}, "unsupported"),
+    ({k: v for k, v in _exceptions().items() if k != "decided"}, "unsupported"),
+    (_exceptions(sidecars_missing=["clay"]), "unknown teacher"),
+    (_exceptions(sidecars_missing={"nobody": {"train": "x"}}), "unknown teacher"),
+    (_exceptions(sidecars_missing={"clay": {"stranger": "x"}}), "cohort tiles with nonempty reasons"),
+    (_exceptions(sidecars_missing={"clay": {"train": " "}}), "cohort tiles with nonempty reasons"),
+    (_exceptions(promotion_no_v2={"train": "no v2"}), "lists a promoted tile"),
+])
+def test_validate_exceptions_refuses_what_it_cannot_vouch_for(tmp_path, exceptions, message):
+    tile = tmp_path / "train.npz"
+    np.savez(tile, tessera_source="geotessera-0.10.2")
+    with pytest.raises(ValueError, match=message):
+        prep.validate_exceptions(exceptions, {"train": tile})
+
+
+def test_validate_exceptions_accepts_an_unpromoted_tile(tmp_path):
+    tile = tmp_path / "old.npz"
+    np.savez(tile, tessera_source="dl2.geotessera.org")
+    prep.validate_exceptions(_exceptions(promotion_no_v2={"old": "no v2 at promotion"}), {"old": tile})
+
+
+def test_sidecar_exceptions_cover_listed_gaps_only(tmp_path):
+    np.savez(tmp_path / "train.npz", head_sha="a" * 16)
+    result = prep.teacher_sidecar_inventory(tmp_path, {"train", "gone"}, "a" * 16, set(),
+                                            excepted=frozenset({"gone"}))
+    assert (result["missing_tiles"], result["excepted_tiles"]) == (0, 1)
+    with pytest.raises(ValueError, match="missing teacher"):
+        prep.teacher_sidecar_inventory(tmp_path, {"train", "gone", "lost"}, "a" * 16, set(),
+                                       excepted=frozenset({"gone"}))
+    with pytest.raises(ValueError, match="not missing"):
+        prep.teacher_sidecar_inventory(tmp_path, {"train"}, "a" * 16, set(), excepted=frozenset({"train"}))
+
+
+def _promotion(no_v2, promoted=None):
+    promoted = 3 - no_v2 if promoted is None else promoted
+    job = {"metadata": {"name": "tessera-promote-v2"},
+           "status": {"conditions": [{"type": "Complete", "status": "True"}]}}
+    report = {"source": "geotessera-0.10.2", "states": {"promoted": promoted, "no_v2": no_v2},
+              "verify": {"has_v1": promoted, "stamped": promoted, "has_v2_left": 0}}
+    return job, report
+
+
+def test_promotion_gate_accepts_exactly_the_excepted_no_v2_count():
+    prep.check_promotion(*_promotion(1), 3, no_v2_excepted=1)
+    with pytest.raises(ValueError, match="clean v2 coverage"):
+        prep.check_promotion(*_promotion(1), 3)
+    with pytest.raises(ValueError, match="clean v2 coverage"):
+        prep.check_promotion(*_promotion(2), 3, no_v2_excepted=1)
+    # The unpromoted tile counted under another state than no_v2: still refused.
+    with pytest.raises(ValueError, match="clean v2 coverage"):
+        prep.check_promotion(*_promotion(0, promoted=2), 3, no_v2_excepted=1)
+
+
+def test_the_freeze_accepts_a_listed_missing_sidecar_and_binds_the_list(prepared_inputs, monkeypatch):
+    _drop_sidecar(prepared_inputs)
+    path = prepared_inputs["out-dir"].parent / "exceptions.json"
+    path.write_text(json.dumps(_exceptions(sidecars_missing={"clay": {"oldtest": "no sidecar, reviewed"}})))
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--exceptions", str(path)])
+    prep.main()
+    manifest_path = prepared_inputs["out-dir"] / "manifest.json"
+    _, manifest = load_frozen_holdout(manifest_path, sha256_file(manifest_path))
+    assert manifest["exceptions"]["sidecars_missing"] == {"clay": {"oldtest": "no sidecar, reviewed"}}
+    assert manifest["teacher_provenance"]["clay"]["sidecars"]["excepted_tiles"] == 1
+    assert str(path.resolve()) in {i["path"] for i in manifest["inputs"]}
+
+
+def test_a_frame_map_must_cover_every_candidate_tile():
+    index, training, meta = _tie({"a_tile": "topup", "b_tile": "holdout_copy"})
+    with pytest.raises(ValueError, match="does not cover"):
+        prep.select_holdout(index, training, meta, frame_2016={"a_tile": True})
+
+
+def _unpromoted_cohort_tile(prepared_inputs, name="nov2"):
+    """A cohort tile without Tessera (as the 9 no_v2 tiles), with its sidecars,
+    and a promotion report that counts it as no_v2."""
+    with np.load(prepared_inputs["cohort-dir"] / "train.npz", allow_pickle=False) as tile:
+        data = {k: v for k, v in dict(tile).items() if not k.startswith("tessera") and k != "has_tessera"}
+    np.savez(prepared_inputs["cohort-dir"] / f"{name}.npz", **data)
+    for directory in prepared_inputs["distill-root"].iterdir():
+        with np.load(directory / "train.npz", allow_pickle=False) as sidecar:
+            np.savez(directory / f"{name}.npz", **dict(sidecar))
+    prepared_inputs["promotion-report"].write_text(json.dumps({
+        "source": "geotessera-0.10.2", "states": {"promoted": 2, "no_v2": 1},
+        "verify": {"has_v1": 2, "stamped": 2, "has_v2_left": 0}}))
+
+
+def test_the_freeze_accepts_a_listed_no_v2_tile_and_refuses_it_unlisted(prepared_inputs, monkeypatch):
+    _unpromoted_cohort_tile(prepared_inputs)
+    with pytest.raises(ValueError, match="clean v2 coverage"):
+        prep.main()
+    assert not prepared_inputs["out-dir"].exists()
+    path = prepared_inputs["out-dir"].parent / "exceptions.json"
+    path.write_text(json.dumps(_exceptions(promotion_no_v2={"nov2": "no Tessera at promotion"})))
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--exceptions", str(path)])
+    prep.main()
+    manifest_path = prepared_inputs["out-dir"] / "manifest.json"
+    _, manifest = load_frozen_holdout(manifest_path, sha256_file(manifest_path))
+    assert manifest["exceptions"]["promotion_no_v2"] == {"nov2": "no Tessera at promotion"}
+
+
+@pytest.mark.parametrize("exceptions, message", [
+    (_exceptions(sidecars_missing={"nobody": {"train": "x"}}), "unknown teacher"),
+    ({"promotion_no_v2": {}}, "unsupported"),
+])
+def test_a_bad_exceptions_file_stops_main_before_anything_is_written(prepared_inputs, monkeypatch, exceptions, message):
+    path = prepared_inputs["out-dir"].parent / "exceptions.json"
+    path.write_text(json.dumps(exceptions))
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--exceptions", str(path)])
+    with pytest.raises(ValueError, match=message):
         prep.main()
     assert not prepared_inputs["out-dir"].exists()
 
@@ -596,3 +749,19 @@ def test_freeze_still_requires_an_out_dir(prepared_inputs, monkeypatch):
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(ValueError, match="--out-dir is required"):
         prep.main()
+
+
+def test_the_committed_freeze_exceptions_are_well_formed():
+    """The reviewed list the freeze will read (config/nfi_freeze_exceptions.json).
+
+    Membership and unpromoted state are checked against the PVC at freeze time;
+    here only its shape, counts and reasons, so a drift is caught in CI.
+    """
+    path = Path(__file__).resolve().parents[1] / "config/nfi_freeze_exceptions.json"
+    exceptions = json.loads(path.read_text())
+    assert exceptions["schema"] == prep.EXCEPTIONS_SCHEMA
+    assert len(exceptions["promotion_no_v2"]) == 9
+    assert {m: len(t) for m, t in exceptions["sidecars_missing"].items()} == {"croma": 10, "terramind": 10}
+    assert set(exceptions["sidecars_missing"]) <= set(prep.DISTILL)
+    groups = [exceptions["promotion_no_v2"], *exceptions["sidecars_missing"].values()]
+    assert all(isinstance(r, str) and r.strip() for g in groups for r in g.values())
