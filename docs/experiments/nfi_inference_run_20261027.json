@@ -1,0 +1,241 @@
+{
+ "schema": "nfi-inference-run/1",
+ "task": "0118",
+ "record": "nfi_inference_run_2026-10-27.md",
+ "decisions_user_stated": {
+  "2026-10-27": "plan confirmed ~19:55Z (let the Jobs finish; inference plan stands); scoring needs a separate go"
+ },
+ "freeze_manifest_sha256": "daaa428754aa4acfd832d9cc0fe5a0acb60e86ade2b511699f1181732697ff2c",
+ "image": {
+  "ref": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d",
+  "source_git_sha": "4cb93b4c38ec27daa579b0dfe3d40ff0adb792b8"
+ },
+ "jobs_template": "k8s/nfi-inference-job.template.yaml",
+ "applied_from_main": "eb39d3afb5ba2caadfb46399e4fcffdbb40f7dee",
+ "applied_at": "2026-10-27T16:33Z",
+ "output_dir": "/data/nfi/nfi_inference_2026-10-27",
+ "cells": {
+  "clay_r1": {
+   "exit": 0,
+   "wall_seconds": 2876
+  },
+  "clay_r2": {
+   "exit": 0,
+   "wall_seconds": 2901
+  },
+  "clay_r3": {
+   "exit": 0,
+   "wall_seconds": 2895
+  },
+  "clay_r4": {
+   "exit": 0,
+   "wall_seconds": 2899
+  },
+  "croma_r1": {
+   "exit": 0,
+   "wall_seconds": 5732
+  },
+  "croma_r2": {
+   "exit": 0,
+   "wall_seconds": 5753
+  },
+  "croma_r3": {
+   "exit": 0,
+   "wall_seconds": 5708
+  },
+  "croma_r4": {
+   "exit": 0,
+   "wall_seconds": 5816
+  },
+  "prithvi300m4f_r1": {
+   "exit": 0,
+   "wall_seconds": 2449
+  },
+  "prithvi300m4f_r2": {
+   "exit": 0,
+   "wall_seconds": 2520
+  },
+  "prithvi300m4f_r3": {
+   "exit": 0,
+   "wall_seconds": 2415
+  },
+  "prithvi300m4f_r4": {
+   "exit": 0,
+   "wall_seconds": 2404
+  },
+  "prithvi300m_r1": {
+   "exit": 0,
+   "wall_seconds": 2002
+  },
+  "prithvi300m_r2": {
+   "exit": 0,
+   "wall_seconds": 1837
+  },
+  "prithvi300m_r3": {
+   "exit": 0,
+   "wall_seconds": 1995
+  },
+  "prithvi300m_r4": {
+   "exit": 0,
+   "wall_seconds": 1995
+  },
+  "prithvi600m_r1": {
+   "exit": 0,
+   "wall_seconds": 3641
+  },
+  "prithvi600m_r2": {
+   "exit": 0,
+   "wall_seconds": 3795
+  },
+  "prithvi600m_r3": {
+   "exit": 0,
+   "wall_seconds": 3647
+  },
+  "prithvi600m_r4": {
+   "exit": 0,
+   "wall_seconds": 3685
+  },
+  "terramind_r1": {
+   "exit": 0,
+   "wall_seconds": 1854
+  },
+  "terramind_r2": {
+   "exit": 0,
+   "wall_seconds": 1858
+  },
+  "terramind_r3": {
+   "exit": 0,
+   "wall_seconds": 1816
+  },
+  "terramind_r4": {
+   "exit": 0,
+   "wall_seconds": 1806
+  },
+  "tessera_r1": {
+   "exit": 0,
+   "wall_seconds": 2448
+  },
+  "tessera_r2": {
+   "exit": 0,
+   "wall_seconds": 2522
+  },
+  "tessera_r3": {
+   "exit": 0,
+   "wall_seconds": 2435
+  },
+  "tessera_r4": {
+   "exit": 0,
+   "wall_seconds": 2381
+  }
+ },
+ "gpu_hours": 23.4,
+ "jobs": {
+  "nfi-inference-clay-20261027": {
+   "pod": "nfi-inference-clay-20261027-262pv",
+   "node": "p02r02srv05",
+   "started": "2026-10-27T16:33:38Z",
+   "finished": "2026-10-27T19:46:29Z",
+   "exit_code": 0
+  },
+  "nfi-inference-croma-20261027": {
+   "pod": "nfi-inference-croma-20261027-k5rbm",
+   "node": "p02r09srv07",
+   "started": "2026-10-27T16:38:51Z",
+   "finished": "2026-10-27T23:02:20Z",
+   "exit_code": 0
+  },
+  "nfi-inference-prithvi300m-20261027": {
+   "pod": "nfi-inference-prithvi300m-20261027-sswvl",
+   "node": "p02r09srv07",
+   "started": "2026-10-27T16:38:51Z",
+   "finished": "2026-10-27T18:49:21Z",
+   "exit_code": 0
+  },
+  "nfi-inference-prithvi300m4f-20261027": {
+   "pod": "nfi-inference-prithvi300m4f-20261027-fhxxd",
+   "node": "p02r02srv01",
+   "started": "2026-10-27T16:38:36Z",
+   "finished": "2026-10-27T19:21:44Z",
+   "exit_code": 0
+  },
+  "nfi-inference-prithvi600m-20261027": {
+   "pod": "nfi-inference-prithvi600m-20261027-qtk5h",
+   "node": "p02r02srv01",
+   "started": "2026-10-27T16:38:36Z",
+   "finished": "2026-10-27T20:44:45Z",
+   "exit_code": 0
+  },
+  "nfi-inference-terramind-20261027": {
+   "pod": "nfi-inference-terramind-20261027-5vks5",
+   "node": "p02r02srv01",
+   "started": "2026-10-27T16:38:36Z",
+   "finished": "2026-10-27T18:40:50Z",
+   "exit_code": 0
+  },
+  "nfi-inference-tessera-20261027": {
+   "pod": "nfi-inference-tessera-20261027-pvhl2",
+   "node": "p02r02srv01",
+   "started": "2026-10-27T16:38:36Z",
+   "finished": "2026-10-27T19:21:42Z",
+   "exit_code": 0
+  }
+ },
+ "verification": {
+  "job": "nfi-inference-verify-20261027",
+  "source": "k8s/nfi-inference-verify-job.yaml",
+  "frozen_observations": 5194,
+  "cells_expected": 28,
+  "cells_verified": 28,
+  "problems": [],
+  "rows_per_cell": [
+   5194
+  ],
+  "prediction_sha256_prefix": {
+   "clay_r1": "313f59d71656",
+   "clay_r2": "4597318d186a",
+   "clay_r3": "923985e06895",
+   "clay_r4": "9fb49f91aa0f",
+   "croma_r1": "d5013e9880bb",
+   "croma_r2": "2e19a55d7e6b",
+   "croma_r3": "8b1dcc704cc5",
+   "croma_r4": "83e2b9e7a4ea",
+   "prithvi300m4f_r1": "4430a86c7f4c",
+   "prithvi300m4f_r2": "20411f13233f",
+   "prithvi300m4f_r3": "e3eee76b0292",
+   "prithvi300m4f_r4": "45fe386f8481",
+   "prithvi300m_r1": "2ece7abe7871",
+   "prithvi300m_r2": "e276eff723cd",
+   "prithvi300m_r3": "b97791d61862",
+   "prithvi300m_r4": "69a9f41e1505",
+   "prithvi600m_r1": "d0c95f23480d",
+   "prithvi600m_r2": "ac4db8e51ca3",
+   "prithvi600m_r3": "a7765f62cf36",
+   "prithvi600m_r4": "0b62b2965ee3",
+   "terramind_r1": "a3d83f5e5165",
+   "terramind_r2": "5ee4ebccc388",
+   "terramind_r3": "208eb9b25b57",
+   "terramind_r4": "ed0ea219c187",
+   "tessera_r1": "d6a70490dd64",
+   "tessera_r2": "a19615c972e4",
+   "tessera_r3": "aa592f6f16d3",
+   "tessera_r4": "6642c5603996"
+  },
+  "runtime": {
+   "runtime_image": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d",
+   "source_git_sha": "4cb93b4c38ec27daa579b0dfe3d40ff0adb792b8",
+   "source_payload_sha256": "7df347f7435eae9da3a492a6c23e9e45f2b0481b25b568244144938104b08315",
+   "runtime_manifest_sha256": "86488d7dffdfeadb53ac74c4f94e476643048aa57f62746315b88558d2518b9e"
+  }
+ },
+ "evidence_logs_sha256": {
+  "archived-job-logs.txt": "c621279ebf8ca2127a6564ca002a168f5d157102dd775a5587acc08c6fd91bbf",
+  "croma.log": "b5bb7fd1abd28aacd562c3f61a61d718007226dbb232ff4a324e5c796da527d3",
+  "verify.log": "5404e5035db0d8c5e69ed32c6fcc9a8a21f53e781db727f75774d4b907ba4442",
+  "verify-early.log": "d675c9f880fc5b0bc98212c13f982a4cf9c9a49a1caf85535d595b7cc49a00e0"
+ },
+ "evidence_dir": "~/.agents/continuity/evidence/ImintEngine/nfi-index-v5-20261024/inference-run-20261027/ (logs not committed)",
+ "reproducibility": "prithvi600m_r1 prediction sha256 d0c95f23\u2026 equals the probe's (try 2, other node)",
+ "notes": [
+  "gpu-reaper deletes finished GPU Jobs after 60 min and archives logs/spec/events to /cephfs/ops/reaper_archive/ first; six Job logs were read from there"
+ ]
+}
