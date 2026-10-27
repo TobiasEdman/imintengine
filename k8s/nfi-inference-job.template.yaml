@@ -91,9 +91,13 @@ spec:
                 # Progress lines only, never the result JSON.
                 grep -E '^[0-9:]{8} (plot index:|kept |  \[load_model\]|wrote )' "/scratch/${CELL}/validate.log" || true
                 if [ "${STATUS}" -ne 0 ]; then
-                  echo "--- ${CELL}: last log lines (metric lines withheld) ---"
-                  tail -n 40 "/scratch/${CELL}/validate.log" \
-                    | grep -v -i -E 'accuracy|kappa|f1|precision|recall|confusion|"oa"|miou' || true
+                  # Allowlist, never a denylist: the validator prints its
+                  # multi-line results JSON before writing, so a late failure
+                  # leaves metric rows in the log. Only traceback frames and
+                  # the exception line can match; JSON lines start with
+                  # whitespace, quotes or brackets.
+                  echo "--- ${CELL}: traceback frames and exception only ---"
+                  grep -E "${SAFE_DIAGNOSTICS}" "/scratch/${CELL}/validate.log" | tail -n 30 || true
                   FAILED="${FAILED} ${CELL}"; continue
                 fi
                 if ! /usr/local/bin/python - "/scratch/${CELL}" "${OUT}" "${NAME}" <<'PY'
@@ -140,6 +144,10 @@ spec:
             - {name: TRITON_CACHE_DIR, value: /scratch/.triton}
             - {name: HF_HUB_OFFLINE, value: "1"}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            # The only log lines a failed cell prints: traceback header, frame
+            # lines and the final exception line (time-stamped, as written).
+            - name: SAFE_DIAGNOSTICS
+              value: '^[0-9:]{8} (Traceback \(most recent call last\):|  File "[^"]*", line [0-9]+, in [A-Za-z_<>][A-Za-z0-9_<>]*|[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit)(: .{0,200})?)$'
           resources:
             requests: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
             limits: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}

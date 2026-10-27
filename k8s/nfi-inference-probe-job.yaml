@@ -24,6 +24,12 @@
 # in crop) and then failed importing torch: uid 2000 has no passwd entry, so
 # the inductor cache dir lookup raised. The cache dirs and USER are now set;
 # the image stays the freeze's (its digest is bound in the manifest).
+#
+# After try 2, at review (Codex, #113): the failure branch printed the log's
+# last 40 lines minus metric key names, which can still show rows of a
+# partially printed results JSON. It now prints only traceback frames and the
+# exception line (SAFE_DIAGNOSTICS). Try 2 succeeded and never reached that
+# branch; try 1's failure output was a plain import traceback.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -91,8 +97,9 @@ spec:
               META="/scratch/nfi-per-plot-${CELL}.parquet.meta.json"
               if [ -f "${META}" ]; then echo "--- dump metadata ---"; cat "${META}"; echo; fi
               if [ "${STATUS}" -ne 0 ]; then
-                echo "--- last log lines (metric lines withheld) ---"
-                tail -n 40 /scratch/validate.log | grep -v -i -E 'accuracy|kappa|f1|precision|recall|confusion|"oa"|miou' || true
+                # Allowlist, never a denylist: see the inference template.
+                echo "--- traceback frames and exception only ---"
+                grep -E "${SAFE_DIAGNOSTICS}" /scratch/validate.log | tail -n 30 || true
               fi
               exit "${STATUS}"
           env:
@@ -112,6 +119,9 @@ spec:
             - {name: LOGNAME, value: imint}
             - {name: HF_HUB_OFFLINE, value: "1"}
             - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            # The only log lines a failed run prints (as in the template).
+            - name: SAFE_DIAGNOSTICS
+              value: '^[0-9:]{8} (Traceback \(most recent call last\):|  File "[^"]*", line [0-9]+, in [A-Za-z_<>][A-Za-z0-9_<>]*|[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit)(: .{0,200})?)$'
           resources:
             requests: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
             limits: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
