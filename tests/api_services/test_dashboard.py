@@ -177,3 +177,33 @@ def test_dashboard_head_probes_send_no_body(tmp_path):
     assert status == 404
     status, _ = _request(cls, www, '/ladder/../pvc/distill/heads/clay_r2_plot_features.parquet', 'HEAD')
     assert status == 400
+
+
+def test_nfi_inference_status_reads_only_named_metadata_fields(tmp_path):
+    www, ns = _dashboard(tmp_path)
+    (www / 'ladder').mkdir(parents=True)
+    out = tmp_path / 'nfi_inference'
+    out.mkdir()
+    (out / 'nfi-per-plot-clay_r1.parquet').write_bytes(SECRET)
+    (out / 'nfi-per-plot-clay_r1.parquet.meta.json').write_text(json.dumps({
+        'cell': 'clay_r1', 'status': 'success', 'plots_in_crop': 5194,
+        'prediction_sha256': 'ab' * 32, 'checkpoint_sha256': 'cd' * 32,
+        'holdout_manifest_sha256': 'ef' * 32,
+        'Easting': 6543210, 'TractID': 'SECRET_TRACT', 'accuracy': 0.99}))
+    (out / 'nfi-per-plot-clay_r2.parquet.meta.json').write_text('{broken')
+    cls = ns['Handler']
+    cls.NFI_INFERENCE_DIR = str(out)
+    status, response = _request(cls, www, '/ladder/nfi_inference.json?t=1')
+    assert status == 200
+    body = json.loads(response.split(b'\r\n\r\n', 1)[1])
+    assert body['published'] == 1 and body['expected_cells'] == 28
+    assert body['manifest_sha256'] == 'ef' * 6
+    assert set(body['cells']) == {'clay_r1'}
+    assert set(body['cells']['clay_r1']) == {'status', 'plots', 'prediction_sha256',
+                                             'checkpoint_sha256', 'published_at'}
+    assert body['cells']['clay_r1']['prediction_sha256'] == 'ab' * 6
+    for leak in (b'6543210', b'SECRET_TRACT', b'0.99', SECRET):
+        assert leak not in response
+    cls.NFI_INFERENCE_DIR = str(tmp_path / 'absent')
+    status, response = _request(cls, www, '/ladder/nfi_inference.json')
+    assert status == 200 and json.loads(response.split(b'\r\n\r\n', 1)[1])['cells'] == {}

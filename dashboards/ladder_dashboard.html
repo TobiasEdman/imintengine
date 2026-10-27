@@ -137,6 +137,17 @@ select { background:#0f1622; color:#e5e7eb; border:1px solid #374151; border-rad
 </div>
 
 <div class="panel">
+  <h2>Frozen NFI set — inference progress <span class="sub" id="nfiInfSummary"></span></h2>
+  <table id="nfiInference"></table>
+  <div class="foot">The held-out NFI evaluation set frozen on 2026-10-27: 5,194 plot-years,
+    742 per year 2018–2024 (manifest <span class="stat" id="nfiManifest">—</span>). Each cell is
+    one model × rung run in frozen mode against that manifest; it turns green when its prediction
+    file and metadata are published. <b>Progress only:</b> no score is shown here, and none exists
+    until scoring against NMD is authorized. Read from
+    <span class="stat">/ladder/nfi_inference.json</span>, which reports metadata fields only.</div>
+</div>
+
+<div class="panel">
   <h2>All runs — every curve on one axis</h2>
   <div class="h2h-controls">
     <select id="rungFilter">
@@ -243,6 +254,7 @@ let STAGE = {};  // model -> {gate:bool, feats:bool} — distill-stage probes
 let INF = null;  // inference/matrix.json — the visual matrix' index
 let FT = null;   // fieldtruth/fieldtruth-standings.json (NFI + LUCAS)
 let FTSP = {};   // cell -> fieldtruth/sameplots/*.json (model vs NMD, same plots)
+let NFIINF = null; // nfi_inference.json — frozen-set inference status (metadata only)
 // nfi_head_cv.py BASELINES: NMD2023's own 5-class field accuracy at the
 // same plots — the number a column's features must beat to claim the
 // model knows more forest type than the map it was trained on.
@@ -284,6 +296,13 @@ async function loadAll() {
       const res = await fetch(`inference/matrix.json?t=${Date.now()}`);
       INF = res.ok ? await res.json() : null;
     } catch { INF = null; }
+  })(), (async () => {
+    // Frozen-set inference status: computed server-side from metadata
+    // files only (the prediction files themselves are never served).
+    try {
+      const res = await fetch(`nfi_inference.json?t=${Date.now()}`);
+      NFIINF = res.ok ? await res.json() : null;
+    } catch { NFIINF = null; }
   })(), (async () => {
     // Field truth (the /www/ladder/fieldtruth symlink). Both files are
     // written by separate jobs and appear cell by cell over hours, so every
@@ -541,6 +560,37 @@ function stageOf(m) {
   if (r2 === "completed") return {label: "awaiting distill job", cls: "absent"};
   if (r2 === "running") return {label: "awaiting rung 2", cls: "absent"};
   return {label: "—", cls: "absent"};
+}
+
+function renderNfiInference() {
+  const cells = (NFIINF && NFIINF.cells) || {};
+  const expected = (NFIINF && NFIINF.expected_cells) || MODELS.length * RUNGS.length;
+  const done = (NFIINF && NFIINF.published) || 0;
+  document.getElementById("nfiInfSummary").textContent =
+    NFIINF ? `· ${done} of ${expected} cells published` : "· status unavailable";
+  document.getElementById("nfiManifest").textContent =
+    NFIINF && NFIINF.manifest_sha256 ? NFIINF.manifest_sha256 + "…" : "—";
+  let h = "<thead><tr><th>Rung</th>" +
+          MODELS.map(m => `<th>${LABELS[m]}</th>`).join("") + "</tr></thead><tbody>";
+  for (const r of RUNGS) {
+    h += `<tr><td class="rung-label">r${r.n} · ${r.name}<small>${r.note}</small></td>`;
+    for (const m of MODELS) {
+      const c = cells[key(m, r.n)];
+      if (c && c.status === "success") {
+        const at = new Date(c.published_at);
+        h += `<td><div class="cell completed"><span class="pill completed">published</span>
+          <div class="sub">${c.plots.toLocaleString()} plot-years</div>
+          <div class="sub">${at.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}
+            · <span class="stat">${c.prediction_sha256}</span></div></div></td>`;
+      } else if (c) {
+        h += `<td><div class="cell failed"><span class="pill failed">${c.status}</span></div></td>`;
+      } else {
+        h += `<td><div class="cell absent"><span class="pill absent">pending</span></div></td>`;
+      }
+    }
+    h += "</tr>";
+  }
+  document.getElementById("nfiInference").innerHTML = h + "</tbody>";
 }
 
 function renderStage() {
@@ -937,7 +987,7 @@ function renderInspector() {
 async function tick() {
   await loadAll();
   renderMatrix(); renderDeltas(); renderDistill(); renderAll(); fillSelects(); renderH2H();
-  renderInference(); renderFieldTruth(); renderFieldTruthLucas();
+  renderInference(); renderFieldTruth(); renderFieldTruthLucas(); renderNfiInference();
   renderInspector();
   document.getElementById("updated").textContent =
     "· refreshed " + new Date().toLocaleTimeString();
