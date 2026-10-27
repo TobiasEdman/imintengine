@@ -15,6 +15,11 @@
 #   - From your laptop via kubectl: kubectl -n prithvi-training-default \
 #       port-forward svc/training-dashboard 8080:8080
 #       then open http://localhost:8080/
+#   - PUBLIC: the Ingress below (training-dashboard.icedc.se, a public
+#     address, no authentication). Anything a GET returns is published.
+#     2026-10-27: the server listed /cephfs/distill and returned per-plot
+#     NFI feature parquets (plot IDs and coordinates); the Deployment was
+#     scaled to 0 and serve.py now serves bodies only from an allowlist.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -110,6 +115,10 @@ spec:
               # nmd-sameplots-compare jobs. Dangling until those run — the
               # panel renders an awaiting-state rather than an error.
               ln -sfn /cephfs/ladder_eval /www/ladder/fieldtruth
+              # Every tree above also holds files that must never be
+              # served (per-plot NFI parquets with plot coordinates,
+              # checkpoints): serve.py's Handler allowlist decides what a
+              # GET may return.
 
               # Patch 1: null-safe tile-count cells (avoids TypeError when
               # train_tiles/val_tiles missing from the new schema).
@@ -283,7 +292,7 @@ spec:
               # return the result. Static files (HTML, etc.) fall through
               # to the stdlib SimpleHTTPRequestHandler unchanged.
               cat > /serve.py <<'PY'
-              import json, os
+              import json, os, re
               from urllib.parse import unquote
               from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -400,7 +409,23 @@ spec:
                   handler.wfile.write(body)
 
               class Handler(SimpleHTTPRequestHandler):
-                  def do_GET(self):
+                  # Publication allowlist (2026-10-27). The symlinked PVC trees
+                  # hold per-plot NFI files (TractID, PlotID, Easting, Northing)
+                  # next to the files the dashboards read, and this server is
+                  # reachable through a public ingress. So: never a directory
+                  # listing; file bodies only for these extensions; under
+                  # /ladder/distill/ only the distillability JSON. HEAD stays
+                  # open for the dashboards' existence probes (headers only).
+                  BODY_EXTENSIONS = (".html", ".json", ".png", ".jpg", ".jpeg",
+                                     ".svg", ".css", ".js", ".ico")
+                  DISTILL_BODY = re.compile(r"/ladder/distill/heads/[A-Za-z0-9_]+_distillability\.json")
+
+                  def list_directory(self, path):
+                      self.send_error(404, "Not found")
+                      return None
+
+                  def _unsafe_target(self):
+                      """Reject fragments and traversal; returns the clean path or None."""
                       # Preserve configured publication symlinks, but never
                       # allow a custom handler to navigate above its URL root.
                       # Fragments are not part of an HTTP request target.
@@ -408,10 +433,31 @@ spec:
                       # still consumed by the custom handlers below.
                       if "#" in self.path:
                           self.send_error(400, "Invalid request target")
-                          return
+                          return None
                       request_path = unquote(self.path.split("?", 1)[0])
                       if ".." in request_path.split("/") or "\\" in request_path:
                           self.send_error(400, "Invalid path")
+                          return None
+                      return request_path
+
+                  def _body_allowed(self, request_path):
+                      if request_path.startswith("/ladder/distill/"):
+                          return self.DISTILL_BODY.fullmatch(request_path) is not None
+                      if request_path.lower().endswith(self.BODY_EXTENSIONS) or request_path.endswith("/"):
+                          return True   # a listed type, or index.html; listings are refused
+                      return os.path.isdir(self.translate_path(request_path))   # -> redirect to "/"
+
+                  def do_HEAD(self):
+                      if self._unsafe_target() is None:
+                          return
+                      return super().do_HEAD()
+
+                  def do_GET(self):
+                      request_path = self._unsafe_target()
+                      if request_path is None:
+                          return
+                      if not self._body_allowed(request_path):
+                          self.send_error(404, "Not found")
                           return
                       # /<slug>/training_log.json → JSON normalization
                       if self.path.endswith("/training_log.json") or \
