@@ -1,0 +1,139 @@
+---
+# One-cell timing probe for inference on the frozen NFI set (task 0118,
+# step 6). Tobias 2026-10-27, after the freeze record (#112) landed: "build +
+# one-cell probe"; the 28-cell run and its GPU cost are his decision after
+# this measurement.
+#
+# Runs scripts/validate_against_nfi.py in frozen mode, exactly as a real cell
+# would: in the sealed ladder-crop-distill image the freeze used (sha-4cb93b4),
+# so verify_evaluation_source and the per-tile and checkpoint identity checks
+# pass only against the frozen manifest (sha256 below). The cell is
+# prithvi600m_r1, the largest backbone, as an upper bound for the others.
+#
+# Read-only: the PVC is mounted readOnly at /cephfs (the paths the manifest
+# recorded) and every output goes to a Pod-private emptyDir that dies with
+# the Pod. The log prints a timeline, the wall time, GPU memory and the dump's
+# provenance metadata; it never prints the accuracy JSON, so nobody sees a
+# held-out score before scoring is authorized. One GPU on a 2080 Ti node, as
+# the distill stage's teacher inference used (docs/experiments/
+# ladder_distill_stage.md); HF_HUB_OFFLINE makes a weight download fail
+# instead of hang.
+#
+# Try 1 (2026-10-27 13:43-13:51Z) passed every identity check (7.5 min for
+# the manifest, source, checkpoint and 1,269 tile hashes; 5,194/5,194 plots
+# in crop) and then failed importing torch: uid 2000 has no passwd entry, so
+# the inductor cache dir lookup raised. The cache dirs and USER are now set;
+# the image stays the freeze's (its digest is bound in the manifest).
+#
+# After try 2, at review (Codex, #113): the failure branch printed the log's
+# last 40 lines minus metric key names, which can still show rows of a
+# partially printed results JSON. It now prints only traceback frames and the
+# exception line (SAFE_DIAGNOSTICS). Try 2 succeeded and never reached that
+# branch; try 1's failure output was a plain import traceback.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-inference-probe-prithvi600m-r1-try2
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0118"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0118"}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      nodeSelector: {accelerator: nvidia-gtx-2080ti}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: probe
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              T0=$(date +%s)
+              echo "=== ${CELL} probe — $(date -u) ==="
+              if command -v nvidia-smi >/dev/null; then
+                nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+                ( while true; do
+                    nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits >> /scratch/gpu.csv
+                    sleep 15
+                  done ) &
+                SAMPLER=$!
+              else
+                echo "nvidia-smi not in the container; no GPU samples"; SAMPLER=""
+              fi
+              set +e
+              /opt/venvs/model/bin/python -u /opt/imintengine/scripts/validate_against_nfi.py \
+                --checkpoint "/cephfs/checkpoints/ladder/${CELL}/best_model.pt" \
+                --holdout-manifest "${MANIFEST}" --cell "${CELL}" \
+                --expected-manifest-sha256 "${MANIFEST_SHA256}" \
+                --out /scratch/result.json \
+                --dump-per-plot "/scratch/nfi-per-plot-${CELL}.parquet" 2>&1 \
+                | while IFS= read -r line; do printf '%s %s\n' "$(date -u +%H:%M:%S)" "${line}"; done \
+                > /scratch/validate.log
+              STATUS=${PIPESTATUS[0]}
+              set -e
+              [ -n "${SAMPLER}" ] && kill "${SAMPLER}" 2>/dev/null || true
+              echo "validator exit ${STATUS}; wall seconds $(( $(date +%s) - T0 ))"
+              # Progress lines only, never the result JSON.
+              grep -E '^[0-9:]{8} (plot index:|kept |  \[load_model\]|wrote )' /scratch/validate.log || true
+              echo "log span: $(head -1 /scratch/validate.log | cut -c1-8) to $(tail -1 /scratch/validate.log | cut -c1-8), $(wc -l < /scratch/validate.log) lines"
+              if [ -s /scratch/gpu.csv ]; then
+                awk -F', *' '{ if ($1 > m) m = $1; s += $2; n++ }
+                  END { printf "gpu memory max %d MiB; mean utilization %.0f%% over %d samples\n", m, s / n, n }' /scratch/gpu.csv
+              fi
+              META="/scratch/nfi-per-plot-${CELL}.parquet.meta.json"
+              if [ -f "${META}" ]; then echo "--- dump metadata ---"; cat "${META}"; echo; fi
+              if [ "${STATUS}" -ne 0 ]; then
+                # Allowlist, never a denylist: see the inference template.
+                echo "--- traceback frames and exception only ---"
+                grep -E "${SAFE_DIAGNOSTICS}" /scratch/validate.log | tail -n 30 || true
+              fi
+              exit "${STATUS}"
+          env:
+            - {name: CELL, value: prithvi600m_r1}
+            - {name: MANIFEST, value: /cephfs/nfi/nfi_holdout_freeze_2026-10-27/manifest.json}
+            - {name: MANIFEST_SHA256, value: daaa428754aa4acfd832d9cc0fe5a0acb60e86ade2b511699f1181732697ff2c}
+            - {name: HOME, value: /scratch}
+            - {name: TMPDIR, value: /scratch}
+            - {name: XDG_CACHE_HOME, value: /scratch/.cache}
+            - {name: MPLCONFIGDIR, value: /scratch/.mpl}
+            - {name: TORCH_HOME, value: /scratch/.torch}
+            # uid 2000 has no passwd entry in the image; torch's compile cache
+            # otherwise calls getpass.getuser() and dies (try 1, KeyError).
+            - {name: TORCHINDUCTOR_CACHE_DIR, value: /scratch/.inductor}
+            - {name: TRITON_CACHE_DIR, value: /scratch/.triton}
+            - {name: USER, value: imint}
+            - {name: LOGNAME, value: imint}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            # The only log lines a failed run prints (as in the template).
+            - name: SAFE_DIAGNOSTICS
+              value: '^[0-9:]{8} (Traceback \(most recent call last\):|  File "[^"]*", line [0-9]+, in [A-Za-z_<>][A-Za-z0-9_<>]*|[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit)(: .{0,200})?)$'
+          resources:
+            requests: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
+            limits: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
+        - name: scratch
+          emptyDir: {sizeLimit: 20Gi}

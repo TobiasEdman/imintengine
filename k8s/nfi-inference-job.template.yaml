@@ -1,0 +1,167 @@
+---
+# Inference on the frozen NFI set, one Job per model (task 0118, step 6).
+# Tobias 2026-10-27: after the one-cell probe, "7 parallel, 2080 Ti", and run
+# only after Codex has reviewed this Job.
+#
+# Placeholder:
+#   __MODEL__  one of clay croma prithvi300m prithvi300m4f prithvi600m
+#              terramind tessera (NFI_MODELS)
+# Render and apply all seven (the rendered copies go to the evidence store):
+#   for m in clay croma prithvi300m prithvi300m4f prithvi600m terramind tessera; do
+#     sed "s/__MODEL__/$m/g" k8s/nfi-inference-job.template.yaml | kubectl apply -f -
+#   done
+# Seven Jobs rather than one Indexed Job: the cluster runs Kubernetes 1.28,
+# where backoffLimitPerIndex is alpha, so one model's failure would otherwise
+# terminate the other six mid-cell.
+#
+# Each Job runs the model's four rungs in sequence through
+# scripts/validate_against_nfi.py in frozen mode, exactly as the probe
+# (k8s/nfi-inference-probe-job.yaml) did: the sealed image the freeze used
+# (sha-4cb93b4), so the manifest, source, checkpoint and tile identities are
+# verified before inference and the dump metadata carries the provenance
+# scripts/score_nfi_holdout.py checks. Probe 2026-10-27 (prithvi600m_r1, the
+# largest backbone): 60 min per cell, 4.2 of 11 GB GPU memory.
+#
+# Writes: only the directory nfi/nfi_inference_2026-10-27/ on the PVC, which
+# is the one writable mount (subPath); the frozen set and everything else is
+# read-only. Root, because nfi/ is root:root 0755 (as for the freeze Job).
+# Each cell is computed into the Pod's emptyDir, then copied by exclusive
+# create (a cell whose file exists is refused, never overwritten), parquet
+# before metadata so a reader never sees metadata without its predictions,
+# and the copy is re-hashed against the metadata's prediction_sha256. A
+# failed cell is reported and the next rung still runs; the Job fails at the
+# end if any cell failed. The log shows a timeline, wall time per cell and the
+# metadata; never the accuracy JSON, which stays in the emptyDir.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-inference-__MODEL__-20261027
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0118", model: "__MODEL__"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0118", model: "__MODEL__"}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      nodeSelector: {accelerator: nvidia-gtx-2080ti}
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: infer
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "=== ${MODEL} r1-r4 — $(date -u) ==="
+              nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader || true
+              chmod 0755 "${OUT}"
+              FAILED=""
+              for RUNG in 1 2 3 4; do
+                CELL="${MODEL}_r${RUNG}"
+                NAME="nfi-per-plot-${CELL}.parquet"
+                if [ -e "${OUT}/${NAME}" ] || [ -e "${OUT}/${NAME}.meta.json" ]; then
+                  echo "${CELL}: output already exists; refusing to overwrite"
+                  FAILED="${FAILED} ${CELL}"; continue
+                fi
+                mkdir -p "/scratch/${CELL}"
+                T0=$(date +%s)
+                set +e
+                /opt/venvs/model/bin/python -u /opt/imintengine/scripts/validate_against_nfi.py \
+                  --checkpoint "/cephfs/checkpoints/ladder/${CELL}/best_model.pt" \
+                  --holdout-manifest "${MANIFEST}" --cell "${CELL}" \
+                  --expected-manifest-sha256 "${MANIFEST_SHA256}" \
+                  --out "/scratch/${CELL}/result.json" \
+                  --dump-per-plot "/scratch/${CELL}/${NAME}" 2>&1 \
+                  | while IFS= read -r line; do printf '%s %s\n' "$(date -u +%H:%M:%S)" "${line}"; done \
+                  > "/scratch/${CELL}/validate.log"
+                STATUS=${PIPESTATUS[0]}
+                set -e
+                echo "${CELL}: validator exit ${STATUS}; wall seconds $(( $(date +%s) - T0 ))"
+                # Progress lines only, never the result JSON.
+                grep -E '^[0-9:]{8} (plot index:|kept |  \[load_model\]|wrote )' "/scratch/${CELL}/validate.log" || true
+                if [ "${STATUS}" -ne 0 ]; then
+                  # Allowlist, never a denylist: the validator prints its
+                  # multi-line results JSON before writing, so a late failure
+                  # leaves metric rows in the log. Only traceback frames and
+                  # the exception line can match; JSON lines start with
+                  # whitespace, quotes or brackets.
+                  echo "--- ${CELL}: traceback frames and exception only ---"
+                  grep -E "${SAFE_DIAGNOSTICS}" "/scratch/${CELL}/validate.log" | tail -n 30 || true
+                  FAILED="${FAILED} ${CELL}"; continue
+                fi
+                if ! /usr/local/bin/python - "/scratch/${CELL}" "${OUT}" "${NAME}" <<'PY'
+              import hashlib, json, os, sys
+              from pathlib import Path
+              src, out, name = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+              meta_name = name + ".meta.json"
+              meta = json.loads((src / meta_name).read_text())
+              if meta.get("status") != "success":
+                  sys.exit(f"{name}: status {meta.get('status')}")
+              def copy(file):
+                  data = (src / file).read_bytes()
+                  with open(out / file, "xb") as stream:
+                      stream.write(data)
+                      stream.flush()
+                      os.fsync(stream.fileno())
+                  os.chmod(out / file, 0o644)
+              copy(name)
+              if hashlib.sha256((out / name).read_bytes()).hexdigest() != meta["prediction_sha256"]:
+                  sys.exit(f"{name}: copied bytes differ from prediction_sha256")
+              copy(meta_name)
+              print(json.dumps(meta, indent=2))
+              PY
+                then
+                  FAILED="${FAILED} ${CELL}"; continue
+                fi
+                echo "${CELL}: published to ${OUT}"
+              done
+              echo "=== ${MODEL} done — $(date -u); failed:${FAILED:- none} ==="
+              [ -z "${FAILED}" ]
+          env:
+            - {name: MODEL, value: "__MODEL__"}
+            - {name: OUT, value: /cephfs/nfi/nfi_inference_2026-10-27}
+            - {name: MANIFEST, value: /cephfs/nfi/nfi_holdout_freeze_2026-10-27/manifest.json}
+            - {name: MANIFEST_SHA256, value: daaa428754aa4acfd832d9cc0fe5a0acb60e86ade2b511699f1181732697ff2c}
+            - {name: HOME, value: /scratch}
+            - {name: TMPDIR, value: /scratch}
+            - {name: XDG_CACHE_HOME, value: /scratch/.cache}
+            - {name: MPLCONFIGDIR, value: /scratch/.mpl}
+            - {name: TORCH_HOME, value: /scratch/.torch}
+            # Set explicitly, as in the probe: torch's compile cache otherwise
+            # derives its directory from the user name.
+            - {name: TORCHINDUCTOR_CACHE_DIR, value: /scratch/.inductor}
+            - {name: TRITON_CACHE_DIR, value: /scratch/.triton}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            # The only log lines a failed cell prints: traceback header, frame
+            # lines and the final exception line (time-stamped, as written).
+            - name: SAFE_DIAGNOSTICS
+              value: '^[0-9:]{8} (Traceback \(most recent call last\):|  File "[^"]*", line [0-9]+, in [A-Za-z_<>][A-Za-z0-9_<>]*|[A-Za-z_][A-Za-z0-9_.]*(Error|Exception|Exit)(: .{0,200})?)$'
+          resources:
+            requests: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
+            limits: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # Everything read-only except the new inference directory.
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: data, mountPath: /cephfs/nfi/nfi_inference_2026-10-27, subPath: nfi/nfi_inference_2026-10-27}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: scratch
+          emptyDir: {sizeLimit: 20Gi}
