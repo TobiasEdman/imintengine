@@ -1,0 +1,61 @@
+---
+# Read-only probe before the freeze (task 0117, 2026-10-27): can the sealed
+# image's own user create the freeze directory under nfi/ on the PVC?
+#
+# Answer, as uid 2000 with the PVC read-only: nfi/ is root:root 0755 and
+# every file in it root-owned 0644 (one 501:staff), so uid 2000 cannot
+# create a directory there and k8s/nfi-holdout-freeze-job.yaml runs as root,
+# as k8s/nfi-index-v5-job.yaml did. It also confirmed the freeze directory
+# did not exist yet. Prints owners, modes and names of nfi/ only.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-freeze-dir-probe
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -u
+              echo "uid=$(id -u) gid=$(id -g)"
+              stat -c 'dir %U(%u):%G(%g) %a %n' /cephfs/nfi /cephfs/manifests /cephfs
+              stat -c 'file %U(%u):%G(%g) %a %n' /cephfs/nfi/*
+              test -w /cephfs/nfi && echo "nfi writable by uid 2000: yes" || echo "nfi writable by uid 2000: no (read-only mount or perms)"
+              test -e /cephfs/nfi/nfi_holdout_freeze_2026-10-27 && echo "freeze dir EXISTS" || echo "freeze dir absent"
+              echo "ls -ld /opt/imintengine/config:"; ls -ld /cephfs/nfi
+          resources:
+            requests: {cpu: "100m", memory: 128Mi}
+            limits: {cpu: "100m", memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /cephfs, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}

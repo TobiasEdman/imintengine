@@ -1,0 +1,143 @@
+---
+# Freeze the multi-year NFI held-out evaluation set (task 0117, step 5 of
+# docs/ops/nfi_multiyear_control_tiles_plan.md). Tobias 2026-10-27: "start
+# the freeze", after the step-4 support record (#110) fixed the quota and the
+# prerequisites (#111) closed with report r5 passing every gate.
+#
+# scripts/prepare_nfi_holdout.py, in the sealed ladder-crop-distill image
+# built at the reviewed main sha, with the same inputs, roots and exceptions
+# as the r5 support report (k8s/nfi-support-report-job.yaml) and, instead of
+# --report-only, the prespecified selection: --population balanced over
+# 2018–2024 with 742 plot-years per year (docs/experiments/
+# nfi_multiyear_support_2026-10-26.md). Tie-break campaign, then frame_2016
+# with 2016 SAR, then name; has_frame_2016 per plot-year.
+#
+# The only write is the new freeze directory under nfi/ on the PVC
+# (holdout.parquet, training.parquet, manifest.json), created exclusively:
+# the script refuses an existing --out-dir. The PVC is mounted read-only
+# except the nfi/ subPath, as for k8s/nfi-index-v5-job.yaml. Runs as root
+# for the same reason that Job did: nfi/ is root:root 0755 (probe
+# nfi-freeze-dir-probe, 2026-10-27, as uid 2000: "nfi writable: no"), so the
+# image's own user (2000) could not create the directory; every other file
+# in nfi/ is root-owned 0644 and reads as uid 2000 did in r5. The promotion
+# Job's JSON comes from ConfigMap nfi-tessera-promote-v2-job. TMPDIR is a
+# Pod-private emptyDir for the checkpoint-metadata child. Ephemeral-storage
+# request equals the limit, as the ICE admission webhook requires.
+#
+# The manifest ends in state awaiting_user_go_no_go: inference and NMD
+# scoring need their own go.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-holdout-freeze-20261027
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 28800
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: freeze
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/venvs/scoring/bin/python
+            - -u
+            - /opt/imintengine/scripts/prepare_nfi_holdout.py
+            - --population
+            - balanced
+            - --inventory-years
+            - "2018"
+            - "2019"
+            - "2020"
+            - "2021"
+            - "2022"
+            - "2023"
+            - "2024"
+            - --observations-per-year
+            - "742"
+            - --out-dir
+            - /cephfs/nfi/nfi_holdout_freeze_2026-10-27
+            - --plot-index
+            - /cephfs/nfi/nfi_index_v5_2026-10-24.parquet
+            - --teacher-index
+            - /cephfs/nfi/nfi_index_unified_v2_512.parquet
+            - --teacher-root
+            - /cephfs/distill/heads
+            - --distill-root
+            - /cephfs/distill
+            - --checkpoint-root
+            - /cephfs/checkpoints/ladder
+            - --cohort-dir
+            - /cephfs/unified_v2_512
+            - --staging-dir
+            - /cephfs/unified_v2_512_nfi2024_staging
+            - --promotion-job-json
+            - /promotion/tessera-promote-v2.job.json
+            - --promotion-report
+            - /cephfs/manifests/tessera_promotion.json
+            - --nmd2023
+            - /cephfs/nmd2023/NMD2023bas_v2_1.tif
+            - --nmd2018
+            - /cephfs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif
+            - --evaluation-root
+            - holdout_copy:any:/cephfs/holdout_eval_512
+            - --evaluation-root
+            - topup2018:2018:/cephfs/unified_v2_512_nfi2018_staging
+            - --evaluation-root
+            - topup2019:2019:/cephfs/unified_v2_512_nfi2019_staging
+            - --evaluation-root
+            - topup2021:2021:/cephfs/unified_v2_512_nfi2021_staging
+            - --evaluation-root
+            - topup2022:2022:/cephfs/unified_v2_512_nfi2022_staging
+            - --exceptions
+            - /opt/imintengine/config/nfi_freeze_exceptions.json
+            - --runtime-image
+            - ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d
+            - --runtime-manifest
+            - /opt/provenance/runtime.json
+            - --source-git-sha
+            - 4cb93b4c38ec27daa579b0dfe3d40ff0adb792b8
+          env:
+            - {name: CUDA_VISIBLE_DEVICES, value: ""}
+            - {name: TMPDIR, value: /scratch}
+          resources:
+            requests: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+            limits: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # Everything read-only except /cephfs/nfi, where the freeze directory is created.
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: data, mountPath: /cephfs/nfi, subPath: nfi}
+            - {name: promotion, mountPath: /promotion, readOnly: true}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: promotion
+          configMap: {name: nfi-tessera-promote-v2-job}
+        - name: scratch
+          emptyDir: {sizeLimit: 20Gi}
