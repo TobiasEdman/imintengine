@@ -1,0 +1,207 @@
+{
+ "schema": "nfi-multiyear-freeze/1",
+ "step": "5: freeze of the multi-year NFI held-out evaluation set (docs/ops/nfi_multiyear_control_tiles_plan.md)",
+ "task": "0117",
+ "record": "nfi_multiyear_freeze_2026-10-27.md",
+ "follows": "nfi_multiyear_support_20261026.json",
+ "decisions_user_stated": {
+  "2026-10-26": "quota 742 plot-years per year, 2018-2024, under the freeze's own rules (step-4 record)",
+  "2026-10-27": "start the freeze"
+ },
+ "freeze": {
+  "directory": "/data/nfi/nfi_holdout_freeze_2026-10-27",
+  "manifest": {
+   "file": "manifest.json",
+   "sha256": "daaa428754aa4acfd832d9cc0fe5a0acb60e86ade2b511699f1181732697ff2c",
+   "bytes": 16023082,
+   "schema": "nfi-fieldtruth-freeze-v1",
+   "execution": "awaiting_user_go_no_go"
+  },
+  "holdout": {
+   "file": "holdout.parquet",
+   "bytes": 637475,
+   "observations": 5194,
+   "sha256_matches_manifest": true
+  },
+  "training": {
+   "file": "training.parquet",
+   "bytes": 4829,
+   "observations": 841,
+   "sha256_matches_manifest": true,
+   "note": "teacher-exposed plot-years the freeze excluded"
+  },
+  "owner": "root:root 0644 (Job ran as root; nfi/ is root:root 0755, so uid 2000 cannot create directories there)",
+  "git_sha": "4cb93b4c38ec27daa579b0dfe3d40ff0adb792b8",
+  "image": {
+   "ref": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d",
+   "tag": "sha-4cb93b4",
+   "source_git_sha": "4cb93b4c38ec27daa579b0dfe3d40ff0adb792b8"
+  },
+  "exceptions": "config/nfi_freeze_exceptions.json (promotion_no_v2 9; sidecars_missing croma 10, terramind 10)",
+  "protocol": {
+   "primary_population": "balanced",
+   "year_selection": {
+    "method": "sha256_plot_year_rank_v1",
+    "seed": 20261008,
+    "years": [
+     2018,
+     2019,
+     2020,
+     2021,
+     2022,
+     2023,
+     2024
+    ],
+    "observations_per_year": 742
+   }
+  },
+  "manifest_counts": {
+   "tiles": 1269,
+   "inputs": 28,
+   "training_footprint_inputs": 7882
+  }
+ },
+ "selection": {
+  "index_rows": 11809,
+  "index_observations": 9576,
+  "training_overlap_rows": 949,
+  "cohort_overlap_rows": 156,
+  "training_footprint_overlap_rows": 0,
+  "common_support_rows": 10421,
+  "duplicate_rows_removed": 2026,
+  "pre_nmd_coverage_observations": 8395,
+  "nmd_coverage": {
+   "NMD2023": {
+    "covered": 7925,
+    "uncovered": 470
+   },
+   "NMD2018": {
+    "covered": 8395,
+    "uncovered": 0
+   }
+  },
+  "nmd_coverage_excluded_by_year": {
+   "2018": 80,
+   "2019": 50,
+   "2020": 55,
+   "2021": 31,
+   "2022": 49,
+   "2023": 54,
+   "2024": 151
+  },
+  "pre_balance_observations": 7925,
+  "outside_selected_years": 0,
+  "eligible_by_selected_year": {
+   "2018": 742,
+   "2019": 962,
+   "2020": 969,
+   "2021": 1007,
+   "2022": 949,
+   "2023": 1180,
+   "2024": 2116
+  },
+  "excluded_by_year_quota": 2731,
+  "observations": 5194,
+  "year_support": {
+   "2018": 742,
+   "2019": 742,
+   "2020": 742,
+   "2021": 742,
+   "2022": 742,
+   "2023": 742,
+   "2024": 742
+  },
+  "has_frame_2016_by_year": {
+   "2018": {
+    "present": 607,
+    "absent": 135
+   },
+   "2019": {
+    "present": 642,
+    "absent": 100
+   },
+   "2020": {
+    "present": 641,
+    "absent": 101
+   },
+   "2021": {
+    "present": 627,
+    "absent": 115
+   },
+   "2022": {
+    "present": 651,
+    "absent": 91
+   },
+   "2023": {
+    "present": 642,
+    "absent": 100
+   },
+   "2024": {
+    "present": 724,
+    "absent": 18
+   }
+  },
+  "tile_role_support": {
+   "holdout_copy": 3823,
+   "campaign": 718,
+   "topup2018": 325,
+   "topup2021": 161,
+   "topup2022": 125,
+   "topup2019": 42
+  },
+  "class_support": {
+   "0": 281,
+   "1": 2380,
+   "2": 1308,
+   "3": 537,
+   "4": 688
+  },
+  "campaign_tiles_in_training": 0,
+  "training_observation_overlap": 0,
+  "extended_set_note": "the 2,731 eligible plot-years not selected are not written; reproducible from the manifest's inputs and method"
+ },
+ "checks": {
+  "year_support_equals_quota": true,
+  "observations_equal_7x742": true,
+  "class_support_sums_to_observations": true,
+  "frame_split_sums_to_742_per_year": true,
+  "unique_plot_years": 5194,
+  "duplicates": 0,
+  "eligible_counts_equal_step4_freeze_variant": true,
+  "manifest_digest_readback_equals_job_output": true
+ },
+ "execution_evidence": {
+  "nfi-freeze-dir-probe": {
+   "pod": "expired (ttl 1 h) before capture",
+   "started": "2026-10-27T07:52Z (approximate; before the freeze Job)",
+   "exit_code": 0,
+   "source": "k8s/nfi-freeze-dir-probe-job.yaml; read-only, uid 2000",
+   "finding": "nfi/ root:root 0755, not writable by uid 2000; freeze directory absent",
+   "log": "freeze-dir-probe.log",
+   "log_sha256": "4ed539f62da651e33b0534a73006d47533238fa52221ca282e5df76c1f6c8cc6"
+  },
+  "nfi-holdout-freeze-20261027": {
+   "pod": "nfi-holdout-freeze-20261027-x78s8",
+   "node": "p02r09srv02",
+   "started": "2026-10-27T07:57:11Z",
+   "finished": "2026-10-27T11:16:00Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-holdout-freeze-job.yaml; image sha-4cb93b4; root; nfi/ subPath writable",
+   "log": "holdout-freeze.log",
+   "log_sha256": "40077a23e82e8ccb34753037d954c8cc0181e957dcb073434e7f706388228506",
+   "note": "about 1.5 TB of tile hashing for the manifest at ~174 MB/s accounts for the time beyond r5's 109 min"
+  },
+  "nfi-freeze-readback-probe": {
+   "pod": "nfi-freeze-readback-probe-wv9vn",
+   "node": "p02r10srv03",
+   "started": "2026-10-27T11:35:50Z",
+   "finished": "2026-10-27T11:36:08Z",
+   "exit_code": 0,
+   "source": "k8s/nfi-freeze-readback-probe-job.yaml; read-only, uid 2000 (first attempt failed before any check: pip could not write site-packages as uid 2000)",
+   "log": "freeze-readback-probe.log",
+   "log_sha256": "05fc9011d1cc39d9e0268865af29ec0938fa76bde98588b7b0def453c27a4dc2"
+  }
+ },
+ "evidence_dir": "~/.agents/continuity/evidence/ImintEngine/nfi-index-v5-20261024/ (logs are not committed; hashes above)",
+ "next": "go/no-go for inference and NMD scoring against manifest sha256 daaa4287…; scorer binds with --expected-manifest-sha256"
+}

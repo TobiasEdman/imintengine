@@ -1,0 +1,88 @@
+---
+# Read the frozen NFI evaluation set back as uid 2000 (task 0117, step 5,
+# 2026-10-27), after k8s/nfi-holdout-freeze-job.yaml wrote it as root.
+#
+# Proves what the inference and scoring Jobs will need: the three files are
+# readable by the image's own user; the manifest digest equals the one the
+# freeze Job printed; holdout.parquet and training.parquet hash to what the
+# manifest records; the holdout has one row per plot-year, 742 per year
+# 2018–2024, with has_frame_2016, tile_role and nfi_forest. Prints counts,
+# hashes, owners and column names only: no plot identities or coordinates.
+# PVC read-only; pandas installs into /tmp because uid 2000 cannot write
+# the image's site-packages.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-freeze-readback-probe
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0117"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              export HOME=/tmp PYTHONPATH=/tmp/site
+              pip install -q --no-cache-dir --target /tmp/site pandas pyarrow
+              python - <<'PY'
+              import hashlib, json, os
+              from pathlib import Path
+              import pandas as pd
+              d = Path("/cephfs/nfi/nfi_holdout_freeze_2026-10-27")
+              print("uid", os.getuid())
+              for p in sorted(d.iterdir()):
+                  st = p.stat()
+                  print(f"{p.name} uid={st.st_uid} gid={st.st_gid} mode={oct(st.st_mode)[-4:]} bytes={st.st_size}")
+              sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+              m = json.loads((d / "manifest.json").read_text())
+              print("manifest_sha256", sha(d / "manifest.json"))
+              for label in ("holdout", "training"):
+                  rec = m[label]; f = d / rec["file"]
+                  frame = pd.read_parquet(f)
+                  print(label, "sha_ok", sha(f) == rec["sha256"], "rows", len(frame), "manifest_obs", rec["observations"])
+                  if label == "holdout":
+                      print("holdout columns", sorted(frame.columns))
+                      print("year counts", frame["Year"].value_counts().sort_index().to_dict())
+                      print("has_frame_2016 by year", frame.groupby("Year")["has_frame_2016"].sum().to_dict())
+                      print("tile_role", frame["tile_role"].value_counts().to_dict())
+                      print("nfi_forest", frame["nfi_forest"].value_counts().sort_index().to_dict())
+                      keys = frame[["TractID", "PlotID", "Year"]].drop_duplicates()
+                      print("unique plot-years", len(keys), "duplicates", len(frame) - len(keys))
+              print("schema", m["schema"], "state", m["execution"], "git_sha", m["git_sha"])
+              print("protocol.year_selection", m["protocol"].get("year_selection"))
+              print("tiles in manifest", len(m["tiles"]), "inputs", len(m["inputs"]), "footprint inputs", len(m["training_footprint_inputs"]))
+              print("exceptions counts", {k: (len(v) if isinstance(v, dict) and k == "promotion_no_v2" else {kk: len(vv) for kk, vv in v.items()} if isinstance(v, dict) else v) for k, v in m["exceptions"].items() if k in ("promotion_no_v2", "sidecars_missing")})
+              PY
+          resources:
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "1", memory: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /cephfs, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
