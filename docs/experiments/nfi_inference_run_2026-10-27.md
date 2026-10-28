@@ -2,10 +2,17 @@
 
 Task 0118, run 2026-10-27. This follows [the probe and run plan](nfi_inference_probe_2026-10-27.md)
 and applies its Jobs to [the freeze](nfi_multiyear_freeze_2026-10-27.md) (manifest
-sha256 `daaa4287…ff2c`). Tobias confirmed the plan on 2026-10-27 (~19:55Z). No held-out
-score is in this record, in the JSON companion or in any log: the Jobs and the
-verification print counts, timelines and digests only. Scoring against NMD needs
-Tobias's own go.
+sha256 `daaa4287…ff2c`). Tobias confirmed the plan on 2026-10-27 (~19:55Z).
+
+**What was and was not computed.** The sealed `validate_against_nfi.py` cannot
+infer without scoring: for each cell it calls `score_against_nfi`, prints that
+cell's accuracy JSON and writes a `result.json`. The Jobs sent both to the Pod's
+emptyDir (`/scratch/<cell>/`), which was deleted with the Pod; the published Job
+logs show only timeline and metadata lines, and nobody read the transient
+files. So per-cell metrics were computed and discarded unseen. No held-out score
+is in this record, the JSON companion or any published log. The paired scoring
+against NMD (`score_nfi_holdout.py`: one denominator, spatial-block statistics)
+has not run; it needs Tobias's go.
 
 ## Verdict
 
@@ -50,4 +57,5 @@ three hours earlier on another node: frozen-mode inference is reproducible.
 
 Scoring: `scripts/score_nfi_holdout.py --holdout-manifest … --dump-dir
 nfi/nfi_inference_2026-10-27 --expected-manifest-sha256 daaa4287…`, which needs
-Tobias's go. Nothing in this step computed a score.
+Tobias's go. This step published no score; the validator's transient per-cell
+metrics (above) were never read.

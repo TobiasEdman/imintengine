@@ -237,5 +237,6 @@
  "reproducibility": "prithvi600m_r1 prediction sha256 d0c95f23\u2026 equals the probe's (try 2, other node)",
  "notes": [
   "gpu-reaper deletes finished GPU Jobs after 60 min and archives logs/spec/events to /cephfs/ops/reaper_archive/ first; six Job logs were read from there"
- ]
+ ],
+ "transient_metrics": "validate_against_nfi.py computed per-cell accuracy (score_against_nfi) into each Pod's emptyDir (/scratch/<cell>/validate.log, result.json); deleted with the Pods, never published or read. The paired NMD scoring (score_nfi_holdout.py) has not run."
 }
