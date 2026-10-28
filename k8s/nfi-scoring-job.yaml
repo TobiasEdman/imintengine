@@ -1,0 +1,99 @@
+---
+# Score the 28 frozen-set NFI prediction files against NMD (task 0118,
+# step 6). Tobias 2026-10-28: "Go after #115 lands" (the inference record),
+# with this Job reviewed by Codex first; the results go to him first.
+#
+# Runs scripts/score_nfi_holdout.py unchanged, in the sealed image the freeze
+# and the inference used (sha-4cb93b4) and under the model interpreter that
+# verify_evaluation_source requires. It re-verifies the manifest digest, the
+# sealed source and runtime, every prediction file's provenance and its
+# coverage of the frozen plot-years, samples NMD2023 and NMD2018 at the
+# frozen locations, and writes one aggregate report: scores, per-year and
+# per-role strata, confusion matrices and the prespecified paired
+# comparisons (spatial-block bootstrap, exact block sign-flip, Holm). No
+# per-plot rows are written.
+#
+# The only write is nfi/nfi_scoring_2026-10-28/scores.json, refused if it
+# exists (the scorer opens it with "x"). Root, because nfi/ is root:root
+# 0755; only that subPath is writable. The log prints the report's size and
+# sha256, not its contents; the report is read back separately.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-scoring-20261028
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0118"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0118"}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: score
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              OUT="${OUT_DIR}/scores.json"
+              echo "=== NFI scoring — $(date -u) ==="
+              /opt/venvs/model/bin/python -u /opt/imintengine/scripts/score_nfi_holdout.py \
+                --holdout-manifest "${MANIFEST}" \
+                --dump-dir "${DUMPS}" \
+                --nmd2023 /cephfs/nmd2023/NMD2023bas_v2_1.tif \
+                --nmd2018 /cephfs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                --out "${OUT}" \
+                --expected-manifest-sha256 "${MANIFEST_SHA256}"
+              chmod 0755 "${OUT_DIR}"
+              chmod 0644 "${OUT}"
+              echo "report: $(stat -c %s "${OUT}") bytes, sha256 $(sha256sum "${OUT}" | cut -d' ' -f1)"
+              echo "=== done — $(date -u) ==="
+          env:
+            - {name: MANIFEST, value: /cephfs/nfi/nfi_holdout_freeze_2026-10-27/manifest.json}
+            - {name: MANIFEST_SHA256, value: daaa428754aa4acfd832d9cc0fe5a0acb60e86ade2b511699f1181732697ff2c}
+            - {name: DUMPS, value: /cephfs/nfi/nfi_inference_2026-10-27}
+            - {name: OUT_DIR, value: /cephfs/nfi/nfi_scoring_2026-10-28}
+            - {name: HOME, value: /scratch}
+            - {name: TMPDIR, value: /scratch}
+            - {name: XDG_CACHE_HOME, value: /scratch/.cache}
+            - {name: MPLCONFIGDIR, value: /scratch/.mpl}
+            - {name: TORCHINDUCTOR_CACHE_DIR, value: /scratch/.inductor}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: CUDA_VISIBLE_DEVICES, value: ""}
+          resources:
+            requests: {cpu: "4", memory: 16Gi, ephemeral-storage: 4Gi}
+            limits: {cpu: "4", memory: 16Gi, ephemeral-storage: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # Everything read-only except the new scoring directory.
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: data, mountPath: /cephfs/nfi/nfi_scoring_2026-10-28, subPath: nfi/nfi_scoring_2026-10-28}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: scratch
+          emptyDir: {sizeLimit: 2Gi}
