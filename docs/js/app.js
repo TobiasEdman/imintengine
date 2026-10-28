@@ -76,7 +76,9 @@
             '" title="Dölj panel">&#x2715;</button>' +
             '</div></div>' +
             '<div id="' + panel.id + '" class="map-container"></div>' +
-            (panel.legend ? renderLegend(panel.legend) : '') +
+            // legend: one LEGENDS key, or several when the overlay and a
+            // toggled background use different class schemes.
+            (panel.legend ? [].concat(panel.legend).map(renderLegend).join('') : '') +
             '</div>';
         return html;
     }

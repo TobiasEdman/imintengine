@@ -1403,6 +1403,7 @@ python demos/cloud_models/run_comparison.py</pre>
             <a href="#" class="sub-tab active" data-subtab="wetland_pirinen">🪻 Våtmark — Pirinen-stack</a>
             <a href="#" class="sub-tab" data-subtab="fire">🔥 Brand — Kårbölebranden</a>
             <a href="#" class="sub-tab" data-subtab="grazing">🐄 Betesmark</a>
+            <a href="#" class="sub-tab" data-subtab="nfi_validation">🌲 Fältvalidering — NFI</a>
         </div>
 
         <div class="sub-tab-content active" id="tab-wetland_pirinen">
@@ -1626,6 +1627,67 @@ python demos/cloud_models/run_comparison.py</pre>
                 </p>
             </div>
         </div>
+
+        <div class="sub-tab-content" id="tab-nfi_validation">
+            <div class="tab-dynamic"></div>
+            <div class="tab-description">
+
+                <h3>Resultat i stora drag</h3>
+                <p>
+                    Överensstämmelse med Riksskogstaxeringen jämfört med NMD2023, på samma provytor.
+                    Fullständiga resultat, siffror och felanalys publiceras i en kommande artikel.
+                </p>
+                <table style="width:100%; border-collapse:collapse; font-size:16px; margin-top:12px;">
+                    <thead>
+                        <tr style="background:#1a4338; color:#cff8e4;">
+                            <th style="text-align:left; padding:10px 12px;">Träningsunderlag</th>
+                            <th style="text-align:left; padding:10px 12px;">Prithvi-EO-2.0 (300M och 600M)</th>
+                            <th style="text-align:left; padding:10px 12px;">TESSERA</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <th style="text-align:left; padding:10px 12px; font-weight:600;">Kartan NMD2023</th>
+                            <td style="padding:10px 12px;"><strong>Mer sällan</strong> än NMD2023 själv</td>
+                            <td style="padding:10px 12px;"><strong>Lika ofta</strong> som NMD2023</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <th style="text-align:left; padding:10px 12px; font-weight:600;">Kartan + fältkalibrerade etiketter från NFI (slutliga modeller)</th>
+                            <td style="padding:10px 12px;"><strong>Oftare</strong> än NMD2023</td>
+                            <td style="padding:10px 12px;"><strong>Tydligt oftare</strong> än NMD2023 — högst i studien</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Tre iakttagelser</h3>
+                <p>
+                    <strong>Att lära sig NMD2023 räcker inte för att slå NMD2023.</strong> Modeller som bara
+                    tränats på NMD2023 når som bäst kartans egen överensstämmelse med fältdata.
+                </p>
+                <p>
+                    <strong>Fältkalibreringen gör skillnaden.</strong> Med etiketter från en lärare som tränats
+                    mot NFI-provytor förbättras både Prithvi och TESSERA tydligt, och den vinsten är större än
+                    skillnaden mellan Prithvi och TESSERA.
+                </p>
+                <p>
+                    <strong>Större modell är inte automatiskt bättre.</strong> I de slutliga modellerna var
+                    Prithvi-EO-2.0 600M inte bättre än 300M. TESSERA, som bygger på förberäknade embeddings från ett helt års
+                    satellitobservationer, nådde högst överensstämmelse.
+                </p>
+
+                <h3>Att tänka på</h3>
+                <p>
+                    Måttet är femklassig överensstämmelse över alla provytor; det visar inte ensamt att
+                    modellerna skiljer trädslag bättre inom skog. Studien omfattar fler grundmodeller än de
+                    två som visas här. Provytornas lägen är skyddade och publiceras inte.
+                    <br><em>Designen är dokumenterad öppet:
+                    <a href="https://github.com/TobiasEdman/imintengine/blob/main/docs/experiments/nfi_multiyear_freeze_2026-10-27.md" target="_blank">frysningen</a>,
+                    <a href="https://github.com/TobiasEdman/imintengine/blob/main/docs/experiments/nfi_inference_run_2026-10-27.md" target="_blank">modellkörningen</a> och
+                    <a href="https://github.com/TobiasEdman/imintengine/blob/main/k8s/nfi-scoring-job.yaml" target="_blank">poängsättningsjobbet</a>.
+                    Lagrens ursprung: <a href="showcase/nfi_validation/MANIFEST.json">MANIFEST.json</a>.</em>
+                </p>
+            </div>
+        </div>
     </div>
 
     <div class="footer">
@@ -1757,8 +1819,8 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=18"></script>
-    <script src="js/app.js?v=13"></script>
+    <script src="js/tab-data.js?v=19"></script>
+    <script src="js/app.js?v=14"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
     <script src="js/lilla-karlso-chart.js?v=1"></script>

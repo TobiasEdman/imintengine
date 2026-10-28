@@ -27,6 +27,19 @@ var LEGENDS = {
         {color:'#FF6347',label:'Vägar'},{color:'#0000FF',label:'Sjöar'},
         {color:'#1E90FF',label:'Hav'}
     ],
+    // Unified-schema classes present in the NFI-tab model maps
+    // (docs/showcase/nfi_validation/MANIFEST.json → map_classes_present).
+    unified_nfi: [
+        {color:'#006400',label:'Tallskog'},{color:'#228B22',label:'Granskog'},
+        {color:'#32CD32',label:'Lövskog'},{color:'#3CB371',label:'Blandskog'},
+        {color:'#2E4F2E',label:'Sumpskog'},{color:'#A0C878',label:'Tillfälligt ej skog'},
+        {color:'#00CED1',label:'Hygge'},{color:'#8B5A2B',label:'Våtmark'},
+        {color:'#D2B48C',label:'Öppen mark'},{color:'#ABC8A6',label:'Buskdominerad mark'},
+        {color:'#CDAA66',label:'Risdominerad mark'},{color:'#FFD27E',label:'Gräsdominerad mark'},
+        {color:'#E0E0E0',label:'Öppen mark utan vegetation'},{color:'#64C864',label:'Slåttervall'},
+        {color:'#50A03C',label:'Bete'},{color:'#FF0000',label:'Bebyggelse'},
+        {color:'#0000FF',label:'Vatten'}
+    ],
     nmd_grazing: [
         {color:'#FFD700',label:'Åkermark'},{color:'#D2B48C',label:'Öpp. mark veg.'},
         {color:'#50B43C',label:'Ädellövskog'},{color:'#32CD32',label:'Triviallöv'},
@@ -218,6 +231,11 @@ var LEGENDS = {
     ]
 };
 
+// NFI tab: the model maps and the NMD2023 background use different class
+// schemes, so each strip carries a text-only title item.
+LEGENDS.nmd2023 = [{label:'<strong>NMD2023:</strong>'}].concat(LEGENDS.nmd);
+LEGENDS.unified_nfi = [{label:'<strong>Modellkarta:</strong>'}].concat(LEGENDS.unified_nfi);
+
 // Radar sub-tabs: every panel that can show the Sjökort background carries
 // the chart's attribution as a text-only legend item.
 var S1_CHART_CREDITS = {
@@ -376,6 +394,42 @@ var TAB_CONFIG = {
         hasBgToggle: false,
         hasCharts: true,
         chartSectionTitle: 'Korsreferens mot NMD (Nationellt Marktackedata)'
+    },
+
+    nfi_validation: {
+        title: 'Fältvalidering mot Riksskogstaxeringen — förhandsvisning',
+        summary: [
+            {title:'Fältdata',value:'5 194 provyte-år',detail:'742 per år, 2018–2024'},
+            {title:'Utvärderingsmängd',value:'Förseglad',detail:'låst med SHA-256 innan modellerna kördes'},
+            {title:'Jämförelse',value:'Samma provytor',detail:'modeller, NMD2018 och NMD2023 parvis'},
+            {title:'Statistik',value:'Bestämd i förväg',detail:'50 km-block, korrigerad för multipla jämförelser'}
+        ],
+        copy: {
+            lede: 'Hur väl stämmer marktäckekartor med vad som faktiskt finns på marken? Vi har jämfört modellernas kartor och Naturvårdsverkets NMD med Riksskogstaxeringens provytor från sju inventeringsår. I stora drag: både Prithvi-EO-2.0 och TESSERA stämmer oftare med fältbedömningen än NMD2023 — men bara när de tränas med fältkalibrerade etiketter. Exempelrutan nedan, ca 5 × 5 km i ett skogs- och skärgårdslandskap, ingår inte i utvärderingsmängden.',
+            hint: 'Växla bakgrund mellan satellitbild och NMD2023 i panelens topp, och dra opacitetsreglaget för att tona modellernas resultat över bakgrunden. Panelerna zoomar och panorerar tillsammans.',
+            methods: [
+                { heading: 'Utvärderingsdesign',
+                  body: '<p>742 provyte-år per år 2018–2024 valdes med ett seedat, dokumenterat urval och låstes med en SHA-256-hash innan någon modell kördes; poängsättningen kontrollerar hashen innan den räknar. Modellerna, NMD2018 och NMD2023 jämförs parvis på samma provytor. Måttet är överensstämmelse i fem klasser — tallskog, granskog, lövskog, blandskog och övrigt (inklusive icke-skog). Osäkerheten skattas över oberoende 50 km-block och korrigeras för det totala antalet jämförelser. De provyte-år vars data tränade den fältkalibrerade läraren är uteslutna ur utvärderingen.</p>' },
+                { heading: 'Kartlagren',
+                  body: '<p>Satellitbilden är en Sentinel-2-sommarbild med kontraststräckning för visning. NMD2023 visas med showcasens NMD-legend; NMD2023:s nyare koder (finindelad öppen våtmark och öppen mark, låg fjällskog, torvtäkt) visas som närmaste NMD2018-klass. Modellkartorna är de slutliga, fältkalibrerade modellernas fulla klassutdata — fler klasser än de fem som utvärderas. Alla lager täcker modellens 504 × 504 px-fönster.</p>' }
+            ]
+        },
+        panels: [
+            {id:'nfi-rgb',     key:'rgb',     title:'Sentinel-2 RGB / NMD2023', legend:'nmd2023',
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-prithvi', key:'prithvi', title:'Prithvi-EO-2.0 600M',       legend:['unified_nfi','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-tessera', key:'tessera', title:'TESSERA',                   legend:['unified_nfi','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]}
+        ],
+        images: {
+            'nfi-rgb':     'showcase/nfi_validation/rgb.png',
+            'nfi-nmd':     'showcase/nfi_validation/nmd2023.png',
+            'nfi-prithvi': 'showcase/nfi_validation/prithvi600m_r4.png',
+            'nfi-tessera': 'showcase/nfi_validation/tessera_r4.png'
+        },
+        imgH: 504, imgW: 504,
+        hasBgToggle: false
     },
 
     marine_leisure: {
