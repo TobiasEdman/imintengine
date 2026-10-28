@@ -294,7 +294,7 @@ spec:
               # return the result. Static files (HTML, etc.) fall through
               # to the stdlib SimpleHTTPRequestHandler unchanged.
               cat > /serve.py <<'PY'
-              import json, os, re
+              import json, os, posixpath, re
               from datetime import datetime, timezone
               from urllib.parse import unquote
               from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -466,38 +466,64 @@ spec:
                   # hold per-plot NFI files (TractID, PlotID, Easting, Northing)
                   # next to the files the dashboards read, and this server is
                   # reachable through a public ingress. So: never a directory
-                  # listing; file bodies only for these extensions; under
-                  # /ladder/distill/ only the distillability JSON. HEAD stays
-                  # open for the dashboards' existence probes (headers only).
+                  # listing; file bodies only for these extensions; inside the
+                  # distill tree only the distillability JSON. HEAD stays open
+                  # for the dashboards' existence probes (headers only).
                   BODY_EXTENSIONS = (".html", ".json", ".png", ".jpg", ".jpeg",
                                      ".svg", ".css", ".js", ".ico")
-                  DISTILL_BODY = re.compile(r"/ladder/distill/heads/[A-Za-z0-9_]+_distillability\.json")
+                  DISTILL_BODY = re.compile(r"heads/[A-Za-z0-9_]+_distillability\.json")
                   NFI_INFERENCE_DIR = "/cephfs/nfi/nfi_inference_2026-10-27"
                   NFI_INFERENCE_CELLS = 28
+                  # Served root; __init__ replaces it with the cwd (/www).
+                  directory = "/www"
 
                   def list_directory(self, path):
                       self.send_error(404, "Not found")
                       return None
 
                   def _unsafe_target(self):
-                      """Reject fragments and traversal; returns the clean path or None."""
-                      # Preserve configured publication symlinks, but never
-                      # allow a custom handler to navigate above its URL root.
+                      """Canonicalize the request path once, or refuse it.
+
+                      The policy and the file opened must see the same path
+                      (Codex, #114: "//", "/./" and a double-encoded "." passed
+                      a prefix check and were normalized only when the file was
+                      opened). One decode; anything still encoded, a backslash,
+                      a NUL, a ".." segment or a relative target is refused;
+                      repeated slashes and "." segments collapse; self.path is
+                      rewritten so every later step reads the canonical path."""
                       # Fragments are not part of an HTTP request target.
-                      # Reject raw # before parsing can hide filesystem parts
-                      # still consumed by the custom handlers below.
+                      # Reject raw # before parsing can hide filesystem parts.
                       if "#" in self.path:
                           self.send_error(400, "Invalid request target")
                           return None
-                      request_path = unquote(self.path.split("?", 1)[0])
-                      if ".." in request_path.split("/") or "\\" in request_path:
+                      raw, sep, query = self.path.partition("?")
+                      decoded = unquote(raw)
+                      if ("%" in decoded or "\\" in decoded or "\x00" in decoded
+                              or ".." in decoded.split("/") or not decoded.startswith("/")):
                           self.send_error(400, "Invalid path")
                           return None
-                      return request_path
+                      canonical = posixpath.normpath(re.sub(r"/+", "/", decoded))
+                      if decoded.endswith("/") and canonical != "/":
+                          canonical += "/"
+                      self.path = canonical + sep + query
+                      return canonical
+
+                  def _distill_relative(self, request_path):
+                      """Where request_path lands inside the real distill tree, or
+                      None. Resolved on the filesystem, so no URL spelling or
+                      symlink alias reaches the tree without this policy."""
+                      root = os.path.realpath(self.translate_path("/ladder/distill"))
+                      target = os.path.realpath(self.translate_path(request_path))
+                      if target == root:
+                          return ""
+                      if target.startswith(root + os.sep):
+                          return os.path.relpath(target, root)
+                      return None
 
                   def _body_allowed(self, request_path):
-                      if request_path.startswith("/ladder/distill/"):
-                          return self.DISTILL_BODY.fullmatch(request_path) is not None
+                      inside = self._distill_relative(request_path)
+                      if inside is not None:
+                          return self.DISTILL_BODY.fullmatch(inside) is not None
                       if request_path.lower().endswith(self.BODY_EXTENSIONS) or request_path.endswith("/"):
                           return True   # a listed type, or index.html; listings are refused
                       return os.path.isdir(self.translate_path(request_path))   # -> redirect to "/"
@@ -534,7 +560,7 @@ spec:
                                   with open(full, "r") as f:
                                       raw = json.load(f)
                                   slug = path.split("/", 1)[0] if "/" in path else ""
-                                  body = json.dumps(normalize(raw, slug)).encode("utf-8")
+                                  body = json.dumps(strip_identity(normalize(raw, slug))).encode("utf-8")
                                   self.send_response(200)
                                   self.send_header("Content-Type", "application/json")
                                   self.send_header("Content-Length", str(len(body)))

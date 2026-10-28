@@ -233,3 +233,68 @@ def test_served_json_never_carries_identity_keys(tmp_path):
         assert leak not in response
     status, response = _request(cls, www, '/ladder/fieldtruth/broken.json')
     assert status == 404 and b'not json' not in response
+
+
+@pytest.mark.parametrize("path", [
+    "/ladder//distill/heads/clay_r2_split.json",            # Codex, #114
+    "/ladder/./distill/heads/clay_r2_split.json",           # Codex, #114
+    "/ladder/%252e/distill/heads/clay_r2_split.json",       # Codex, #114: double-encoded "."
+    "//ladder/distill/heads/clay_r2_split.json",
+    "/ladder/distill%2fheads/clay_r2_split.json",            # encoded slash
+    "/ladder/distill/heads/./clay_r2_split.json",
+    "/ladder/distill/heads//clay_r2_plot_features.parquet",
+    "/ladder/alias/heads/clay_r2_split.json",               # symlink alias into the tree
+    "/ladder/alias/heads/clay_r2_plot_features.parquet",
+    "/ladder/distill/heads/%2e%2e/heads/clay_r2_split.json",
+    "/ladder/distill/heads/clay_r2_split.json%00.json",
+])
+def test_no_url_spelling_reaches_a_refused_body(tmp_path, path):
+    www, ns = _dashboard(tmp_path)
+    _tree(tmp_path, www)
+    (www / 'ladder' / 'alias').symlink_to(tmp_path / 'pvc' / 'distill', target_is_directory=True)
+    status, body = _request(ns['Handler'], www, path)
+    assert status in (400, 404), (path, status)
+    assert SECRET not in body and b'SECRET_TILE' not in body, path
+
+
+def test_equivalent_spellings_of_an_allowed_file_still_work(tmp_path):
+    www, ns = _dashboard(tmp_path)
+    _tree(tmp_path, www)
+    for path in ['/ladder//distill/heads/clay_r2_distillability.json',
+                 '/ladder/./distill/heads/clay_r2_distillability.json']:
+        status, body = _request(ns['Handler'], www, path)
+        assert status == 200 and b'oof' in body, path
+
+
+def test_training_log_normalization_strips_identity_keys(tmp_path):
+    """Codex, #114: the training_log.json branch serves normalize()'s output,
+    which keeps nested per-class objects; it must be stripped like any JSON."""
+    www, ns = _dashboard(tmp_path)
+    _tree(tmp_path, www)
+    log = tmp_path / 'pvc' / 'checkpoints' / 'clay_r1' / 'training_log.json'
+    log.write_text(json.dumps({
+        'config': {'epochs': 2}, 'status': 'running',
+        'epochs': [{'epoch': 1, 'val_miou': 0.5, 'train_loss': 1.0,
+                    'per_class_iou': {'1': {'TractID': 'T9', 'Easting': 654321, 'iou': 0.4}},
+                    'confusion_matrix': [[1, 0], [0, 1]]}]}))
+    status, response = _request(ns['Handler'], www, '/ladder/data/clay_r1/training_log.json?t=1')
+    assert status == 200
+    body = json.loads(response.split(b'\r\n\r\n', 1)[1])
+    assert body['per_class_iou'] == {'1': {'iou': 0.4}}
+    assert body['epochs'][0]['per_class_iou'] == {'1': {'iou': 0.4}}
+    assert b'T9' not in response and b'654321' not in response
+
+
+def test_request_target_is_canonicalized_once(tmp_path):
+    """The canonical path is what the policy checks and what every later step
+    reads; anything still encoded after one decode is refused."""
+    www, ns = _dashboard(tmp_path)
+    for raw, expected in [('//ladder//./data/x.json?t=1', '/ladder/data/x.json'),
+                          ('/ladder/distill%2fheads/a.json', '/ladder/distill/heads/a.json'),
+                          ('/a//b/./', '/a/b/'), ('/', '/')]:
+        h = handler(ns['Handler'], raw)
+        assert h._unsafe_target() == expected, raw
+        assert h.path.split('?', 1)[0] == expected, raw
+    for raw in ['/ladder/%252e/x.json', '/ladder/%2e%2e/x.json', '/a\\b.json', '/a%00b.json', 'relative.json']:
+        h = handler(ns['Handler'], raw)
+        assert h._unsafe_target() is None and h.status == 400, raw
