@@ -298,3 +298,25 @@ def test_request_target_is_canonicalized_once(tmp_path):
     for raw in ['/ladder/%252e/x.json', '/ladder/%2e%2e/x.json', '/a\\b.json', '/a%00b.json', 'relative.json']:
         h = handler(ns['Handler'], raw)
         assert h._unsafe_target() is None and h.status == 400, raw
+
+
+@pytest.mark.parametrize("path", [
+    "/ladder/inference/matrix.json%3f.png",          # Codex, #114 (eeccb4c)
+    "/ladder/inference/matrix.json%3F.png",
+    "/ladder/inference/matrix.json%23.png",          # Codex, #114 (eeccb4c)
+    "/ladder/data/clay_r1/best_model.pt%3f.png",     # Codex, #114 (eeccb4c): binary body
+    "/ladder/data/clay_r1/best_model.pt%23.json",
+    "/ladder/inference/matrix.json%20.png",
+    "/ladder/inference/matrix.json%0a.png",
+    "/ladder/inference/matrix.json%3b.png",
+])
+def test_encoded_delimiters_never_end_the_path_late(tmp_path, path):
+    """A decoded "?" or "#" ended the path only when the file was opened, so
+    the policy saw ".png" while the raw JSON or checkpoint was served."""
+    www, ns = _dashboard(tmp_path)
+    _tree(tmp_path, www)
+    (tmp_path / 'pvc' / 'ladder_inference' / 'matrix.json').write_text(
+        json.dumps({'tiles': [{'name': 'holdoutval_1', 'easting': 654321.5}]}))
+    status, body = _request(ns['Handler'], www, path)
+    assert status == 400, (path, status)
+    assert SECRET not in body and b'654321' not in body, path

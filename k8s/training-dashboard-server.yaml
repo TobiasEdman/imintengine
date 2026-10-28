@@ -474,6 +474,7 @@ spec:
                   DISTILL_BODY = re.compile(r"heads/[A-Za-z0-9_]+_distillability\.json")
                   NFI_INFERENCE_DIR = "/cephfs/nfi/nfi_inference_2026-10-27"
                   NFI_INFERENCE_CELLS = 28
+                  SAFE_PATH = re.compile(r"[A-Za-z0-9._~/-]*")
                   # Served root; __init__ replaces it with the cwd (/www).
                   directory = "/www"
 
@@ -498,7 +499,13 @@ spec:
                           return None
                       raw, sep, query = self.path.partition("?")
                       decoded = unquote(raw)
-                      if ("%" in decoded or "\\" in decoded or "\x00" in decoded
+                      # Strict character allowlist after the one decode: an
+                      # encoded "?" or "#" would otherwise end the path only
+                      # when the file is opened (Codex, #114: "matrix.json%3f.png"
+                      # passed as a .png and returned the raw JSON), and "%",
+                      # "\\", spaces and control characters have no place in a
+                      # served path either.
+                      if (self.SAFE_PATH.fullmatch(decoded) is None
                               or ".." in decoded.split("/") or not decoded.startswith("/")):
                           self.send_error(400, "Invalid path")
                           return None
