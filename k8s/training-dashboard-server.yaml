@@ -15,6 +15,11 @@
 #   - From your laptop via kubectl: kubectl -n prithvi-training-default \
 #       port-forward svc/training-dashboard 8080:8080
 #       then open http://localhost:8080/
+#   - PUBLIC: the Ingress below (training-dashboard.icedc.se, a public
+#     address, no authentication). Anything a GET returns is published.
+#     2026-10-27: the server listed /cephfs/distill and returned per-plot
+#     NFI feature parquets (plot IDs and coordinates); the Deployment was
+#     scaled to 0 and serve.py now serves bodies only from an allowlist.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -110,6 +115,12 @@ spec:
               # nmd-sameplots-compare jobs. Dangling until those run — the
               # panel renders an awaiting-state rather than an error.
               ln -sfn /cephfs/ladder_eval /www/ladder/fieldtruth
+              # Every tree above also holds files that must never be
+              # served (per-plot NFI parquets with plot coordinates,
+              # checkpoints): serve.py's Handler allowlist decides what a
+              # GET may return. The frozen-set NFI inference directory is
+              # deliberately NOT linked; /ladder/nfi_inference.json is
+              # computed from its metadata files instead.
 
               # Patch 1: null-safe tile-count cells (avoids TypeError when
               # train_tiles/val_tiles missing from the new schema).
@@ -283,7 +294,8 @@ spec:
               # return the result. Static files (HTML, etc.) fall through
               # to the stdlib SimpleHTTPRequestHandler unchanged.
               cat > /serve.py <<'PY'
-              import json, os
+              import json, os, posixpath, re
+              from datetime import datetime, timezone
               from urllib.parse import unquote
               from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -399,19 +411,151 @@ spec:
                   handler.end_headers()
                   handler.wfile.write(body)
 
+              def strip_identity(obj, keys=frozenset({
+                      "tractid", "plotid", "plot_id", "point_id", "easting", "northing",
+                      "lat", "lon", "latitude", "longitude", "x_coord", "y_coord",
+                      "coordinates", "geometry", "bbox"})):
+                  """Drop identity keys at any depth from a JSON value before it is
+                  served: plot ids and coordinates must never leave through this
+                  public server, whatever file they sit in (2026-10-28 private
+                  probe: the inference matrix carried tile-centre coordinates)."""
+                  if isinstance(obj, dict):
+                      return {k: strip_identity(v, keys) for k, v in obj.items()
+                              if str(k).lower() not in keys}
+                  if isinstance(obj, list):
+                      return [strip_identity(v, keys) for v in obj]
+                  return obj
+
+              def nfi_inference_status(directory: str, expected: int) -> dict:
+                  """Publication status of the frozen-set NFI inference cells.
+
+                  Built from the cells' .meta.json files only, and only from
+                  the fields named here: never the prediction parquets, which
+                  carry NFI plot identities, and never a score (the metadata
+                  holds none). A missing directory is the awaiting-state."""
+                  cells = {}
+                  try:
+                      names = sorted(os.listdir(directory))
+                  except OSError:
+                      names = []
+                  manifest = ""
+                  for name in names:
+                      if not name.endswith(".parquet.meta.json"):
+                          continue
+                      path = os.path.join(directory, name)
+                      try:
+                          with open(path) as f:
+                              meta = json.load(f)
+                          stamp = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc)
+                          cells[str(meta["cell"])] = {
+                              "status": str(meta.get("status")),
+                              "plots": int(meta.get("plots_in_crop") or 0),
+                              "prediction_sha256": str(meta.get("prediction_sha256") or "")[:12],
+                              "checkpoint_sha256": str(meta.get("checkpoint_sha256") or "")[:12],
+                              "published_at": stamp.isoformat(timespec="seconds"),
+                          }
+                          manifest = manifest or str(meta.get("holdout_manifest_sha256") or "")[:12]
+                      except (OSError, ValueError, KeyError, TypeError):
+                          continue
+                  return {"expected_cells": expected, "manifest_sha256": manifest,
+                          "published": sum(c["status"] == "success" for c in cells.values()),
+                          "cells": cells}
+
               class Handler(SimpleHTTPRequestHandler):
-                  def do_GET(self):
-                      # Preserve configured publication symlinks, but never
-                      # allow a custom handler to navigate above its URL root.
+                  # Publication allowlist (2026-10-27). The symlinked PVC trees
+                  # hold per-plot NFI files (TractID, PlotID, Easting, Northing)
+                  # next to the files the dashboards read, and this server is
+                  # reachable through a public ingress. So: never a directory
+                  # listing; file bodies only for these extensions; inside the
+                  # distill tree only the distillability JSON. HEAD stays open
+                  # for the dashboards' existence probes (headers only).
+                  BODY_EXTENSIONS = (".html", ".json", ".png", ".jpg", ".jpeg",
+                                     ".svg", ".css", ".js", ".ico")
+                  DISTILL_BODY = re.compile(r"heads/[A-Za-z0-9_]+_distillability\.json")
+                  NFI_INFERENCE_DIR = "/cephfs/nfi/nfi_inference_2026-10-27"
+                  NFI_INFERENCE_CELLS = 28
+                  SAFE_PATH = re.compile(r"[A-Za-z0-9._~/-]*")
+                  # Served root; __init__ replaces it with the cwd (/www).
+                  directory = "/www"
+
+                  def list_directory(self, path):
+                      self.send_error(404, "Not found")
+                      return None
+
+                  def _unsafe_target(self):
+                      """Canonicalize the request path once, or refuse it.
+
+                      The policy and the file opened must see the same path
+                      (Codex, #114: "//", "/./" and a double-encoded "." passed
+                      a prefix check and were normalized only when the file was
+                      opened). One decode; anything still encoded, a backslash,
+                      a NUL, a ".." segment or a relative target is refused;
+                      repeated slashes and "." segments collapse; self.path is
+                      rewritten so every later step reads the canonical path."""
                       # Fragments are not part of an HTTP request target.
-                      # Reject raw # before parsing can hide filesystem parts
-                      # still consumed by the custom handlers below.
+                      # Reject raw # before parsing can hide filesystem parts.
                       if "#" in self.path:
                           self.send_error(400, "Invalid request target")
-                          return
-                      request_path = unquote(self.path.split("?", 1)[0])
-                      if ".." in request_path.split("/") or "\\" in request_path:
+                          return None
+                      raw, sep, query = self.path.partition("?")
+                      decoded = unquote(raw)
+                      # Strict character allowlist after the one decode: an
+                      # encoded "?" or "#" would otherwise end the path only
+                      # when the file is opened (Codex, #114: "matrix.json%3f.png"
+                      # passed as a .png and returned the raw JSON), and "%",
+                      # "\\", spaces and control characters have no place in a
+                      # served path either.
+                      if (self.SAFE_PATH.fullmatch(decoded) is None
+                              or ".." in decoded.split("/") or not decoded.startswith("/")):
                           self.send_error(400, "Invalid path")
+                          return None
+                      canonical = posixpath.normpath(re.sub(r"/+", "/", decoded))
+                      if decoded.endswith("/") and canonical != "/":
+                          canonical += "/"
+                      self.path = canonical + sep + query
+                      return canonical
+
+                  def _distill_relative(self, request_path):
+                      """Where request_path lands inside the real distill tree, or
+                      None. Resolved on the filesystem, so no URL spelling or
+                      symlink alias reaches the tree without this policy."""
+                      root = os.path.realpath(self.translate_path("/ladder/distill"))
+                      target = os.path.realpath(self.translate_path(request_path))
+                      if target == root:
+                          return ""
+                      if target.startswith(root + os.sep):
+                          return os.path.relpath(target, root)
+                      return None
+
+                  def _body_allowed(self, request_path):
+                      inside = self._distill_relative(request_path)
+                      if inside is not None:
+                          return self.DISTILL_BODY.fullmatch(inside) is not None
+                      if request_path.lower().endswith(self.BODY_EXTENSIONS) or request_path.endswith("/"):
+                          return True   # a listed type, or index.html; listings are refused
+                      return os.path.isdir(self.translate_path(request_path))   # -> redirect to "/"
+
+                  def do_HEAD(self):
+                      if self._unsafe_target() is None:
+                          return
+                      return super().do_HEAD()
+
+                  def do_GET(self):
+                      request_path = self._unsafe_target()
+                      if request_path is None:
+                          return
+                      if request_path == "/ladder/nfi_inference.json":
+                          body = json.dumps(nfi_inference_status(
+                              self.NFI_INFERENCE_DIR, self.NFI_INFERENCE_CELLS)).encode("utf-8")
+                          self.send_response(200)
+                          self.send_header("Content-Type", "application/json")
+                          self.send_header("Content-Length", str(len(body)))
+                          self.send_header("Cache-Control", "no-store")
+                          self.end_headers()
+                          self.wfile.write(body)
+                          return
+                      if not self._body_allowed(request_path):
+                          self.send_error(404, "Not found")
                           return
                       # /<slug>/training_log.json → JSON normalization
                       if self.path.endswith("/training_log.json") or \
@@ -423,7 +567,7 @@ spec:
                                   with open(full, "r") as f:
                                       raw = json.load(f)
                                   slug = path.split("/", 1)[0] if "/" in path else ""
-                                  body = json.dumps(normalize(raw, slug)).encode("utf-8")
+                                  body = json.dumps(strip_identity(normalize(raw, slug))).encode("utf-8")
                                   self.send_response(200)
                                   self.send_header("Content-Type", "application/json")
                                   self.send_header("Content-Length", str(len(body)))
@@ -448,6 +592,25 @@ spec:
                               _serve_compare_html(self, full)
                               return
                           # fall through to 404
+
+                      # Every other JSON is re-serialized without identity
+                      # keys (plot ids, coordinates, geometry); a file that
+                      # does not parse is refused rather than passed through.
+                      if request_path.lower().endswith(".json"):
+                          full = self.translate_path(request_path)
+                          try:
+                              with open(full) as f:
+                                  body = json.dumps(strip_identity(json.load(f))).encode("utf-8")
+                          except (OSError, ValueError):
+                              self.send_error(404, "Not found")
+                              return
+                          self.send_response(200)
+                          self.send_header("Content-Type", "application/json")
+                          self.send_header("Content-Length", str(len(body)))
+                          self.send_header("Cache-Control", "no-store")
+                          self.end_headers()
+                          self.wfile.write(body)
+                          return
 
                       return super().do_GET()
 
