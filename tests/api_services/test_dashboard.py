@@ -207,3 +207,29 @@ def test_nfi_inference_status_reads_only_named_metadata_fields(tmp_path):
     cls.NFI_INFERENCE_DIR = str(tmp_path / 'absent')
     status, response = _request(cls, www, '/ladder/nfi_inference.json')
     assert status == 200 and json.loads(response.split(b'\r\n\r\n', 1)[1])['cells'] == {}
+
+
+def test_served_json_never_carries_identity_keys(tmp_path):
+    """2026-10-28 private probe: the inference matrix's tiles carried
+    easting/northing. Every JSON read from a PVC tree is re-serialized without
+    identity keys, at any depth; a file that does not parse is refused."""
+    www, ns = _dashboard(tmp_path)
+    _tree(tmp_path, www)
+    pvc = tmp_path / 'pvc'
+    (pvc / 'ladder_inference/matrix.json').write_text(json.dumps({
+        'git_sha': 'abc', 'tiles': [{'name': 'holdoutval_1', 'easting': 654321.5,
+                                     'Northing': 6543210.5, 'year': 2022}],
+        'cells': {'clay_r1': {'epoch': 3, 'geometry': {'coordinates': [[1, 2]]}}},
+        'plots': [{'TractID': 'T1', 'PlotID': 'P1', 'lat': 59.1, 'lon': 18.1}]}))
+    (pvc / 'ladder_eval/broken.json').write_text('{not json')
+    cls = ns['Handler']
+    status, response = _request(cls, www, '/ladder/inference/matrix.json?t=1')
+    assert status == 200
+    body = json.loads(response.split(b'\r\n\r\n', 1)[1])
+    assert body['tiles'] == [{'name': 'holdoutval_1', 'year': 2022}]
+    assert body['cells'] == {'clay_r1': {'epoch': 3}}
+    assert body['plots'] == [{}]
+    for leak in (b'654321', b'6543210', b'T1', b'P1', b'59.1', b'18.1'):
+        assert leak not in response
+    status, response = _request(cls, www, '/ladder/fieldtruth/broken.json')
+    assert status == 404 and b'not json' not in response

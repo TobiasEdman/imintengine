@@ -817,7 +817,9 @@ function renderInference() {
        loading="lazy" style="width:86px;height:86px;object-fit:cover;border-radius:4px;display:block"></a>`;
   const short = n => n.replace(/^holdoutval_/, "");
   let h = "<thead><tr><th></th>" + tiles.map(x =>
-    `<th title="SWEREF99 TM E ${Math.round(x.easting/1000)} km, N ${Math.round(x.northing/1000)} km">` +
+    // The server strips coordinates from served JSON (2026-10-28); the
+    // tooltip shows them only if a file still carries them.
+    `<th title="${Number.isFinite(x.easting) ? `SWEREF99 TM E ${Math.round(x.easting/1000)} km, N ${Math.round(x.northing/1000)} km` : x.name}">` +
     `${short(x.name)}</th>`).join("") + "</tr></thead><tbody>";
   h += `<tr><td class="rung-label">RGB<small>summer frame</small></td>` +
        tiles.map(x => `<td>${img(`_rgb/${x.name}.png`)}</td>`).join("") + "</tr>";
