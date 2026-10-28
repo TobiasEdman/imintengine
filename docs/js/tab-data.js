@@ -231,6 +231,11 @@ var LEGENDS = {
     ]
 };
 
+// NFI tab: the model maps and the NMD2023 background use different class
+// schemes, so each strip carries a text-only title item.
+LEGENDS.nmd2023 = [{label:'<strong>NMD2023:</strong>'}].concat(LEGENDS.nmd);
+LEGENDS.unified_nfi = [{label:'<strong>Modellkarta:</strong>'}].concat(LEGENDS.unified_nfi);
+
 // Radar sub-tabs: every panel that can show the Sjökort background carries
 // the chart's attribution as a text-only legend item.
 var S1_CHART_CREDITS = {
@@ -410,11 +415,11 @@ var TAB_CONFIG = {
             ]
         },
         panels: [
-            {id:'nfi-rgb',     key:'rgb',     title:'Sentinel-2 RGB / NMD2023', legend:'nmd',
+            {id:'nfi-rgb',     key:'rgb',     title:'Sentinel-2 RGB / NMD2023', legend:'nmd2023',
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
-            {id:'nfi-prithvi', key:'prithvi', title:'Prithvi-EO-2.0 600M',       legend:'unified_nfi',
+            {id:'nfi-prithvi', key:'prithvi', title:'Prithvi-EO-2.0 600M',       legend:['unified_nfi','nmd2023'],
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
-            {id:'nfi-tessera', key:'tessera', title:'TESSERA',                   legend:'unified_nfi',
+            {id:'nfi-tessera', key:'tessera', title:'TESSERA',                   legend:['unified_nfi','nmd2023'],
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]}
         ],
         images: {

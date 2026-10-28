@@ -79,6 +79,8 @@ def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
     config = tab_data[tab_data.index("nfi_validation: {"):tab_data.index("marine_leisure: {")]
     images = re.findall(r"'(showcase/nfi_validation/[^']+)'", config)
     assert len(images) == 4
+    # A model map over the NMD2023 background needs both class schemes.
+    assert config.count("legend:['unified_nfi','nmd2023']") == 2
     for src in images:
         assert (REPO / "docs" / src).is_file(), src
     for text in (tab_data, index, manifest_text):
