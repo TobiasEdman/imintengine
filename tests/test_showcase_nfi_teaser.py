@@ -67,3 +67,19 @@ def test_a_map_colour_outside_the_unified_palette_is_refused(tmp_path: Path) -> 
     result = _run(*_tile(tmp_path, map_colour=(1, 2, 3)))
     assert result.returncode != 0 and "not in the unified palette" in result.stderr
 
+
+def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
+    tab_data = (REPO / "docs/js/tab-data.js").read_text()
+    index = (REPO / "docs/index.html").read_text()
+    manifest_text = (REPO / "docs/showcase/nfi_validation/MANIFEST.json").read_text()
+    manifest = json.loads(manifest_text)
+    legend_block = re.search(r"unified_nfi: \[(.*?)\]", tab_data, re.S).group(1)
+    legend = {label.lower() for label in re.findall(r"label:'([^']+)'", legend_block)}
+    assert set(manifest["map_classes_present"]) <= legend
+    config = tab_data[tab_data.index("nfi_validation: {"):tab_data.index("marine_leisure: {")]
+    images = re.findall(r"'(showcase/nfi_validation/[^']+)'", config)
+    assert len(images) == 4
+    for src in images:
+        assert (REPO / "docs" / src).is_file(), src
+    for text in (tab_data, index, manifest_text):
+        assert not re.search(r"holdoutval_|nfi20\d\d_", text)
