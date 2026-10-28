@@ -1,0 +1,10 @@
+{
+  "id": "0121",
+  "subject": "Fix NFI crop bounds and LPIS inspector wording",
+  "description": "Approved follow-up to PR #119: reject undersized spatial arrays before writing layers; describe transparent LPIS crop pixels without claiming that no parcel exists. Scope: scripts/showcase_nfi_teaser.py, tests/test_showcase_nfi_teaser.py, docs/js/tab-data.js, docs/index.html cache version. Verify regression tests and unchanged published images; submit a follow-up PR.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/nfi-followup-fixes",
+  "created_at": "2026-10-28T17:01:39Z",
+  "updated_at": "2026-10-28T17:01:39Z"
+}
