@@ -183,8 +183,10 @@ def test_a_bad_map_name_is_refused_before_any_output_changes(
 
 
 def _legend(tab_data: str, key: str) -> list[tuple[str, str]]:
-    block = re.search(rf"\n    {key}: \[(.*?)\n    \]", tab_data, re.S).group(1)
-    return re.findall(r"\{color:'([^']+)',label:'([^']+)'\}", block)
+    """Coloured items of LEGENDS[key]: a literal block, or else its assignment line."""
+    block = (re.search(rf"\n    {key}: \[(.*?)\n    \]", tab_data, re.S)
+             or re.search(rf"\nLEGENDS\.{key} = (.*?);\n", tab_data))
+    return re.findall(r"\{color:'([^']+)',label:'([^']+)'\}", block.group(1))
 
 
 def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
@@ -212,3 +214,17 @@ def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
     assert set(labels["training_label"]["classes_present"]) <= legend
     for text in (tab_data, index, manifest_text):
         assert not re.search(r"holdoutval_|nfi20\d\d_", text)
+
+
+def test_every_inspected_colour_has_a_legend_name() -> None:
+    """Click-to-inspect names a pixel by exact colour; no opaque colour may be unnamed."""
+    tab_data = (REPO / "docs/js/tab-data.js").read_text()
+    config = tab_data[tab_data.index("nfi_validation: {"):tab_data.index("marine_leisure: {")]
+    images = dict(re.findall(r"'(nfi-[a-z]+)':\s*'(showcase/nfi_validation/[^']+)'", config))
+    specs = re.findall(r"\{label:'([^']+)',\s*image:'(nfi-[a-z]+)',\s*legend:'([a-z0-9_]+)'", config)
+    assert len(specs) == 6
+    for label, image, legend_key in specs:
+        names = {colour.upper() for colour, _ in _legend(tab_data, legend_key)}
+        rgba = np.asarray(Image.open(REPO / "docs" / images[image]).convert("RGBA")).reshape(-1, 4)
+        opaque = {"#%02X%02X%02X" % tuple(c[:3]) for c in np.unique(rgba[rgba[:, 3] > 0], axis=0)}
+        assert opaque <= names, (label, sorted(opaque - names))

@@ -430,7 +430,7 @@ var TAB_CONFIG = {
         ],
         copy: {
             lede: 'Hur väl stämmer marktäckekartor med vad som faktiskt finns på marken? Vi har jämfört modellernas kartor och Naturvårdsverkets NMD med Riksskogstaxeringens provytor från sju inventeringsår. I stora drag: både Prithvi-EO-2.0 och TESSERA stämmer oftare med fältbedömningen än NMD2023 — men bara när de tränas med fältkalibrerade etiketter. Exempelrutan nedan, ca 5 × 5 km i ett skogs- och odlingslandskap, ingår inte i utvärderingsmängden. De första panelerna visar indata och träningsetiketter, de två sista modellernas kartor.',
-            hint: 'Växla bakgrund mellan satellitbild och NMD2023 i panelens topp, och dra opacitetsreglaget för att tona lagret över bakgrunden. Panelerna zoomar och panorerar tillsammans. Under kartorna beskrivs varje datakälla och i vilket steg den används.',
+            hint: 'Växla bakgrund mellan satellitbild och NMD2023 i panelens topp, och dra opacitetsreglaget för att tona lagret över bakgrunden. Panelerna zoomar och panorerar tillsammans. Klicka i en karta för att se vad modellerna, NMD2023 och etiketterna säger i just den pixeln. Under kartorna beskrivs varje datakälla och i vilket steg den används.',
             methods: [
                 { heading: 'Utvärderingsdesign',
                   body: '<p>742 provyte-år per år 2018–2024 valdes med ett seedat, dokumenterat urval och låstes med en SHA-256-hash innan någon modell kördes; poängsättningen kontrollerar hashen innan den räknar. Modellerna, NMD2018 och NMD2023 jämförs parvis på samma provytor. Måttet är överensstämmelse i fem klasser — tallskog, granskog, lövskog, blandskog och övrigt (inklusive icke-skog). Osäkerheten skattas över oberoende 50 km-block och korrigeras för det totala antalet jämförelser. De provyte-år vars data tränade den fältkalibrerade läraren är uteslutna ur utvärderingen.</p>' },
@@ -473,6 +473,15 @@ var TAB_CONFIG = {
             'nfi-prithvi': 'showcase/nfi_validation/prithvi600m_r4.png',
             'nfi-tessera': 'showcase/nfi_validation/tessera_r4.png'
         },
+        // Click-to-inspect: class layers named by exact colour (app.js bindInspector).
+        inspect: [
+            {label:'Prithvi-EO-2.0 600M', image:'nfi-prithvi', legend:'unified_nfi', empty:'—'},
+            {label:'TESSERA',             image:'nfi-tessera', legend:'unified_nfi', empty:'—'},
+            {label:'NMD2023',             image:'nfi-nmd',     legend:'nmd',         empty:'—'},
+            {label:'Träningsetikett',     image:'nfi-label',   legend:'unified_nfi', empty:'ingen etikett'},
+            {label:'Gröda (LPIS)',        image:'nfi-lpis',    legend:'nfi_lpis',    empty:'inget jordbruksskifte'},
+            {label:'Avverkning (SKS)',    image:'nfi-harvest', legend:'nfi_harvest', empty:'ingen'}
+        ],
         imgH: 504, imgW: 504,
         hasBgToggle: false
     },
