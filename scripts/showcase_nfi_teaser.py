@@ -3,7 +3,8 @@
 
 One example tile: the Sentinel-2 RGB and one class map per --map, as rendered
 by scripts/ladder_inference_matrix.py, plus NMD2023 from the tile's label
-sidecar (key ``nmd_label_raw``) and background layers from the tile itself
+sidecar (key ``nmd_label_raw``), the sidecar's training label with its LPIS
+crops and SKS clear-cuts, and background layers from the tile itself
 (--tile-npz): elevation, tree height, VPP season length and the TESSERA
 embedding. The maps cover the model's centred inference window (504 px of a
 512 px tile), so every layer is centre-cropped to that window and written at
@@ -46,9 +47,16 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imint.analyzers.nmd import L2_CLASSES, NMD_LEVEL2, nmd_raster_to_l2  # noqa: E402
 from imint.exporters.export import save_nmd_overlay  # noqa: E402
-from imint.schema.unified_schema import UNIFIED_CLASSES, UNIFIED_COLORS  # noqa: E402
+from imint.schema.unified_schema import HARVEST_CLASS, UNIFIED_CLASSES, UNIFIED_COLORS  # noqa: E402
 
 COLOR_TO_CLASS = {rgb: cls for cls, rgb in UNIFIED_COLORS.items()}
+UNIFIED_LUT = np.zeros((256, 3), dtype=np.uint8)
+for _cls, _rgb in UNIFIED_COLORS.items():
+    UNIFIED_LUT[_cls] = _rgb
+#: Unified classes that only LPIS parcels can produce (schema block "LPIS crop detail (11-21)").
+LPIS_CROP_CLASSES = range(11, 22)
+#: Label-sidecar keys behind the three label layers.
+LABEL_KEYS = ("label", "parcel_area_ha", "harvest_mask")
 
 #: NMD2023 basskikt v2.1 codes absent from the NMD2018 level-2 table → the
 #: NMD2018 code drawn in their place.
@@ -140,6 +148,42 @@ def render_scalar(name: str, values: np.ndarray, colormap: str, unit: str,
     return (rgba * 255).round().astype(np.uint8), scale
 
 
+def render_classes(label: np.ndarray, shown: np.ndarray) -> np.ndarray:
+    """Unified-palette RGBA of ``label``, transparent where ``shown`` is False."""
+    rgba = np.zeros((*label.shape, 4), dtype=np.uint8)
+    rgba[..., :3] = UNIFIED_LUT[label]
+    rgba[..., 3] = np.where(shown, 255, 0)
+    return rgba
+
+
+def class_shares(label: np.ndarray, shown: np.ndarray) -> dict[str, float]:
+    ids, counts = np.unique(label[shown], return_counts=True)
+    return {UNIFIED_CLASSES[int(i)]: round(int(n) / label.size, 4) for i, n in zip(ids, counts)}
+
+
+def render_label_layers(label: np.ndarray, parcels: np.ndarray,
+                        harvest: np.ndarray) -> tuple[dict[str, np.ndarray], dict]:
+    """The training label (class 0, no label, transparent), its LPIS crops and its SKS clear-cuts."""
+    if not (label.shape == parcels.shape == harvest.shape):
+        raise ValueError("label sidecar arrays differ in shape")
+    unknown = set(np.unique(label).tolist()) - set(UNIFIED_CLASSES)
+    if unknown:
+        raise ValueError(f"label classes outside the unified schema: {sorted(unknown)}")
+    crops = np.isin(label, LPIS_CROP_CLASSES)
+    if (crops & (parcels <= 0)).any():
+        raise ValueError("crop classes outside LPIS parcels; the LPIS layer would mislabel them")
+    cut = harvest > 0
+    layers = {"training_label": render_classes(label, label != 0),
+              "lpis": render_classes(label, crops),
+              "harvest": render_classes(np.full_like(label, HARVEST_CLASS), cut)}
+    meta = {"training_label": {"classes_present": class_shares(label, label != 0),
+                               "unlabelled_fraction": round(float((label == 0).mean()), 4)},
+            "lpis": {"classes_present": class_shares(label, crops),
+                     "parcel_fraction": round(float((parcels > 0).mean()), 4)},
+            "harvest": {"fraction": round(float(cut.mean()), 4)}}
+    return layers, meta
+
+
 def render_embedding(embedding: np.ndarray) -> tuple[np.ndarray, dict]:
     """First three principal components of a (C, H, W) embedding as RGBA."""
     channels, height, width = embedding.shape
@@ -165,7 +209,11 @@ def write_layers(rgb_png: Path, sidecar: Path, tile_npz: Path, maps: dict[str, P
     model_maps = {name: np.asarray(Image.open(p).convert("RGB")) for name, p in maps.items()}
     rgb = np.asarray(Image.open(rgb_png).convert("RGB"))
     with np.load(sidecar, allow_pickle=False) as z:
+        missing = [k for k in ("nmd_label_raw", *LABEL_KEYS) if k not in z.files]
+        if missing:
+            raise ValueError(f"label sidecar lacks arrays: {missing}")
         nmd_raw = z["nmd_label_raw"]
+        label, parcels, harvest = (z[k] for k in LABEL_KEYS)
     with np.load(tile_npz, allow_pickle=False) as z:
         missing = [k for k in (*SCALAR_LAYERS, EMBEDDING_KEY) if k not in z.files]
         if missing:
@@ -175,8 +223,8 @@ def write_layers(rgb_png: Path, sidecar: Path, tile_npz: Path, maps: dict[str, P
     side = min(min(a.shape[:2]) for a in (rgb, nmd_raw, *model_maps.values()))
 
     # Crop, validate and render every layer before --out-dir is touched, so a
-    # refused run (odd margin, unknown NMD code, off-palette map, empty or
-    # constant layer) writes nothing.
+    # refused run (odd margin, unknown NMD code or label class, off-palette map,
+    # crops outside parcels, empty or constant layer) writes nothing.
     rgb_crop = centre_crop(rgb, side)
     l2 = nmd2023_to_display_l2(centre_crop(nmd_raw, side))
     map_crops = {name: centre_crop(array, side) for name, array in model_maps.items()}
@@ -187,6 +235,8 @@ def write_layers(rgb_png: Path, sidecar: Path, tile_npz: Path, maps: dict[str, P
             key, centre_crop(scalars[key], side), colormap, unit, zero_is_empty)
     background[EMBEDDING_LAYER], embedding_meta = render_embedding(
         centre_crop(embedding, side, channels_first=True))
+    label_layers, label_meta = render_label_layers(
+        *(centre_crop(a, side) for a in (label, parcels, harvest)))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(rgb_crop).save(out_dir / "rgb.png", optimize=True)
@@ -198,6 +248,9 @@ def write_layers(rgb_png: Path, sidecar: Path, tile_npz: Path, maps: dict[str, P
     for name, rgba in background.items():
         Image.fromarray(rgba, mode="RGBA").save(out_dir / f"{name}.png", optimize=True)
         layers[name] = (out_dir / f"{name}.png", tile_npz)
+    for name, rgba in label_layers.items():
+        Image.fromarray(rgba, mode="RGBA").save(out_dir / f"{name}.png", optimize=True)
+        layers[name] = (out_dir / f"{name}.png", sidecar)
 
     total = sum(classes.values())
     l2_ids, l2_counts = np.unique(l2, return_counts=True)
@@ -207,6 +260,7 @@ def write_layers(rgb_png: Path, sidecar: Path, tile_npz: Path, maps: dict[str, P
                    for kind, (out, src) in layers.items()},
         "background_scales": scales,
         "embedding": embedding_meta,
+        "label_layers": label_meta,
         "nmd2023_display_classes": {("unclassified" if i == 0 else L2_CLASSES[i - 1]):
                                     round(n / l2.size, 4)
                                     for i, n in zip(l2_ids.tolist(), l2_counts.tolist())},
@@ -216,7 +270,8 @@ def write_layers(rgb_png: Path, sidecar: Path, tile_npz: Path, maps: dict[str, P
 
 
 #: Output stems the reference and background layers own; a model map may not take them.
-RESERVED_LAYER_NAMES = frozenset({"rgb", "nmd2023", *SCALAR_LAYERS, EMBEDDING_LAYER})
+RESERVED_LAYER_NAMES = frozenset({"rgb", "nmd2023", *SCALAR_LAYERS, EMBEDDING_LAYER,
+                                  "training_label", "lpis", "harvest"})
 #: A map name becomes a file stem in --out-dir, so no separators or dots.
 MAP_NAME = re.compile(r"[a-z0-9][a-z0-9_]*")
 
