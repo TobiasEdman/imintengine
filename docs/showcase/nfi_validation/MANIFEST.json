@@ -1,8 +1,8 @@
 {
-  "description": "Layers for the NFI field-validation tab: Sentinel-2 summer RGB, NMD2023 and one class map per model cell for one example tile. The tile is not in the NFI evaluation set and is withheld by name; inputs are bound by sha256.",
-  "produced_at": "2026-10-28T11:55:43.712158+00:00",
+  "description": "Layers for the NFI field-validation tab: Sentinel-2 summer RGB, NMD2023 and one class map per model cell for one example tile, withheld by name. Inputs are bound by sha256; a private provenance record maps them to the tile and to its check against the frozen NFI evaluation set.",
+  "produced_at": "2026-10-28T12:25:00.802627+00:00",
   "produced_by": "scripts/showcase_nfi_teaser.py",
-  "git_sha": "257cb3f",
+  "git_sha": "42e1300",
   "git_dirty": false,
   "run_args": {
     "maps": [
