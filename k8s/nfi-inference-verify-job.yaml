@@ -1,0 +1,111 @@
+---
+# Verify the 28 frozen-set NFI prediction files before scoring (task 0118,
+# step 6). Read-only; runs the scorer's own checks and computes no metric.
+#
+# In the sealed image the freeze used (sha-4cb93b4), under the model
+# interpreter that verify_evaluation_source requires (as
+# scripts/score_nfi_holdout.py does), as uid 2000 with the PVC read-only:
+#   load_frozen_holdout   manifest digest, holdout and training identity;
+#   verify_evaluation_source  sealed source and runtime equal the freeze's;
+#   verify_prediction_dump    per cell: metadata provenance, prediction
+#                         sha256 over the exact bytes;
+#   restrict_to_frozen    every frozen plot-year exactly once on its tile,
+#                         and the dump's truth equals the frozen truth.
+# It prints counts, short digests and failure reasons only: no prediction,
+# no plot identity and no score. Exit 1 if any cell fails.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nfi-inference-verify-20261027
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0118"}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0118"}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 2000
+        runAsGroup: 2000
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: verify
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/venvs/model/bin/python", "-u", "-c"]
+          args:
+            - |
+              import json, os, sys
+              from pathlib import Path
+              sys.path[:0] = ["/opt/imintengine", "/opt/imintengine/scripts"]
+              from imint.eval.fieldtruth import (
+                  load_frozen_holdout, restrict_to_frozen, verify_evaluation_source,
+                  verify_prediction_dump)
+
+              manifest_path = Path(os.environ["MANIFEST"])
+              dump_dir = Path(os.environ["DUMPS"])
+              holdout, manifest = load_frozen_holdout(manifest_path, os.environ["MANIFEST_SHA256"])
+              identity = verify_evaluation_source(manifest)
+              truth = holdout["nfi_forest"].replace(-1, 0).to_numpy()
+              cells, problems = {}, []
+              for cell in sorted(manifest["cells"]):
+                  path = dump_dir / f"nfi-per-plot-{cell}.parquet"
+                  try:
+                      dump = verify_prediction_dump(path, manifest_path, cell, manifest=manifest)
+                      selected = restrict_to_frozen(dump, holdout)
+                      if len(selected) != len(holdout):
+                          raise ValueError("row count differs from the frozen holdout")
+                      if not (selected["nfi_forest"].replace(-1, 0).to_numpy() == truth).all():
+                          raise ValueError("truth differs from the frozen observations")
+                      if selected["model_pred"].isna().any():
+                          raise ValueError("missing predictions")
+                      cells[cell] = {"rows": int(len(selected)),
+                                     "prediction_sha256": dump.attrs["authenticated_sha256"][:12]}
+                  except Exception as exc:
+                      problems.append(f"{cell}: {type(exc).__name__}: {str(exc)[:160]}")
+              print(json.dumps({
+                  "manifest_sha256": manifest["_manifest_sha256"], "runtime": identity,
+                  "frozen_observations": int(len(holdout)),
+                  "cells_expected": len(manifest["cells"]), "cells_verified": len(cells),
+                  "cells": cells, "problems": problems}, indent=1))
+              sys.exit(1 if problems else 0)
+          env:
+            - {name: MANIFEST, value: /cephfs/nfi/nfi_holdout_freeze_2026-10-27/manifest.json}
+            - {name: MANIFEST_SHA256, value: daaa428754aa4acfd832d9cc0fe5a0acb60e86ade2b511699f1181732697ff2c}
+            - {name: DUMPS, value: /cephfs/nfi/nfi_inference_2026-10-27}
+            - {name: HOME, value: /scratch}
+            - {name: TMPDIR, value: /scratch}
+            - {name: XDG_CACHE_HOME, value: /scratch/.cache}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: CUDA_VISIBLE_DEVICES, value: ""}
+          resources:
+            requests: {cpu: "2", memory: 8Gi, ephemeral-storage: 4Gi}
+            limits: {cpu: "2", memory: 8Gi, ephemeral-storage: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs, readOnly: true}
+        - name: scratch
+          emptyDir: {sizeLimit: 2Gi}
