@@ -96,24 +96,25 @@ def unified_class_counts(rgb: np.ndarray) -> Counter:
 
 
 def write_layers(rgb_png: Path, sidecar: Path, maps: dict[str, Path], out_dir: Path) -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
     model_maps = {name: np.asarray(Image.open(p).convert("RGB")) for name, p in maps.items()}
     rgb = np.asarray(Image.open(rgb_png).convert("RGB"))
     with np.load(sidecar, allow_pickle=False) as z:
         nmd_raw = z["nmd_label_raw"]
     side = min(min(a.shape[:2]) for a in (rgb, nmd_raw, *model_maps.values()))
 
-    layers = {}
-    Image.fromarray(centre_crop(rgb, side)).save(out_dir / "rgb.png", optimize=True)
-    layers["rgb"] = (out_dir / "rgb.png", rgb_png)
+    # Crop and validate every layer before --out-dir is touched, so a
+    # refused run (odd margin, unknown NMD code, off-palette map) writes nothing.
+    rgb_crop = centre_crop(rgb, side)
     l2 = nmd2023_to_display_l2(centre_crop(nmd_raw, side))
+    map_crops = {name: centre_crop(array, side) for name, array in model_maps.items()}
+    classes = sum((unified_class_counts(crop) for crop in map_crops.values()), Counter())
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(rgb_crop).save(out_dir / "rgb.png", optimize=True)
     save_nmd_overlay(l2, str(out_dir / "nmd2023.png"))
-    layers["nmd2023"] = (out_dir / "nmd2023.png", sidecar)
-    classes = Counter()
-    for name, array in model_maps.items():
-        cropped = centre_crop(array, side)
-        classes += unified_class_counts(cropped)
-        Image.fromarray(cropped).save(out_dir / f"{name}.png", optimize=True)
+    layers = {"rgb": (out_dir / "rgb.png", rgb_png), "nmd2023": (out_dir / "nmd2023.png", sidecar)}
+    for name, crop in map_crops.items():
+        Image.fromarray(crop).save(out_dir / f"{name}.png", optimize=True)
         layers[name] = (out_dir / f"{name}.png", maps[name])
 
     total = sum(classes.values())

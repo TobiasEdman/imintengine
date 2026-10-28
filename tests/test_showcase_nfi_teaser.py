@@ -58,14 +58,16 @@ def test_layers_share_the_model_window_and_manifest_names_no_path(tmp_path: Path
     assert len(manifest["layers"]["nmd2023"]["input_sha256"]) == 64
 
 
-def test_an_nmd_code_without_a_display_mapping_is_refused(tmp_path: Path) -> None:
+def test_an_nmd_code_without_a_display_mapping_is_refused_before_writing(tmp_path: Path) -> None:
     result = _run(*_tile(tmp_path, nmd_codes=(111, 999)))
     assert result.returncode != 0 and "without a display mapping: [999]" in result.stderr
+    assert not (tmp_path / "out").exists()
 
 
-def test_a_map_colour_outside_the_unified_palette_is_refused(tmp_path: Path) -> None:
+def test_a_map_colour_outside_the_unified_palette_is_refused_before_writing(tmp_path: Path) -> None:
     result = _run(*_tile(tmp_path, map_colour=(1, 2, 3)))
     assert result.returncode != 0 and "not in the unified palette" in result.stderr
+    assert not (tmp_path / "out").exists()
 
 
 @pytest.mark.parametrize("maps, error", [
