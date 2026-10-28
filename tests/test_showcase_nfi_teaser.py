@@ -68,6 +68,29 @@ def test_a_map_colour_outside_the_unified_palette_is_refused(tmp_path: Path) -> 
     assert result.returncode != 0 and "not in the unified palette" in result.stderr
 
 
+@pytest.mark.parametrize("maps, error", [
+    (["rgb"], "reserved for a reference layer"),
+    (["nmd2023"], "reserved for a reference layer"),
+    (["a", "a"], "may appear once"),
+    (["../escaped"], "NAME of [a-z0-9_]"),
+    (["Tessera"], "NAME of [a-z0-9_]"),
+])
+def test_a_bad_map_name_is_refused_before_any_output_changes(
+        tmp_path: Path, maps: list[str], error: str) -> None:
+    args = _tile(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = {name: f"previous {name}".encode() for name in ("rgb.png", "nmd2023.png", "MANIFEST.json")}
+    for name, content in existing.items():
+        (out / name).write_bytes(content)
+    map_png = args[args.index("--map") + 1].split("=", 1)[1]
+    base = args[:args.index("--map")] + args[args.index("--map") + 2:]
+    result = _run(*base, *[a for name in maps for a in ("--map", f"{name}={map_png}")])
+    assert result.returncode != 0 and error in result.stderr
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == existing
+    assert not (tmp_path / "escaped.png").exists()
+
+
 def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
     tab_data = (REPO / "docs/js/tab-data.js").read_text()
     index = (REPO / "docs/index.html").read_text()

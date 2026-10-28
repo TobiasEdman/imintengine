@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -129,10 +130,19 @@ def write_layers(rgb_png: Path, sidecar: Path, maps: dict[str, Path], out_dir: P
     }
 
 
+#: Output stems the reference layers own; a model map may not take them.
+RESERVED_LAYER_NAMES = frozenset({"rgb", "nmd2023"})
+#: A map name becomes a file stem in --out-dir, so no separators or dots.
+MAP_NAME = re.compile(r"[a-z0-9][a-z0-9_]*")
+
+
 def parse_map(value: str) -> tuple[str, Path]:
     name, _, path = value.partition("=")
-    if not name or not path:
-        raise argparse.ArgumentTypeError(f"expected NAME=PATH, got {value!r}")
+    if not path or not MAP_NAME.fullmatch(name):
+        raise argparse.ArgumentTypeError(
+            f"expected NAME=PATH with NAME of [a-z0-9_], got {value!r}")
+    if name in RESERVED_LAYER_NAMES:
+        raise argparse.ArgumentTypeError(f"map name {name!r} is reserved for a reference layer")
     return name, Path(path)
 
 
@@ -145,9 +155,12 @@ def main() -> None:
                     metavar="NAME=PNG", help="class map of one model cell, e.g. tessera_r4=...")
     ap.add_argument("--out-dir", type=Path, required=True)
     args = ap.parse_args()
+    maps = dict(args.maps)
+    if len(maps) != len(args.maps):
+        ap.error("each --map name may appear once")
     root = Path(__file__).resolve().parents[1]
     sha, dirty = git_state(root)  # before any output exists in the tree
-    record = write_layers(args.rgb, args.nmd2023, dict(args.maps), args.out_dir)
+    record = write_layers(args.rgb, args.nmd2023, maps, args.out_dir)
     manifest = {
         "description": ("Layers for the NFI field-validation tab: Sentinel-2 summer RGB, NMD2023 "
                         "and one class map per model cell for one example tile, withheld by "
