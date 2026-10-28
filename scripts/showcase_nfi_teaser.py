@@ -15,8 +15,10 @@ their NMD2018 counterparts for display only. An unknown code is refused.
 
 The manifest binds every output to its input by sha256 and records no input
 path: paths carry the tile name, which the public page must not reveal
-(Tobias, 2026-10-28). The private experiments repository maps the digests to
-the tile.
+(Tobias, 2026-10-28). The script cannot see which tile it was given, so it
+claims nothing about it; a private provenance record, kept outside this
+repository, maps the digests to the tile and records the tile's check
+against the frozen NFI evaluation set.
 """
 from __future__ import annotations
 
@@ -148,9 +150,9 @@ def main() -> None:
     record = write_layers(args.rgb, args.nmd2023, dict(args.maps), args.out_dir)
     manifest = {
         "description": ("Layers for the NFI field-validation tab: Sentinel-2 summer RGB, NMD2023 "
-                        "and one class map per model cell for one example tile. The tile is not "
-                        "in the NFI evaluation set and is withheld by name; inputs are bound by "
-                        "sha256."),
+                        "and one class map per model cell for one example tile, withheld by "
+                        "name. Inputs are bound by sha256; a private provenance record maps them "
+                        "to the tile and to its check against the frozen NFI evaluation set."),
         "produced_at": datetime.now(timezone.utc).isoformat(),
         "produced_by": "scripts/showcase_nfi_teaser.py",
         "git_sha": sha, "git_dirty": dirty,
