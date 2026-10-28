@@ -1,19 +1,22 @@
-"""The teaser thumbnails align RGB with the maps and name no tile."""
+"""The NFI-tab layers share the model window and name no tile."""
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-PIL = pytest.importorskip("PIL")
+pytest.importorskip("cv2")  # save_nmd_overlay's module
 from PIL import Image
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts/showcase_nfi_teaser.py"
 WATER = (0, 0, 255)  # unified class 10, vatten
+GREEN = (10, 120, 30)
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
@@ -21,45 +24,46 @@ def _run(*args: str) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, cwd=REPO)
 
 
-def _tile(tmp_path: Path) -> Path:
+def _tile(tmp_path: Path, nmd_codes: tuple[int, int] = (111, 4233),
+          map_colour: tuple[int, int, int] = WATER) -> list[str]:
     src = tmp_path / "holdoutval_SECRET_tile"
     src.mkdir()
-    rgb = Image.new("RGB", (512, 512), (0, 0, 0))  # 4 px border outside the map window
-    rgb.paste(Image.new("RGB", (504, 504), (10, 120, 30)), (4, 4))
+    rgb = Image.new("RGB", (512, 512), (0, 0, 0))  # 4 px ring outside the model window
+    rgb.paste(Image.new("RGB", (504, 504), GREEN), (4, 4))
     rgb.save(src / "rgb.png")
-    return src
+    raw = np.zeros((512, 512), dtype=np.uint16)
+    raw[4:508, 4:256], raw[4:508, 256:508] = nmd_codes
+    np.savez(src / "nmd2023.npz", nmd_label_raw=raw)
+    Image.new("RGB", (504, 504), map_colour).save(src / "secretmodel.png")
+    return ["--rgb", str(src / "rgb.png"), "--nmd2023", str(src / "nmd2023.npz"),
+            "--map", f"a={src / 'secretmodel.png'}", "--out-dir", str(tmp_path / "out")]
 
 
-def test_rgb_is_cropped_to_the_map_window_and_manifest_names_no_path(tmp_path: Path) -> None:
-    src = _tile(tmp_path)
-    for model in ("secretmodel_a", "secretmodel_b"):
-        Image.new("RGB", (504, 504), WATER).save(src / f"{model}.png")
-    out = tmp_path / "out"
-    result = _run("--example", str(src / "rgb.png"), str(src / "secretmodel_a.png"),
-                  str(src / "secretmodel_b.png"), "--map-names", "a", "b",
-                  "--out-dir", str(out), "--size", "64")
+def test_layers_share_the_model_window_and_manifest_names_no_path(tmp_path: Path) -> None:
+    result = _run(*_tile(tmp_path))
     assert result.returncode == 0, result.stderr
-    rgb = Image.open(out / "example_1_rgb.png")
-    assert rgb.size == (64, 64)
-    assert rgb.getpixel((0, 0)) == rgb.getpixel((63, 63)) == (10, 120, 30)
-    assert Image.open(out / "example_1_b.png").getpixel((5, 5)) == WATER
+    out = tmp_path / "out"
+    rgb = Image.open(out / "rgb.png")
+    assert rgb.size == (504, 504) and rgb.getpixel((0, 0)) == rgb.getpixel((503, 503)) == GREEN
+    nmd = Image.open(out / "nmd2023.png").convert("RGB")
+    assert nmd.size == (504, 504)
+    assert nmd.getpixel((0, 0)) == (0, 100, 0)          # 111 tallskog
+    assert nmd.getpixel((503, 503)) == (210, 180, 140)  # 4233 → 42 öppen mark med vegetation
     text = (out / "MANIFEST.json").read_text()
     assert "SECRET" not in text and "secretmodel" not in text and str(tmp_path) not in text
     manifest = json.loads(text)
-    assert manifest["classes_present"] == {"vatten": 1.0}
-    assert len(manifest["examples"][0]["a"]["input_sha256"]) == 64
+    assert manifest["window_px"] == 504
+    assert manifest["map_classes_present"] == {"vatten": 1.0}
+    assert set(manifest["nmd2023_display_classes"]) == {"forest_pine", "open_land_vegetated"}
+    assert len(manifest["layers"]["nmd2023"]["input_sha256"]) == 64
 
 
-def test_a_colour_outside_the_unified_palette_is_refused(tmp_path: Path) -> None:
-    src = _tile(tmp_path)
-    Image.new("RGB", (504, 504), (1, 2, 3)).save(src / "map.png")
-    result = _run("--example", str(src / "rgb.png"), str(src / "map.png"),
-                  "--map-names", "a", "--out-dir", str(tmp_path / "out"))
+def test_an_nmd_code_without_a_display_mapping_is_refused(tmp_path: Path) -> None:
+    result = _run(*_tile(tmp_path, nmd_codes=(111, 999)))
+    assert result.returncode != 0 and "without a display mapping: [999]" in result.stderr
+
+
+def test_a_map_colour_outside_the_unified_palette_is_refused(tmp_path: Path) -> None:
+    result = _run(*_tile(tmp_path, map_colour=(1, 2, 3)))
     assert result.returncode != 0 and "not in the unified palette" in result.stderr
 
-
-def test_an_example_missing_a_map_is_refused(tmp_path: Path) -> None:
-    src = _tile(tmp_path)
-    result = _run("--example", str(src / "rgb.png"), "--map-names", "a",
-                  "--out-dir", str(tmp_path / "out"))
-    assert result.returncode != 0 and "expected RGB + 1 maps" in result.stderr
