@@ -1634,9 +1634,9 @@ python demos/cloud_models/run_comparison.py</pre>
 
                 <h3>Data och steg</h3>
                 <p>
-                    Studien bygger på öppna data och går i fyra steg. Tabellen visar varje datakälla och i vilket
-                    steg den används; panelerna ovan visar flera av dem för exempelrutan. Vilka indata en modell
-                    får beror på modellen.
+                    Studien bygger på öppna data; undantaget är Riksskogstaxeringens provytor, vars lägen är
+                    skyddade. Den går i fyra steg. Tabellen visar varje datakälla och i vilket steg den används;
+                    panelerna ovan visar flera av dem för exempelrutan. Vilka indata en modell får beror på modellen.
                 </p>
                 <table style="width:100%; border-collapse:collapse; font-size:16px; margin-top:12px;">
                     <thead>
@@ -1649,12 +1649,12 @@ python demos/cloud_models/run_comparison.py</pre>
                     <tbody>
                         <tr style="border-bottom:1px solid #e5e7eb;">
                             <th style="text-align:left; padding:10px 12px; font-weight:600;" rowspan="3">1. Indata</th>
-                            <td style="padding:10px 12px;">Satellitbilder: fyra Sentinel-2-bilder per ruta och år (hösten året innan och tre bilder under växtsäsongen, tidsatta efter rutans fenologi) samt en bakgrundsbild från 2016; Sentinel-1-radar för de modeller som använder radar</td>
+                            <td style="padding:10px 12px;">Satellitbilder: fyra Sentinel-2-bilder per ruta och år (hösten året innan och tre bilder under växtsäsongen, tidsatta efter rutans fenologi); Sentinel-1-radar för de modeller som använder radar</td>
                             <td style="padding:10px 12px;">ESA Copernicus Sentinel-2 och Sentinel-1</td>
                         </tr>
                         <tr style="border-bottom:1px solid #e5e7eb;">
-                            <td style="padding:10px 12px;">Hjälpkanaler: höjdmodell; trädhöjd, virkesvolym, grundyta och diameter; växtsäsongens start, slut, längd samt max- och minvärde</td>
-                            <td style="padding:10px 12px;">Copernicus DEM GLO-30; Skogsstyrelsen; Copernicus HR-VPP</td>
+                            <td style="padding:10px 12px;">Hjälpkanaler: höjdmodell; trädhöjd, virkesvolym, grundyta och diameter; markfuktighet; växtsäsongens start, slut, längd samt max- och minvärde</td>
+                            <td style="padding:10px 12px;">Copernicus DEM GLO-30; Skogsstyrelsen; SLU Markfuktighetskarta; Copernicus HR-VPP</td>
                         </tr>
                         <tr style="border-bottom:1px solid #e5e7eb;">
                             <td style="padding:10px 12px;">TESSERA: förberäknade årliga embeddings, 128 tal per pixel</td>
@@ -1666,7 +1666,7 @@ python demos/cloud_models/run_comparison.py</pre>
                             <td style="padding:10px 12px;">Naturvårdsverket; Jordbruksverket (LPIS); Skogsstyrelsen</td>
                         </tr>
                         <tr style="border-bottom:1px solid #e5e7eb;">
-                            <th style="text-align:left; padding:10px 12px; font-weight:600;">3. Träning i fyra steg</th>
+                            <th style="text-align:left; padding:10px 12px; font-weight:600;">3. Träning i fyra nivåer</th>
                             <td style="padding:10px 12px;">(1) NMD2018-etiketter, (2) NMD2023-etiketter, (3) dessutom fältkalibrerade skogsetiketter från en lärare tränad mot NFI-provytor, (4) dessutom trädslagsandelar</td>
                             <td style="padding:10px 12px;">Riksskogstaxeringen (SLU); NMD2023:s tilläggsskikt Trädslag</td>
                         </tr>
@@ -1719,15 +1719,16 @@ python demos/cloud_models/run_comparison.py</pre>
 
                 <h3>Utförda avverkningar</h3>
                 <p>
-                    Avverkningar som Skogsstyrelsen registrerat som utförda inom fem år före rutans år. I
-                    träningsetiketten blir de klassen hygge.
+                    Avverkningar som Skogsstyrelsen registrerat som utförda under rutans år eller de fem åren
+                    innan. Där NMD visar skog blir de klassen hygge i träningsetiketten; annars behåller pixeln
+                    sin klass.
                     <br><em>Källa: <a href="https://www.skogsstyrelsen.se/" target="_blank">Skogsstyrelsen</a></em>
                 </p>
 
                 <h3>Träningsetikett</h3>
                 <p>
-                    Etiketten modellerna tränas mot i steg 2: NMD2023 som bas, med grödor från jordbruksskiftena och
-                    avverkningar ovanpå. Steg 1 använder samma uppbyggnad med NMD2018 som bas. Pixlar utan etikett är
+                    Etiketten modellerna tränas mot på nivå 2: NMD2023 som bas, med grödor från jordbruksskiftena och
+                    avverkningar ovanpå. Nivå 1 använder samma uppbyggnad med NMD2018 som bas. Pixlar utan etikett är
                     genomskinliga. Jämför med modellernas kartor nedan, och med NMD2023 som bakgrund.
                 </p>
 
@@ -1918,7 +1919,7 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=23"></script>
+    <script src="js/tab-data.js?v=24"></script>
     <script src="js/app.js?v=15"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>

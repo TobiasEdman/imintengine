@@ -254,7 +254,7 @@ LEGENDS.nmd2023 = [{label:'<strong>NMD2023:</strong>'}].concat(LEGENDS.nmd);
 LEGENDS.nfi_label = [{label:'<strong>Träningsetikett:</strong>'}].concat(LEGENDS.unified_nfi, [{label:'transparent = ingen etikett'}]);
 LEGENDS.unified_nfi = [{label:'<strong>Modellkarta:</strong>'}].concat(LEGENDS.unified_nfi);
 LEGENDS.nfi_lpis = [{label:'<strong>Grödor (LPIS):</strong>'}].concat(LEGENDS.nfi_lpis);
-LEGENDS.nfi_harvest = [{label:'<strong>Avverkningar:</strong>'}, {color:'#00CED1',label:'utförd avverkning inom fem år före rutans år'}];
+LEGENDS.nfi_harvest = [{label:'<strong>Avverkningar:</strong>'}, {color:'#00CED1',label:'utförd avverkning, rutans år eller de fem åren innan'}];
 LEGENDS.nfi_dem = [{label:'<strong>Höjd över havet:</strong>'}].concat(LEGENDS.nfi_dem);
 LEGENDS.nfi_height = [{label:'<strong>Trädhöjd:</strong>'}].concat(LEGENDS.nfi_height, [{label:'transparent = inga träd eller inga data'}]);
 LEGENDS.nfi_vpp_length = [{label:'<strong>Växtsäsongens längd:</strong>'}].concat(LEGENDS.nfi_vpp_length, [{label:'transparent = ingen växtsäsong (t.ex. vatten) eller inga data'}]);
