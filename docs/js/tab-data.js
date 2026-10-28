@@ -479,7 +479,7 @@ var TAB_CONFIG = {
             {label:'TESSERA',             image:'nfi-tessera', legend:'unified_nfi', empty:'—'},
             {label:'NMD2023',             image:'nfi-nmd',     legend:'nmd',         empty:'—'},
             {label:'Träningsetikett',     image:'nfi-label',   legend:'unified_nfi', empty:'ingen etikett'},
-            {label:'Gröda (LPIS)',        image:'nfi-lpis',    legend:'nfi_lpis',    empty:'inget jordbruksskifte'},
+            {label:'Gröda (LPIS)',        image:'nfi-lpis',    legend:'nfi_lpis',    empty:'ingen visad grödklass'},
             {label:'Avverkning (SKS)',    image:'nfi-harvest', legend:'nfi_harvest', empty:'ingen'}
         ],
         imgH: 504, imgW: 504,
