@@ -415,7 +415,7 @@ var TAB_CONFIG = {
     },
 
     nfi_validation: {
-        title: 'Fältvalidering mot Riksskogstaxeringen — förhandsvisning',
+        title: 'Marktäckekartering — fältvalidering mot Riksskogstaxeringen (förhandsvisning)',
         summary: [
             {title:'Fältdata',value:'5 194 provyte-år',detail:'742 per år, 2018–2024'},
             {title:'Utvärderingsmängd',value:'Förseglad',detail:'låst med SHA-256 innan modellerna kördes'},
