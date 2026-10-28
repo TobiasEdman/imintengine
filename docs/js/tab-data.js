@@ -27,8 +27,9 @@ var LEGENDS = {
         {color:'#FF6347',label:'Vägar'},{color:'#0000FF',label:'Sjöar'},
         {color:'#1E90FF',label:'Hav'}
     ],
-    // Unified-schema classes present in the NFI-tab model maps
-    // (docs/showcase/nfi_validation/MANIFEST.json → map_classes_present).
+    // NFI tab: unified classes in the model maps and the background-layer
+    // scales, both copied from docs/showcase/nfi_validation/MANIFEST.json
+    // (map_classes_present, background_scales[*].legend).
     unified_nfi: [
         {color:'#006400',label:'Tallskog'},{color:'#228B22',label:'Granskog'},
         {color:'#32CD32',label:'Lövskog'},{color:'#3CB371',label:'Blandskog'},
@@ -36,9 +37,25 @@ var LEGENDS = {
         {color:'#00CED1',label:'Hygge'},{color:'#8B5A2B',label:'Våtmark'},
         {color:'#D2B48C',label:'Öppen mark'},{color:'#ABC8A6',label:'Buskdominerad mark'},
         {color:'#CDAA66',label:'Risdominerad mark'},{color:'#FFD27E',label:'Gräsdominerad mark'},
-        {color:'#E0E0E0',label:'Öppen mark utan vegetation'},{color:'#64C864',label:'Slåttervall'},
-        {color:'#50A03C',label:'Bete'},{color:'#FF0000',label:'Bebyggelse'},
-        {color:'#0000FF',label:'Vatten'}
+        {color:'#E0E0E0',label:'Öppen mark utan vegetation'},{color:'#E6B422',label:'Vete'},
+        {color:'#D48217',label:'Korn'},{color:'#FFFF64',label:'Havre'},
+        {color:'#BE9650',label:'Råg'},{color:'#2DB45A',label:'Oljeväxter'},
+        {color:'#8CB432',label:'Trindsäd'},{color:'#DCC800',label:'Majs'},
+        {color:'#64C864',label:'Slåttervall'},{color:'#50A03C',label:'Bete'},
+        {color:'#B45028',label:'Potatis'},{color:'#C864C8',label:'Sockerbetor'},
+        {color:'#FF0000',label:'Bebyggelse'},{color:'#0000FF',label:'Vatten'}
+    ],
+    nfi_dem: [
+        {color:'#FFFFE5',label:'30 m'},{color:'#FEE390',label:'52.5 m'},{color:'#FE9829',label:'75 m'},{color:'#CB4B02',label:'97.5 m'},{color:'#662506',label:'120 m'}
+    ],
+    nfi_height: [
+        {color:'#FFFFE5',label:'0 m'},{color:'#D9F0A3',label:'7.5 m'},{color:'#77C679',label:'15 m'},{color:'#228343',label:'22.5 m'},{color:'#004529',label:'30 m'}
+    ],
+    nfi_vpp_length: [
+        {color:'#440154',label:'60 dagar'},{color:'#3B528B',label:'105 dagar'},{color:'#21918C',label:'150 dagar'},{color:'#5EC962',label:'195 dagar'},{color:'#FDE725',label:'240 dagar'}
+    ],
+    nfi_lpis: [
+        {color:'#D48217',label:'Korn'},{color:'#2DB45A',label:'Oljeväxter'},{color:'#64C864',label:'Slåttervall'},{color:'#50A03C',label:'Bete'},{color:'#B45028',label:'Potatis'},{color:'#8CB432',label:'Trindsäd'},{color:'#BE9650',label:'Råg'}
     ],
     nmd_grazing: [
         {color:'#FFD700',label:'Åkermark'},{color:'#D2B48C',label:'Öpp. mark veg.'},
@@ -234,7 +251,14 @@ var LEGENDS = {
 // NFI tab: the model maps and the NMD2023 background use different class
 // schemes, so each strip carries a text-only title item.
 LEGENDS.nmd2023 = [{label:'<strong>NMD2023:</strong>'}].concat(LEGENDS.nmd);
+LEGENDS.nfi_label = [{label:'<strong>Träningsetikett:</strong>'}].concat(LEGENDS.unified_nfi, [{label:'transparent = ingen etikett'}]);
 LEGENDS.unified_nfi = [{label:'<strong>Modellkarta:</strong>'}].concat(LEGENDS.unified_nfi);
+LEGENDS.nfi_lpis = [{label:'<strong>Grödor (LPIS):</strong>'}].concat(LEGENDS.nfi_lpis);
+LEGENDS.nfi_harvest = [{label:'<strong>Avverkningar:</strong>'}, {color:'#00CED1',label:'utförd avverkning, rutans år eller de fem åren innan'}];
+LEGENDS.nfi_dem = [{label:'<strong>Höjd över havet:</strong>'}].concat(LEGENDS.nfi_dem);
+LEGENDS.nfi_height = [{label:'<strong>Trädhöjd:</strong>'}].concat(LEGENDS.nfi_height, [{label:'transparent = inga träd eller inga data'}]);
+LEGENDS.nfi_vpp_length = [{label:'<strong>Växtsäsongens längd:</strong>'}].concat(LEGENDS.nfi_vpp_length, [{label:'transparent = ingen växtsäsong (t.ex. vatten) eller inga data'}]);
+LEGENDS.nfi_embedding = [{label:'<strong>TESSERA-embedding:</strong>'}, {label:'färg = de tre första huvudkomponenterna av 128 dimensioner; lika färg ≈ liknande signatur över året'}];
 
 // Radar sub-tabs: every panel that can show the Sjökort background carries
 // the chart's attribution as a text-only legend item.
@@ -397,7 +421,7 @@ var TAB_CONFIG = {
     },
 
     nfi_validation: {
-        title: 'Fältvalidering mot Riksskogstaxeringen — förhandsvisning',
+        title: 'Marktäckekartering — fältvalidering mot Riksskogstaxeringen (förhandsvisning)',
         summary: [
             {title:'Fältdata',value:'5 194 provyte-år',detail:'742 per år, 2018–2024'},
             {title:'Utvärderingsmängd',value:'Förseglad',detail:'låst med SHA-256 innan modellerna kördes'},
@@ -405,17 +429,31 @@ var TAB_CONFIG = {
             {title:'Statistik',value:'Bestämd i förväg',detail:'50 km-block, korrigerad för multipla jämförelser'}
         ],
         copy: {
-            lede: 'Hur väl stämmer marktäckekartor med vad som faktiskt finns på marken? Vi har jämfört modellernas kartor och Naturvårdsverkets NMD med Riksskogstaxeringens provytor från sju inventeringsår. I stora drag: både Prithvi-EO-2.0 och TESSERA stämmer oftare med fältbedömningen än NMD2023 — men bara när de tränas med fältkalibrerade etiketter. Exempelrutan nedan, ca 5 × 5 km i ett skogs- och skärgårdslandskap, ingår inte i utvärderingsmängden.',
-            hint: 'Växla bakgrund mellan satellitbild och NMD2023 i panelens topp, och dra opacitetsreglaget för att tona modellernas resultat över bakgrunden. Panelerna zoomar och panorerar tillsammans.',
+            lede: 'Hur väl stämmer marktäckekartor med vad som faktiskt finns på marken? Vi har jämfört modellernas kartor och Naturvårdsverkets NMD med Riksskogstaxeringens provytor från sju inventeringsår. I stora drag: både Prithvi-EO-2.0 och TESSERA stämmer oftare med fältbedömningen än NMD2023 — men bara när de tränas med fältkalibrerade etiketter. Exempelrutan nedan, ca 5 × 5 km i ett skogs- och odlingslandskap, ingår inte i utvärderingsmängden. De första panelerna visar indata och träningsetiketter, de två sista modellernas kartor.',
+            hint: 'Växla bakgrund mellan satellitbild och NMD2023 i panelens topp, och dra opacitetsreglaget för att tona lagret över bakgrunden. Panelerna zoomar och panorerar tillsammans. Klicka i en karta för att se vad modellerna, NMD2023 och etiketterna säger i just den pixeln. Under kartorna beskrivs varje datakälla och i vilket steg den används.',
             methods: [
                 { heading: 'Utvärderingsdesign',
                   body: '<p>742 provyte-år per år 2018–2024 valdes med ett seedat, dokumenterat urval och låstes med en SHA-256-hash innan någon modell kördes; poängsättningen kontrollerar hashen innan den räknar. Modellerna, NMD2018 och NMD2023 jämförs parvis på samma provytor. Måttet är överensstämmelse i fem klasser — tallskog, granskog, lövskog, blandskog och övrigt (inklusive icke-skog). Osäkerheten skattas över oberoende 50 km-block och korrigeras för det totala antalet jämförelser. De provyte-år vars data tränade den fältkalibrerade läraren är uteslutna ur utvärderingen.</p>' },
                 { heading: 'Kartlagren',
-                  body: '<p>Satellitbilden är en Sentinel-2-sommarbild med kontraststräckning för visning. NMD2023 visas med showcasens NMD-legend; NMD2023:s nyare koder (finindelad öppen våtmark och öppen mark, låg fjällskog, torvtäkt) visas som närmaste NMD2018-klass. Modellkartorna är de slutliga, fältkalibrerade modellernas fulla klassutdata — fler klasser än de fem som utvärderas. Alla lager täcker modellens 504 × 504 px-fönster.</p>' }
+                  body: '<p>Satellitbilden är en Sentinel-2-sommarbild med kontraststräckning för visning; den svarta kilen nere till höger saknar data just det datumet, och modellerna använder flera datum. NMD2023 visas med showcasens NMD-legend; NMD2023:s nyare koder (finindelad öppen våtmark och öppen mark, låg fjällskog, torvtäkt) visas som närmaste NMD2018-klass. Modellkartorna är de slutliga, fältkalibrerade modellernas fulla klassutdata — fler klasser än de fem som utvärderas. Höjdmodell, trädhöjd och växtsäsongens längd har en färgskala från 2:a–98:e percentilen i rutan; där värdet 0 betyder att inget finns (inga träd, ingen växtsäsong) är pixeln genomskinlig. TESSERA-embeddingen visas som sina tre första huvudkomponenter. Alla lager täcker modellens 504 × 504 px-fönster.</p>' }
             ]
         },
         panels: [
             {id:'nfi-rgb',     key:'rgb',     title:'Sentinel-2 RGB / NMD2023', legend:'nmd2023',
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-dem',     key:'dem',     title:'Höjdmodell (Copernicus DEM)', legend:['nfi_dem','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-height',  key:'height',  title:'Trädhöjd (Skogsstyrelsen)', legend:['nfi_height','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-vpp',     key:'vpp',     title:'Växtsäsongens längd (HR-VPP)', legend:['nfi_vpp_length','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-emb',     key:'emb',     title:'TESSERA-embedding (årlig)', legend:['nfi_embedding','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-lpis',    key:'lpis',    title:'Jordbruksskiften (Jordbruksverket, LPIS)', legend:['nfi_lpis','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-harvest', key:'harvest', title:'Utförda avverkningar (Skogsstyrelsen)', legend:['nfi_harvest','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-label',   key:'label',   title:'Träningsetikett (NMD2023 + LPIS + avverkningar)', legend:['nfi_label','nmd2023'],
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
             {id:'nfi-prithvi', key:'prithvi', title:'Prithvi-EO-2.0 600M',       legend:['unified_nfi','nmd2023'],
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
@@ -425,9 +463,25 @@ var TAB_CONFIG = {
         images: {
             'nfi-rgb':     'showcase/nfi_validation/rgb.png',
             'nfi-nmd':     'showcase/nfi_validation/nmd2023.png',
+            'nfi-dem':     'showcase/nfi_validation/dem.png',
+            'nfi-height':  'showcase/nfi_validation/height.png',
+            'nfi-vpp':     'showcase/nfi_validation/vpp_length.png',
+            'nfi-emb':     'showcase/nfi_validation/tessera_embedding.png',
+            'nfi-lpis':    'showcase/nfi_validation/lpis.png',
+            'nfi-harvest': 'showcase/nfi_validation/harvest.png',
+            'nfi-label':   'showcase/nfi_validation/training_label.png',
             'nfi-prithvi': 'showcase/nfi_validation/prithvi600m_r4.png',
             'nfi-tessera': 'showcase/nfi_validation/tessera_r4.png'
         },
+        // Click-to-inspect: class layers named by exact colour (app.js bindInspector).
+        inspect: [
+            {label:'Prithvi-EO-2.0 600M', image:'nfi-prithvi', legend:'unified_nfi', empty:'—'},
+            {label:'TESSERA',             image:'nfi-tessera', legend:'unified_nfi', empty:'—'},
+            {label:'NMD2023',             image:'nfi-nmd',     legend:'nmd',         empty:'—'},
+            {label:'Träningsetikett',     image:'nfi-label',   legend:'unified_nfi', empty:'ingen etikett'},
+            {label:'Gröda (LPIS)',        image:'nfi-lpis',    legend:'nfi_lpis',    empty:'inget jordbruksskifte'},
+            {label:'Avverkning (SKS)',    image:'nfi-harvest', legend:'nfi_harvest', empty:'ingen'}
+        ],
         imgH: 504, imgW: 504,
         hasBgToggle: false
     },

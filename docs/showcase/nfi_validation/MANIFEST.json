@@ -1,8 +1,8 @@
 {
-  "description": "Layers for the NFI field-validation tab: Sentinel-2 summer RGB, NMD2023 and one class map per model cell for one example tile, withheld by name. Inputs are bound by sha256; a private provenance record maps them to the tile and to its check against the frozen NFI evaluation set.",
-  "produced_at": "2026-10-28T12:57:24.079171+00:00",
+  "description": "Layers for the NFI field-validation tab for one example tile, withheld by name: Sentinel-2 summer RGB, NMD2023, one class map per model cell, and background layers from the tile (elevation, tree height, VPP season length, TESSERA embedding). Inputs are bound by sha256; a private provenance record maps them to the tile and to its check against the frozen NFI evaluation set.",
+  "produced_at": "2026-10-28T16:10:18.798619+00:00",
   "produced_by": "scripts/showcase_nfi_teaser.py",
-  "git_sha": "02f6545",
+  "git_sha": "27b5a32",
   "git_dirty": false,
   "run_args": {
     "maps": [
@@ -16,63 +16,247 @@
   "layers": {
     "rgb": {
       "file": "rgb.png",
-      "sha256": "b8a386e978acae648c00146cc88ebf0ef4eaa28792b8b4ae84cbc645be6c31bb",
-      "input_sha256": "b4e3e5a77cb1ad4f47f2430eb893fbefc64fdf85c52842ac0ec2a9b44ae3c2a1"
+      "sha256": "61a775073b3cffd4ac8aa621b2394aa325fdc72cf2ab6b8644a68e0acc4f9089",
+      "input_sha256": "dd8c09ba6bb9b4daaf643c4e158ca419c6b338cba304cb8cf57143d052bbeb8d"
     },
     "nmd2023": {
       "file": "nmd2023.png",
-      "sha256": "a60cf09a675d60f18d713a3600c687a6690ce4ab4489b12adb9bb53db9a42324",
-      "input_sha256": "596b89f6ead51769d3c148e1c9a594d913492d95ed212018c71d256238b1e04a"
+      "sha256": "8c2baef2c1087f82f4d24fe84b2746eb1ae557d6c516bff581a907afbb1519d9",
+      "input_sha256": "cfa860f976d9b7f0be493f60eabdf1d0e1701745f332f17dcf20847ba14a355a"
     },
     "prithvi600m_r4": {
       "file": "prithvi600m_r4.png",
-      "sha256": "485ed398fb8f58a7b861d0467fa1a7c4f2640f2454395181b25276d7956f1ebb",
-      "input_sha256": "eed22182a81b850c4bf4243b7fa7a691dfe97022ca09d6bb99977ad67a0701a1"
+      "sha256": "a8cc5507b5adea1412e8c6ff79f1c33cef5955f8c7d7372e32c95d88cd6b51e5",
+      "input_sha256": "f7f01db7f820e39390ee06dde288f64161c94e715f13c59c1fcbaedabee95a81"
     },
     "tessera_r4": {
       "file": "tessera_r4.png",
-      "sha256": "adc155d5fd81199c668d2dc2fe66b8c33e454933986ae99be2054d2e4bc6483e",
-      "input_sha256": "47a112292f44b722e699b0c76d229fefaa2070f1ee4d93b1f9c87f71e735911d"
+      "sha256": "803849d1a1b9a337076921e4813a7efd23f9297d630c0328e7d567e12d686890",
+      "input_sha256": "cd89c4ad6eedc8218b250f2e1a7c789c1ea692502e9b4cf9949833280e15a33d"
+    },
+    "dem": {
+      "file": "dem.png",
+      "sha256": "933eb842739c1487e852cf86b9fad66b613dced0e84f9d4d57ea370bb8321683",
+      "input_sha256": "71ba2b876b91aea8ef004630f3a010533acb1cbdc5349e2f530cdea62cd40039"
+    },
+    "height": {
+      "file": "height.png",
+      "sha256": "bbb7d8654ac7eba4a4876ea188b00260d10d8b82ae07e6a3e376dfea1df21ef7",
+      "input_sha256": "71ba2b876b91aea8ef004630f3a010533acb1cbdc5349e2f530cdea62cd40039"
+    },
+    "vpp_length": {
+      "file": "vpp_length.png",
+      "sha256": "fc1c7d7257b0c64ae3cea5498a823506892048b3db817a3d7426b705025d76dd",
+      "input_sha256": "71ba2b876b91aea8ef004630f3a010533acb1cbdc5349e2f530cdea62cd40039"
+    },
+    "tessera_embedding": {
+      "file": "tessera_embedding.png",
+      "sha256": "e0b025afcc940af81d84d23540af48e217762c910bafffe7c0344acc01c0ae44",
+      "input_sha256": "71ba2b876b91aea8ef004630f3a010533acb1cbdc5349e2f530cdea62cd40039"
+    },
+    "training_label": {
+      "file": "training_label.png",
+      "sha256": "8aa9a6114f107019f27cba04e1161a13fe1b5e4a9062c50070e7085a4a0d15dd",
+      "input_sha256": "cfa860f976d9b7f0be493f60eabdf1d0e1701745f332f17dcf20847ba14a355a"
+    },
+    "lpis": {
+      "file": "lpis.png",
+      "sha256": "879ed91f054d09a731538479c9b9b7f9c9f44110f126423f9453097110d8db74",
+      "input_sha256": "cfa860f976d9b7f0be493f60eabdf1d0e1701745f332f17dcf20847ba14a355a"
+    },
+    "harvest": {
+      "file": "harvest.png",
+      "sha256": "46117a39712dbf2bce156668ecd6ac98251c15b20a765cc052a72e0c074ed00f",
+      "input_sha256": "cfa860f976d9b7f0be493f60eabdf1d0e1701745f332f17dcf20847ba14a355a"
+    }
+  },
+  "background_scales": {
+    "dem": {
+      "colormap": "YlOrBr",
+      "unit": "m",
+      "vmin": 30.0,
+      "vmax": 120.0,
+      "zero_transparent": false,
+      "valid_fraction": 1.0,
+      "legend": [
+        {
+          "color": "#FFFFE5",
+          "label": "30 m"
+        },
+        {
+          "color": "#FEE390",
+          "label": "52.5 m"
+        },
+        {
+          "color": "#FE9829",
+          "label": "75 m"
+        },
+        {
+          "color": "#CB4B02",
+          "label": "97.5 m"
+        },
+        {
+          "color": "#662506",
+          "label": "120 m"
+        }
+      ]
+    },
+    "height": {
+      "colormap": "YlGn",
+      "unit": "m",
+      "vmin": 0.0,
+      "vmax": 30.0,
+      "zero_transparent": true,
+      "valid_fraction": 0.5647,
+      "legend": [
+        {
+          "color": "#FFFFE5",
+          "label": "0 m"
+        },
+        {
+          "color": "#D9F0A3",
+          "label": "7.5 m"
+        },
+        {
+          "color": "#77C679",
+          "label": "15 m"
+        },
+        {
+          "color": "#228343",
+          "label": "22.5 m"
+        },
+        {
+          "color": "#004529",
+          "label": "30 m"
+        }
+      ]
+    },
+    "vpp_length": {
+      "colormap": "viridis",
+      "unit": "dagar",
+      "vmin": 60.0,
+      "vmax": 240.0,
+      "zero_transparent": true,
+      "valid_fraction": 0.87,
+      "legend": [
+        {
+          "color": "#440154",
+          "label": "60 dagar"
+        },
+        {
+          "color": "#3B528B",
+          "label": "105 dagar"
+        },
+        {
+          "color": "#21918C",
+          "label": "150 dagar"
+        },
+        {
+          "color": "#5EC962",
+          "label": "195 dagar"
+        },
+        {
+          "color": "#FDE725",
+          "label": "240 dagar"
+        }
+      ]
+    }
+  },
+  "embedding": {
+    "method": "PCA over valid pixels; components 1-3 → R, G, B; 2-98 % stretch",
+    "channels": 128,
+    "valid_fraction": 1.0
+  },
+  "label_layers": {
+    "training_label": {
+      "classes_present": {
+        "tallskog": 0.0686,
+        "granskog": 0.0597,
+        "lövskog": 0.2622,
+        "blandskog": 0.0203,
+        "sumpskog": 0.0357,
+        "tillfälligt ej skog": 0.0324,
+        "våtmark": 0.0614,
+        "öppen mark": 0.0087,
+        "bebyggelse": 0.0297,
+        "vatten": 0.1425,
+        "korn": 0.0199,
+        "oljeväxter": 0.008,
+        "slåttervall": 0.083,
+        "bete": 0.0836,
+        "potatis": 0.0005,
+        "trindsäd": 0.0131,
+        "råg": 0.0059,
+        "hygge": 0.0185,
+        "buskdominerad mark": 0.0031,
+        "risdominerad mark": 0.0058,
+        "gräsdominerad mark": 0.0298,
+        "öppen mark utan vegetation": 0.0014
+      },
+      "unlabelled_fraction": 0.0061
+    },
+    "lpis": {
+      "classes_present": {
+        "korn": 0.0199,
+        "oljeväxter": 0.008,
+        "slåttervall": 0.083,
+        "bete": 0.0836,
+        "potatis": 0.0005,
+        "trindsäd": 0.0131,
+        "råg": 0.0059
+      },
+      "parcel_fraction": 0.281
+    },
+    "harvest": {
+      "fraction": 0.0188
     }
   },
   "nmd2023_display_classes": {
-    "forest_pine": 0.2044,
-    "forest_spruce": 0.0279,
-    "forest_deciduous": 0.2072,
-    "forest_mixed": 0.0611,
-    "forest_temp_non_forest": 0.0057,
-    "forest_wetland_pine": 0.0008,
-    "forest_wetland_spruce": 0.0012,
-    "forest_wetland_deciduous": 0.0117,
-    "forest_wetland_mixed": 0.0014,
-    "forest_wetland_temp": 0.0005,
-    "open_wetland": 0.0105,
-    "cropland": 0.0277,
-    "open_land_bare": 0.0097,
-    "open_land_vegetated": 0.1202,
-    "developed_buildings": 0.0118,
-    "developed_infrastructure": 0.0039,
-    "developed_roads": 0.0471,
-    "water_lakes": 0.0471,
-    "water_sea": 0.2001
+    "forest_pine": 0.0686,
+    "forest_spruce": 0.0597,
+    "forest_deciduous": 0.2628,
+    "forest_mixed": 0.0204,
+    "forest_temp_non_forest": 0.0502,
+    "forest_wetland_pine": 0.0014,
+    "forest_wetland_spruce": 0.0015,
+    "forest_wetland_deciduous": 0.0298,
+    "forest_wetland_mixed": 0.0017,
+    "forest_wetland_temp": 0.0014,
+    "open_wetland": 0.0614,
+    "cropland": 0.145,
+    "open_land_bare": 0.0016,
+    "open_land_vegetated": 0.1224,
+    "developed_buildings": 0.0014,
+    "developed_infrastructure": 0.0002,
+    "developed_roads": 0.0281,
+    "water_lakes": 0.1425
   },
   "map_classes_present": {
-    "tallskog": 0.3524,
-    "granskog": 0.0012,
-    "lövskog": 0.0671,
-    "blandskog": 0.0005,
-    "sumpskog": 0.0522,
-    "tillfälligt ej skog": 0.0,
-    "våtmark": 0.0052,
-    "öppen mark": 0.0004,
-    "bebyggelse": 0.0044,
-    "vatten": 0.2307,
-    "slåttervall": 0.0172,
-    "bete": 0.0049,
-    "hygge": 0.0019,
-    "buskdominerad mark": 0.0076,
-    "risdominerad mark": 0.1163,
-    "gräsdominerad mark": 0.1072,
-    "öppen mark utan vegetation": 0.0309
+    "tallskog": 0.0505,
+    "granskog": 0.0733,
+    "lövskog": 0.2526,
+    "blandskog": 0.0655,
+    "sumpskog": 0.0118,
+    "tillfälligt ej skog": 0.0135,
+    "våtmark": 0.0245,
+    "öppen mark": 0.0044,
+    "bebyggelse": 0.0031,
+    "vatten": 0.1393,
+    "vete": 0.0014,
+    "korn": 0.0324,
+    "havre": 0.0005,
+    "oljeväxter": 0.0117,
+    "slåttervall": 0.0476,
+    "bete": 0.1658,
+    "potatis": 0.0001,
+    "sockerbetor": 0.0,
+    "trindsäd": 0.0088,
+    "råg": 0.0044,
+    "majs": 0.0,
+    "hygge": 0.0155,
+    "buskdominerad mark": 0.0165,
+    "risdominerad mark": 0.0124,
+    "gräsdominerad mark": 0.0433,
+    "öppen mark utan vegetation": 0.0009
   }
 }

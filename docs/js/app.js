@@ -999,6 +999,81 @@
                 geojsonMap._default = results[0].data;
             }
             initMaps(config.panels, config.images, config.imgH, config.imgW, config.hasBgToggle, geojsonMap, config.nativeZoom);
+            bindInspector(config);
+        });
+    }
+
+    // ── Click-to-inspect (class layers) ──────────────────────────────
+    // config.inspect = [{label, image, legend, empty}]: a click on any of the
+    // tab's maps reads that pixel from each listed class image and names its
+    // class by exact colour match against LEGENDS[legend]; a transparent pixel
+    // shows `empty`. Class layers only: a continuous layer's colour is not its
+    // value. The images are same-origin PNGs, so the canvas read is allowed.
+
+    function loadPixels(url) {
+        return new Promise(function(resolve, reject) {
+            var img = new Image();
+            img.onload = function() {
+                var canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                var ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                resolve(ctx.getImageData(0, 0, canvas.width, canvas.height));
+            };
+            img.onerror = function() { reject(new Error('cannot load ' + url)); };
+            img.src = url;
+        });
+    }
+
+    function colourNames(legendKey) {
+        var names = {};
+        (LEGENDS[legendKey] || []).forEach(function(item) {
+            if (item.color) names[item.color.toUpperCase()] = item.label;
+        });
+        return names;
+    }
+
+    function hexColour(data, k) {
+        return '#' + [data[k], data[k + 1], data[k + 2]].map(function(v) {
+            return ('0' + v.toString(16)).slice(-2).toUpperCase();
+        }).join('');
+    }
+
+    function bindInspector(config) {
+        if (!config.inspect) return;
+        var layers = config.inspect.map(function(spec) {
+            return {spec: spec, names: colourNames(spec.legend), pixels: loadPixels(config.images[spec.image])};
+        });
+        var maps = config.panels.map(function(p) { return allMaps[p.id]; }).filter(Boolean);
+        var markers = [];
+        maps.forEach(function(map) {
+            map.getContainer().style.cursor = 'crosshair';
+            map.on('click', function(e) {
+                var col = Math.floor(e.latlng.lng);
+                var row = Math.floor(config.imgH - e.latlng.lat);  // CRS.Simple: lat 0 is the bottom row
+                if (col < 0 || row < 0 || col >= config.imgW || row >= config.imgH) return;
+                Promise.all(layers.map(function(l) { return l.pixels; })).then(function(all) {
+                    var rows = layers.map(function(l, i) {
+                        var d = all[i];
+                        var x = Math.floor(col * d.width / config.imgW);
+                        var y = Math.floor(row * d.height / config.imgH);
+                        var k = (y * d.width + x) * 4;
+                        var name = d.data[k + 3] === 0 ? l.spec.empty
+                            : (l.names[hexColour(d.data, k)] || 'okänd färg');
+                        return '<tr><th style="text-align:left;padding:2px 10px 2px 0;">' + l.spec.label +
+                            '</th><td style="padding:2px 0;">' + name + '</td></tr>';
+                    }).join('');
+                    markers.forEach(function(m) { m.remove(); });
+                    markers = maps.map(function(m) {
+                        return L.circleMarker(e.latlng, {radius: 6, color: '#cff8e4', weight: 2, fill: false}).addTo(m);
+                    });
+                    L.popup({maxWidth: 360})
+                        .setLatLng(e.latlng)
+                        .setContent('<table style="font-size:12px;border-collapse:collapse;">' + rows + '</table>')
+                        .openOn(map);
+                });
+            });
         });
     }
 

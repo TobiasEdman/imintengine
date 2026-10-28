@@ -1403,7 +1403,7 @@ python demos/cloud_models/run_comparison.py</pre>
             <a href="#" class="sub-tab active" data-subtab="wetland_pirinen">🪻 Våtmark — Pirinen-stack</a>
             <a href="#" class="sub-tab" data-subtab="fire">🔥 Brand — Kårbölebranden</a>
             <a href="#" class="sub-tab" data-subtab="grazing">🐄 Betesmark</a>
-            <a href="#" class="sub-tab" data-subtab="nfi_validation">🌲 Fältvalidering — NFI</a>
+            <a href="#" class="sub-tab" data-subtab="nfi_validation">🌲 Marktäckekartering</a>
         </div>
 
         <div class="sub-tab-content active" id="tab-wetland_pirinen">
@@ -1632,6 +1632,106 @@ python demos/cloud_models/run_comparison.py</pre>
             <div class="tab-dynamic"></div>
             <div class="tab-description">
 
+                <h3>Data och steg</h3>
+                <p>
+                    Studien bygger på öppna data; undantaget är Riksskogstaxeringens provytor, vars lägen är
+                    skyddade. Den går i fyra steg. Tabellen visar varje datakälla och i vilket steg den används;
+                    panelerna ovan visar flera av dem för exempelrutan. Vilka indata en modell får beror på modellen.
+                </p>
+                <table style="width:100%; border-collapse:collapse; font-size:16px; margin-top:12px;">
+                    <thead>
+                        <tr style="background:#1a4338; color:#cff8e4;">
+                            <th style="text-align:left; padding:10px 12px;">Steg</th>
+                            <th style="text-align:left; padding:10px 12px;">Data</th>
+                            <th style="text-align:left; padding:10px 12px;">Källa</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <th style="text-align:left; padding:10px 12px; font-weight:600;" rowspan="3">1. Indata</th>
+                            <td style="padding:10px 12px;">Satellitbilder: fyra Sentinel-2-bilder per ruta och år (hösten året innan och tre bilder under växtsäsongen, tidsatta efter rutans fenologi); Sentinel-1-radar för de modeller som använder radar</td>
+                            <td style="padding:10px 12px;">ESA Copernicus Sentinel-2 och Sentinel-1</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <td style="padding:10px 12px;">Hjälpkanaler: höjdmodell; trädhöjd, virkesvolym, grundyta och diameter; markfuktighet; växtsäsongens start, slut, längd samt max- och minvärde</td>
+                            <td style="padding:10px 12px;">Copernicus DEM GLO-30; Skogsstyrelsen; SLU Markfuktighetskarta; Copernicus HR-VPP</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <td style="padding:10px 12px;">TESSERA: förberäknade årliga embeddings, 128 tal per pixel</td>
+                            <td style="padding:10px 12px;">TESSERA (geotessera)</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <th style="text-align:left; padding:10px 12px; font-weight:600;">2. Etiketter</th>
+                            <td style="padding:10px 12px;">NMD2018 respektive NMD2023 som bas, med jordbruksgrödor och utförda avverkningar ovanpå</td>
+                            <td style="padding:10px 12px;">Naturvårdsverket; Jordbruksverket (LPIS); Skogsstyrelsen</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <th style="text-align:left; padding:10px 12px; font-weight:600;">3. Träning i fyra nivåer</th>
+                            <td style="padding:10px 12px;">(1) NMD2018-etiketter, (2) NMD2023-etiketter, (3) dessutom fältkalibrerade skogsetiketter från en lärare tränad mot NFI-provytor, (4) dessutom trädslagsandelar</td>
+                            <td style="padding:10px 12px;">Riksskogstaxeringen (SLU); NMD2023:s tilläggsskikt Trädslag</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #e5e7eb;">
+                            <th style="text-align:left; padding:10px 12px; font-weight:600;">4. Utvärdering</th>
+                            <td style="padding:10px 12px;">742 provyte-år per år 2018–2024, låsta innan modellerna kördes; jämförelse med NMD2018 och NMD2023 på samma provytor</td>
+                            <td style="padding:10px 12px;">Riksskogstaxeringen (SLU)</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Höjdmodell</h3>
+                <p>
+                    Terränghöjd över havet från Copernicus DEM (30 m), inläst på rutans 10 m-rutnät. Den är en av
+                    modellernas hjälpkanaler.
+                    <br><em>Källa: <a href="https://spacedata.copernicus.eu/" target="_blank">Copernicus DEM GLO-30</a></em>
+                </p>
+
+                <h3>Trädhöjd</h3>
+                <p>
+                    Trädhöjd ur Skogsstyrelsens laserskanningsbaserade skogsdata. Tillsammans med virkesvolym,
+                    grundyta och diameter från samma källa är den en hjälpkanal. Där värdet är 0 (inga träd eller
+                    inga data) är pixeln genomskinlig.
+                    <br><em>Källa: <a href="https://www.skogsstyrelsen.se/" target="_blank">Skogsstyrelsen</a>, öppna geodata</em>
+                </p>
+
+                <h3>Växtsäsongens längd</h3>
+                <p>
+                    Antal dagar mellan växtsäsongens start och slut enligt Copernicus HR-VPP, som bygger på
+                    Sentinel-2. Fenologin används på två sätt: som hjälpkanaler och för att välja datum för de tre
+                    växtsäsongsbilderna i varje ruta.
+                    <br><em>Källa: <a href="https://land.copernicus.eu/" target="_blank">Copernicus Land Monitoring Service, HR-VPP</a></em>
+                </p>
+
+                <h3>TESSERA-embedding</h3>
+                <p>
+                    TESSERA sammanfattar ett års satellitobservationer per pixel i 128 tal. Panelen visar de tre
+                    första huvudkomponenterna som färg: områden med samma färg har liknande signatur över året.
+                    TESSERA-modellen bygger på dessa embeddings.
+                    <br><em>Källa: <a href="https://pypi.org/project/geotessera/" target="_blank">geotessera</a></em>
+                </p>
+
+                <h3>Jordbruksskiften (LPIS)</h3>
+                <p>
+                    Grödor på jordbruksskiften från Jordbruksverkets register, samma år som satellitbilderna. Grödkoderna
+                    slås ihop till de grödklasser modellerna lär sig. Alla grödklasser i träningsetiketten kommer härifrån;
+                    resten av panelen är genomskinlig.
+                    <br><em>Källa: <a href="https://jordbruksverket.se/" target="_blank">Jordbruksverket</a>, LPIS</em>
+                </p>
+
+                <h3>Utförda avverkningar</h3>
+                <p>
+                    Avverkningar som Skogsstyrelsen registrerat som utförda under rutans år eller de fem åren
+                    innan. Där NMD visar skog blir de klassen hygge i träningsetiketten; annars behåller pixeln
+                    sin klass.
+                    <br><em>Källa: <a href="https://www.skogsstyrelsen.se/" target="_blank">Skogsstyrelsen</a></em>
+                </p>
+
+                <h3>Träningsetikett</h3>
+                <p>
+                    Etiketten modellerna tränas mot på nivå 2: NMD2023 som bas, med grödor från jordbruksskiftena och
+                    avverkningar ovanpå. Nivå 1 använder samma uppbyggnad med NMD2018 som bas. Pixlar utan etikett är
+                    genomskinliga. Jämför med modellernas kartor nedan, och med NMD2023 som bakgrund.
+                </p>
+
                 <h3>Resultat i stora drag</h3>
                 <p>
                     Överensstämmelse med Riksskogstaxeringen jämfört med NMD2023, på samma provytor.
@@ -1819,8 +1919,8 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=19"></script>
-    <script src="js/app.js?v=14"></script>
+    <script src="js/tab-data.js?v=24"></script>
+    <script src="js/app.js?v=15"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
     <script src="js/lilla-karlso-chart.js?v=1"></script>
