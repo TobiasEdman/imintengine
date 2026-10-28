@@ -137,3 +137,29 @@ def test_a_bad_map_name_is_refused_before_any_output_changes(
     assert {p.name: p.read_bytes() for p in out.iterdir()} == existing
     assert not (tmp_path / "escaped.png").exists()
 
+
+def _legend(tab_data: str, key: str) -> list[tuple[str, str]]:
+    block = re.search(rf"\n    {key}: \[(.*?)\n    \]", tab_data, re.S).group(1)
+    return re.findall(r"\{color:'([^']+)',label:'([^']+)'\}", block)
+
+
+def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
+    tab_data = (REPO / "docs/js/tab-data.js").read_text()
+    index = (REPO / "docs/index.html").read_text()
+    manifest_text = (REPO / "docs/showcase/nfi_validation/MANIFEST.json").read_text()
+    manifest = json.loads(manifest_text)
+    legend = {label.lower() for _, label in _legend(tab_data, "unified_nfi")}
+    assert set(manifest["map_classes_present"]) <= legend
+    for key, scale in manifest["background_scales"].items():
+        assert _legend(tab_data, f"nfi_{key}") == [(s["color"], s["label"]) for s in scale["legend"]], key
+    config = tab_data[tab_data.index("nfi_validation: {"):tab_data.index("marine_leisure: {")]
+    images = re.findall(r"'(showcase/nfi_validation/[^']+)'", config)
+    assert sorted(Path(p).name for p in images) == sorted(l["file"] for l in manifest["layers"].values())
+    for src in images:
+        assert (REPO / "docs" / src).is_file(), src
+    # Every overlay that can sit on the NMD2023 background shows both legends.
+    assert config.count("legend:['unified_nfi','nmd2023']") == 2
+    for key in ("nfi_dem", "nfi_height", "nfi_vpp_length", "nfi_embedding"):
+        assert f"legend:['{key}','nmd2023']" in config, key
+    for text in (tab_data, index, manifest_text):
+        assert not re.search(r"holdoutval_|nfi20\d\d_", text)
