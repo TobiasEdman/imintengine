@@ -203,7 +203,12 @@ def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
         assert (REPO / "docs" / src).is_file(), src
     # Every overlay that can sit on the NMD2023 background shows both legends.
     assert config.count("legend:['unified_nfi','nmd2023']") == 2
-    for key in ("nfi_dem", "nfi_height", "nfi_vpp_length", "nfi_embedding"):
+    for key in ("nfi_dem", "nfi_height", "nfi_vpp_length", "nfi_embedding",
+                "nfi_lpis", "nfi_harvest", "nfi_label"):
         assert f"legend:['{key}','nmd2023']" in config, key
+    labels = manifest["label_layers"]
+    lpis_legend = {label.lower() for _, label in _legend(tab_data, "nfi_lpis")}
+    assert lpis_legend == set(labels["lpis"]["classes_present"])
+    assert set(labels["training_label"]["classes_present"]) <= legend
     for text in (tab_data, index, manifest_text):
         assert not re.search(r"holdoutval_|nfi20\d\d_", text)

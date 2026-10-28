@@ -1,8 +1,8 @@
 {
   "description": "Layers for the NFI field-validation tab for one example tile, withheld by name: Sentinel-2 summer RGB, NMD2023, one class map per model cell, and background layers from the tile (elevation, tree height, VPP season length, TESSERA embedding). Inputs are bound by sha256; a private provenance record maps them to the tile and to its check against the frozen NFI evaluation set.",
-  "produced_at": "2026-10-28T15:54:59.488378+00:00",
+  "produced_at": "2026-10-28T16:10:18.798619+00:00",
   "produced_by": "scripts/showcase_nfi_teaser.py",
-  "git_sha": "f2d546f",
+  "git_sha": "27b5a32",
   "git_dirty": false,
   "run_args": {
     "maps": [
@@ -53,6 +53,21 @@
       "file": "tessera_embedding.png",
       "sha256": "e0b025afcc940af81d84d23540af48e217762c910bafffe7c0344acc01c0ae44",
       "input_sha256": "71ba2b876b91aea8ef004630f3a010533acb1cbdc5349e2f530cdea62cd40039"
+    },
+    "training_label": {
+      "file": "training_label.png",
+      "sha256": "8aa9a6114f107019f27cba04e1161a13fe1b5e4a9062c50070e7085a4a0d15dd",
+      "input_sha256": "cfa860f976d9b7f0be493f60eabdf1d0e1701745f332f17dcf20847ba14a355a"
+    },
+    "lpis": {
+      "file": "lpis.png",
+      "sha256": "879ed91f054d09a731538479c9b9b7f9c9f44110f126423f9453097110d8db74",
+      "input_sha256": "cfa860f976d9b7f0be493f60eabdf1d0e1701745f332f17dcf20847ba14a355a"
+    },
+    "harvest": {
+      "file": "harvest.png",
+      "sha256": "46117a39712dbf2bce156668ecd6ac98251c15b20a765cc052a72e0c074ed00f",
+      "input_sha256": "cfa860f976d9b7f0be493f60eabdf1d0e1701745f332f17dcf20847ba14a355a"
     }
   },
   "background_scales": {
@@ -151,6 +166,50 @@
     "method": "PCA over valid pixels; components 1-3 → R, G, B; 2-98 % stretch",
     "channels": 128,
     "valid_fraction": 1.0
+  },
+  "label_layers": {
+    "training_label": {
+      "classes_present": {
+        "tallskog": 0.0686,
+        "granskog": 0.0597,
+        "lövskog": 0.2622,
+        "blandskog": 0.0203,
+        "sumpskog": 0.0357,
+        "tillfälligt ej skog": 0.0324,
+        "våtmark": 0.0614,
+        "öppen mark": 0.0087,
+        "bebyggelse": 0.0297,
+        "vatten": 0.1425,
+        "korn": 0.0199,
+        "oljeväxter": 0.008,
+        "slåttervall": 0.083,
+        "bete": 0.0836,
+        "potatis": 0.0005,
+        "trindsäd": 0.0131,
+        "råg": 0.0059,
+        "hygge": 0.0185,
+        "buskdominerad mark": 0.0031,
+        "risdominerad mark": 0.0058,
+        "gräsdominerad mark": 0.0298,
+        "öppen mark utan vegetation": 0.0014
+      },
+      "unlabelled_fraction": 0.0061
+    },
+    "lpis": {
+      "classes_present": {
+        "korn": 0.0199,
+        "oljeväxter": 0.008,
+        "slåttervall": 0.083,
+        "bete": 0.0836,
+        "potatis": 0.0005,
+        "trindsäd": 0.0131,
+        "råg": 0.0059
+      },
+      "parcel_fraction": 0.281
+    },
+    "harvest": {
+      "fraction": 0.0188
+    }
   },
   "nmd2023_display_classes": {
     "forest_pine": 0.0686,

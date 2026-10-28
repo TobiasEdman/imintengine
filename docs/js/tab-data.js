@@ -54,6 +54,9 @@ var LEGENDS = {
     nfi_vpp_length: [
         {color:'#440154',label:'60 dagar'},{color:'#3B528B',label:'105 dagar'},{color:'#21918C',label:'150 dagar'},{color:'#5EC962',label:'195 dagar'},{color:'#FDE725',label:'240 dagar'}
     ],
+    nfi_lpis: [
+        {color:'#D48217',label:'Korn'},{color:'#2DB45A',label:'Oljeväxter'},{color:'#64C864',label:'Slåttervall'},{color:'#50A03C',label:'Bete'},{color:'#B45028',label:'Potatis'},{color:'#8CB432',label:'Trindsäd'},{color:'#BE9650',label:'Råg'}
+    ],
     nmd_grazing: [
         {color:'#FFD700',label:'Åkermark'},{color:'#D2B48C',label:'Öpp. mark veg.'},
         {color:'#50B43C',label:'Ädellövskog'},{color:'#32CD32',label:'Triviallöv'},
@@ -248,7 +251,10 @@ var LEGENDS = {
 // NFI tab: the model maps and the NMD2023 background use different class
 // schemes, so each strip carries a text-only title item.
 LEGENDS.nmd2023 = [{label:'<strong>NMD2023:</strong>'}].concat(LEGENDS.nmd);
+LEGENDS.nfi_label = [{label:'<strong>Träningsetikett:</strong>'}].concat(LEGENDS.unified_nfi, [{label:'transparent = ingen etikett'}]);
 LEGENDS.unified_nfi = [{label:'<strong>Modellkarta:</strong>'}].concat(LEGENDS.unified_nfi);
+LEGENDS.nfi_lpis = [{label:'<strong>Grödor (LPIS):</strong>'}].concat(LEGENDS.nfi_lpis);
+LEGENDS.nfi_harvest = [{label:'<strong>Avverkningar:</strong>'}, {color:'#00CED1',label:'utförd avverkning inom fem år före rutans år'}];
 LEGENDS.nfi_dem = [{label:'<strong>Höjd över havet:</strong>'}].concat(LEGENDS.nfi_dem);
 LEGENDS.nfi_height = [{label:'<strong>Trädhöjd:</strong>'}].concat(LEGENDS.nfi_height, [{label:'transparent = inga träd eller inga data'}]);
 LEGENDS.nfi_vpp_length = [{label:'<strong>Växtsäsongens längd:</strong>'}].concat(LEGENDS.nfi_vpp_length, [{label:'transparent = ingen växtsäsong (t.ex. vatten) eller inga data'}]);
@@ -423,7 +429,7 @@ var TAB_CONFIG = {
             {title:'Statistik',value:'Bestämd i förväg',detail:'50 km-block, korrigerad för multipla jämförelser'}
         ],
         copy: {
-            lede: 'Hur väl stämmer marktäckekartor med vad som faktiskt finns på marken? Vi har jämfört modellernas kartor och Naturvårdsverkets NMD med Riksskogstaxeringens provytor från sju inventeringsår. I stora drag: både Prithvi-EO-2.0 och TESSERA stämmer oftare med fältbedömningen än NMD2023 — men bara när de tränas med fältkalibrerade etiketter. Exempelrutan nedan, ca 5 × 5 km i ett skogs- och odlingslandskap, ingår inte i utvärderingsmängden. De första panelerna visar data som modellerna bygger på, de två sista modellernas kartor.',
+            lede: 'Hur väl stämmer marktäckekartor med vad som faktiskt finns på marken? Vi har jämfört modellernas kartor och Naturvårdsverkets NMD med Riksskogstaxeringens provytor från sju inventeringsår. I stora drag: både Prithvi-EO-2.0 och TESSERA stämmer oftare med fältbedömningen än NMD2023 — men bara när de tränas med fältkalibrerade etiketter. Exempelrutan nedan, ca 5 × 5 km i ett skogs- och odlingslandskap, ingår inte i utvärderingsmängden. De första panelerna visar indata och träningsetiketter, de två sista modellernas kartor.',
             hint: 'Växla bakgrund mellan satellitbild och NMD2023 i panelens topp, och dra opacitetsreglaget för att tona lagret över bakgrunden. Panelerna zoomar och panorerar tillsammans. Under kartorna beskrivs varje datakälla och i vilket steg den används.',
             methods: [
                 { heading: 'Utvärderingsdesign',
@@ -443,6 +449,12 @@ var TAB_CONFIG = {
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
             {id:'nfi-emb',     key:'emb',     title:'TESSERA-embedding (årlig)', legend:['nfi_embedding','nmd2023'],
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-lpis',    key:'lpis',    title:'Jordbruksskiften (Jordbruksverket, LPIS)', legend:['nfi_lpis','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-harvest', key:'harvest', title:'Utförda avverkningar (Skogsstyrelsen)', legend:['nfi_harvest','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
+            {id:'nfi-label',   key:'label',   title:'Träningsetikett (NMD2023 + LPIS + avverkningar)', legend:['nfi_label','nmd2023'],
+                bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
             {id:'nfi-prithvi', key:'prithvi', title:'Prithvi-EO-2.0 600M',       legend:['unified_nfi','nmd2023'],
                 bgToggle:[{label:'Satellit',key:'rgb',active:true},{label:'NMD2023',key:'nmd'}]},
             {id:'nfi-tessera', key:'tessera', title:'TESSERA',                   legend:['unified_nfi','nmd2023'],
@@ -455,6 +467,9 @@ var TAB_CONFIG = {
             'nfi-height':  'showcase/nfi_validation/height.png',
             'nfi-vpp':     'showcase/nfi_validation/vpp_length.png',
             'nfi-emb':     'showcase/nfi_validation/tessera_embedding.png',
+            'nfi-lpis':    'showcase/nfi_validation/lpis.png',
+            'nfi-harvest': 'showcase/nfi_validation/harvest.png',
+            'nfi-label':   'showcase/nfi_validation/training_label.png',
             'nfi-prithvi': 'showcase/nfi_validation/prithvi600m_r4.png',
             'nfi-tessera': 'showcase/nfi_validation/tessera_r4.png'
         },

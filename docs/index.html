@@ -1709,6 +1709,28 @@ python demos/cloud_models/run_comparison.py</pre>
                     <br><em>Källa: <a href="https://pypi.org/project/geotessera/" target="_blank">geotessera</a></em>
                 </p>
 
+                <h3>Jordbruksskiften (LPIS)</h3>
+                <p>
+                    Grödor på jordbruksskiften från Jordbruksverkets register, samma år som satellitbilderna. Grödkoderna
+                    slås ihop till de grödklasser modellerna lär sig. Alla grödklasser i träningsetiketten kommer härifrån;
+                    resten av panelen är genomskinlig.
+                    <br><em>Källa: <a href="https://jordbruksverket.se/" target="_blank">Jordbruksverket</a>, LPIS</em>
+                </p>
+
+                <h3>Utförda avverkningar</h3>
+                <p>
+                    Avverkningar som Skogsstyrelsen registrerat som utförda inom fem år före rutans år. I
+                    träningsetiketten blir de klassen hygge.
+                    <br><em>Källa: <a href="https://www.skogsstyrelsen.se/" target="_blank">Skogsstyrelsen</a></em>
+                </p>
+
+                <h3>Träningsetikett</h3>
+                <p>
+                    Etiketten modellerna tränas mot i steg 2: NMD2023 som bas, med grödor från jordbruksskiftena och
+                    avverkningar ovanpå. Steg 1 använder samma uppbyggnad med NMD2018 som bas. Pixlar utan etikett är
+                    genomskinliga. Jämför med modellernas kartor nedan, och med NMD2023 som bakgrund.
+                </p>
+
                 <h3>Resultat i stora drag</h3>
                 <p>
                     Överensstämmelse med Riksskogstaxeringen jämfört med NMD2023, på samma provytor.
@@ -1896,7 +1918,7 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet.min.js"></script>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
-    <script src="js/tab-data.js?v=21"></script>
+    <script src="js/tab-data.js?v=22"></script>
     <script src="js/app.js?v=14"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
