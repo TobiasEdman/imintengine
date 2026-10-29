@@ -2,8 +2,11 @@
   "id": "0125",
   "subject": "Plan 10 m Swedish DTM tile enrichment",
   "description": "Document a tile-aligned Lantmateriet DTM enrichment campaign, provenance, validation and later training integration. Planning only; no source tile mutation, downloads or training launch.",
-  "status": "pending",
+  "status": "claimed",
   "created_at": "2026-10-29T08:09:04.101557+00:00",
-  "updated_at": "2026-10-29T08:09:04.101557+00:00",
-  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1"
+  "updated_at": "2026-10-29T08:09:18Z",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "claimed_by": "te-codex-dtm-01a1836d",
+  "runtime": "codex",
+  "claimed_at": "2026-10-29T08:09:18Z"
 }
