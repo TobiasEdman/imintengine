@@ -1,0 +1,14 @@
+{
+  "id": "0122",
+  "subject": "Audit geographic NFI plot reuse across years",
+  "description": "Step 2 of the approved continuation plan: audit frozen NFI teacher/holdout cross-year reuse using both IDs and coordinates. Scope: scripts/audit_nfi_plot_reuse.py, tests/test_nfi_plot_reuse.py, methods documentation. Keep real audit results and identities private. User requested parallel steps 2 and 3; R5 pilot preparation is separately owned by task 0123.",
+  "status": "completed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/r5-tessera-pilot",
+  "created_at": "2026-10-29T06:55:00.833077Z",
+  "updated_at": "2026-10-29T07:40:20Z",
+  "claimed_by": "te-codex-01a1836d",
+  "runtime": "codex",
+  "claimed_at": "2026-10-29T06:55:07Z",
+  "completed_at": "2026-10-29T07:40:20Z"
+}
