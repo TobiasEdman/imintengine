@@ -2,9 +2,12 @@
   "id": "0123",
   "subject": "Prepare TESSERA v2 R5 pilot protocol and holdout gate",
   "description": "Isolated preparation only: protected LUCAS point exclusion, matched R4/R5 evaluation protocol, manual pilot manifests and local verification. No GPU, cluster workload, data mutation, or deployment.",
-  "status": "pending",
+  "status": "claimed",
   "created_at": "2026-10-29T07:28:09.155794+00:00",
-  "updated_at": "2026-10-29T07:28:09.155794+00:00",
+  "updated_at": "2026-10-29T07:29:14Z",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
-  "branch": "agent/te/codex/r5-pilot-training"
+  "branch": "agent/te/codex/r5-pilot-training",
+  "claimed_by": "te-codex-r5-01a1836d",
+  "runtime": "codex",
+  "claimed_at": "2026-10-29T07:29:14Z"
 }
