@@ -280,6 +280,21 @@ _ERA5_SMOKE_CROP_CLASS_NAMES = {
 }
 
 
+
+def validate_fraction_sidecar(payload, h: int, w: int) -> tuple[np.ndarray, np.ndarray]:
+    """Strict original fraction contract for explicitly bound scientific cohorts."""
+    frac = np.asarray(payload["frac"])
+    unreliable = np.asarray(payload["frac_unreliable"])
+    if (frac.shape != (4, h, w) or not np.issubdtype(frac.dtype, np.number)
+            or not np.isfinite(frac).all() or np.any(frac < 0) or np.any(frac > 100)):
+        raise ValueError("fraction targets must be finite (4,H,W) percentages in [0,100]")
+    if (unreliable.shape != (h, w)
+            or not (np.issubdtype(unreliable.dtype, np.number) or unreliable.dtype == np.bool_)
+            or not np.isin(unreliable, [0, 1]).all()):
+        raise ValueError("fraction uncertainty must be an aligned binary (H,W) mask")
+    return frac.astype(np.float32), unreliable.astype(bool)
+
+
 def _split_file_names(path: Path) -> list[str]:
     names = [line.strip() for line in path.read_text().splitlines() if line.strip()]
     if not names:
@@ -972,9 +987,21 @@ class UnifiedDataset(Dataset):
         split_dir: str | Path | None = None,
         limit_tiles: int | None = None,
         backbone_family: str = "prithvi",
+        tile_names: Sequence[str] | None = None,
     ):
         super().__init__()
         self.patch_size = patch_size
+        # A caller with its own hash-bound protocol can supply exact ordered
+        # membership without reusing the ERA5-specific split schema.
+        self._requested_tile_names = None if tile_names is None else list(tile_names)
+        if self._requested_tile_names is not None:
+            names = self._requested_tile_names
+            if (not names or len(names) != len(set(names))
+                    or any(not isinstance(name, str) or Path(name).name != name
+                           or not name.endswith(".npz") for name in names)):
+                raise ValueError("tile_names must be unique nonempty NPZ basenames")
+            if split_dir is not None or limit_tiles is not None:
+                raise ValueError("tile_names cannot be combined with split_dir or limit_tiles")
         # Which backbone family the emitted samples feed. "prithvi" (the
         # default) reads the multi-frame `spectral` reflectance and applies
         # Prithvi z-score normalization + temporal/location coords. "tessera"
@@ -1162,6 +1189,11 @@ class UnifiedDataset(Dataset):
                     f"{len(missing_sidecars)} missing; first={missing_sidecars[:3]}"
                 )
 
+        if self._requested_tile_names is not None:
+            actual = [entry["name"] for entry in self._entries]
+            if actual != self._requested_tile_names:
+                raise ValueError("Explicit tile_names membership is missing, reordered or filtered")
+
         if not self._entries:
             raise FileNotFoundError(
                 f"No tiles found for split='{split}'. "
@@ -1286,7 +1318,7 @@ class UnifiedDataset(Dataset):
 
         # LULC tiles are under a 'tiles' subdirectory; crop tiles are
         # directly in the directory
-        if source == "lulc":
+        if source == "lulc" and self._requested_tile_names is None:
             tiles_dir = data_dir / "tiles"
             if not tiles_dir.exists():
                 tiles_dir = data_dir
@@ -1295,7 +1327,10 @@ class UnifiedDataset(Dataset):
 
         # Check for a split file
         split_file = (self.split_dir or data_dir) / f"split_{split}.txt"
-        if split_file.exists():
+        if self._requested_tile_names is not None:
+            tile_paths = [tiles_dir / name for name in self._requested_tile_names
+                          if (tiles_dir / name).is_file()]
+        elif split_file.exists():
             with open(split_file) as f:
                 requested_names = [
                     line.strip() for line in f if line.strip()
@@ -1369,7 +1404,7 @@ class UnifiedDataset(Dataset):
             if required_key is not None and required_key not in data:
                 raise KeyError(f"missing {required_key}")
         except Exception as exc:
-            if self._split_manifest is not None:
+            if self._split_manifest is not None or self._requested_tile_names is not None:
                 raise RuntimeError(
                     f"Explicit cohort tile is unreadable or lacks model input: "
                     f"{entry['path']}"
@@ -1389,7 +1424,7 @@ class UnifiedDataset(Dataset):
                 )
                 data = _LabelOverlay(data, sidecar)
             except Exception as exc:
-                if self._split_manifest is not None:
+                if self._split_manifest is not None or self._requested_tile_names is not None:
                     raise RuntimeError(
                         f"Explicit cohort label sidecar is unreadable: "
                         f"{self.label_dir / entry['name']}"
@@ -1651,6 +1686,15 @@ class UnifiedDataset(Dataset):
         if self.frac_dir is None:
             return bundle
         path = self.frac_dir / name
+        if self._requested_tile_names is not None:
+            try:
+                with np.load(path, allow_pickle=False) as sc:
+                    frac, unreliable = validate_fraction_sidecar(sc, h, w)
+            except Exception as exc:
+                raise ValueError(f"Invalid bound fraction sidecar: {path}") from exc
+            bundle[:NUM_SPECIES] = frac / 100.0
+            bundle[NUM_SPECIES] = ((frac > 0).any(axis=0) & ~unreliable).astype(np.float32)
+            return bundle
         if not path.exists():
             return bundle
         try:

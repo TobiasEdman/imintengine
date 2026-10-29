@@ -1,0 +1,81 @@
+{
+  "schema": "r5-tessera-pilot/1",
+  "scope": "preparation-only",
+  "model": "tessera_v1",
+  "embedding_source": "geotessera-0.10.2",
+  "tile_size": 512,
+  "image_size": 504,
+  "num_classes": 28,
+  "crop_classes": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "metric_version": "miou-ignore-target-v2",
+  "seed": 42,
+  "head": {
+    "teacher": "hash-bound historical TESSERA R4 checkpoint on promoted v2 inputs",
+    "features": "128 gated pre-classifier channels",
+    "scaler": "StandardScaler fitted on clean training partition only",
+    "hidden_layer_sizes": [
+      128
+    ],
+    "max_iter": 500,
+    "early_stopping": false,
+    "random_state": 42
+  },
+  "treatment": {
+    "base_labels": "unchanged R4 forest-distilled sidecars",
+    "replace_where": "label in 11..21, within the centre crop",
+    "preserve": "all other label pixels, every other sidecar key, fraction targets",
+    "validation_labels": "R4 labels for both arms"
+  },
+  "students": {
+    "arms": [
+      "r4_control",
+      "r5"
+    ],
+    "initialization": "matched cold start",
+    "cohort": "same filtered training tiles and identical fixed validation tiles",
+    "regime_source": "k8s/ladder/ladder-r4-tessera-job.yaml",
+    "only_treatment_difference": "training crop labels",
+    "class_weights": "shared sqrt weights from original R4 labels on the clean train cohort",
+    "tile_sampling": "uniform replacement sampler, same ordered membership and seed",
+    "deterministic": true,
+    "runner": "scripts/run_r5_tessera.py",
+    "aux_channel_names": [
+      "height",
+      "volume",
+      "basal_area",
+      "diameter",
+      "dem",
+      "vpp_sosd",
+      "vpp_eosd",
+      "vpp_length",
+      "vpp_maxv",
+      "vpp_minv",
+      "markfukt"
+    ]
+  },
+  "success": {
+    "crop_accuracy_delta_strictly_above": 0.0,
+    "max_lulc_miou_drop": 0.005
+  },
+  "execution_requirements": [
+    "reviewed preparation PR",
+    "verified NFI freeze and new private v2 input bundle",
+    "reviewed image digest and source commit",
+    "one-cell runtime probe approved by the user",
+    "concrete GPU cost proposal approved before student training",
+    "matched evaluator records binding keys, truth, masks, inputs, vocabulary and runtime"
+  ],
+  "queue_integration": "none"
+}
