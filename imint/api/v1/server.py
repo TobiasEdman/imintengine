@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 
 from imint.api.v1.schemas import (
@@ -49,6 +49,7 @@ from imint.api.v1.schemas import (
     HealthResponse,
     JobStatus,
     JobStatusResponse,
+    LcluRequest,
 )
 from imint.api.v1.telemetry import (
     emit_access_log,
@@ -96,12 +97,15 @@ _pending_jobs: set[asyncio.Task] = set()
 _accepting_jobs = False
 _analysis_slot: asyncio.Semaphore | None = None
 _max_pixels: int | None = None
+_max_jobs = 4
+_lclu_service = None
+_lclu_requests: dict[str, str] = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Hold local ownership until all accepted blocking jobs finish."""
-    global _accepting_jobs, _jobs_lock, _analysis_slot, _max_pixels
+    global _accepting_jobs, _jobs_lock, _analysis_slot, _max_pixels, _max_jobs, _lclu_service
     max_pixels = _configured_max_pixels()
     root = _output_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -118,6 +122,14 @@ async def lifespan(app: FastAPI):
         _analysis_slot = asyncio.Semaphore(1)
         _jobs.clear()
         _max_pixels = max_pixels
+        _max_jobs = int(os.environ.get("IMINT_API_MAX_JOBS", "4"))
+        if not 1 <= _max_jobs <= 64:
+            raise RuntimeError("IMINT_API_MAX_JOBS must be between 1 and 64")
+        _lclu_requests.clear()
+        _lclu_service = None
+        if manifest := os.environ.get("IMINT_LCLU_MANIFEST"):
+            from imint.inference.lclu import LcluService
+            _lclu_service = await asyncio.to_thread(LcluService.from_manifest, Path(manifest), root)
         _accepting_jobs = True
         try:
             yield
@@ -136,6 +148,7 @@ async def lifespan(app: FastAPI):
                         # while a blocking worker thread still writes outputs.
                         cancelled = True
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            _lclu_service = None
             if cancelled:
                 raise asyncio.CancelledError
 
@@ -336,6 +349,7 @@ async def submit_analysis(req: AnalyzeRequest) -> AnalyzeResponse:
     if not _accepting_jobs:
         raise HTTPException(status_code=503, detail="API worker not started or shutting down")
     _validate_bbox_budget(req.bbox.model_dump())
+    _check_capacity()
     resp = AnalyzeResponse(
         poll_url="",  # filled in below once we have job_id
     )
@@ -394,6 +408,10 @@ async def get_job(job_id: str) -> JobStatusResponse:
         analyzers=job["analyzers"],
         summary_path=job["summary_path"],
         error=job["error"],
+        kind=job.get("kind", "analysis"),
+        year=job.get("year"),
+        phase=job.get("phase"),
+        result=job.get("result"),
     )
 
 
@@ -506,9 +524,14 @@ async def _run_job_async(job_id: str) -> None:
         # Keep a Future, not a to_thread Task: event-loop teardown cancels
         # every Task, but must not invalidate our thread-completion signal.
         # Preserve to_thread's context propagation for instrumentation.
-        work = asyncio.get_running_loop().run_in_executor(
-            None, copy_context().run, _execute_analysis, job["_request"], job_id,
-        )
+        loop = asyncio.get_running_loop()
+        if job.get("kind") == "lclu":
+            def phase(value):
+                loop.call_soon_threadsafe(job.update, {"phase": value})
+            execute = lambda: _lclu_service.run(job["_grid"], job["year"], phase)
+        else:
+            execute = lambda: _execute_analysis(job["_request"], job_id)
+        work = loop.run_in_executor(None, copy_context().run, execute)
         while not work.done():
             try:
                 await asyncio.shield(work)
@@ -520,26 +543,33 @@ async def _run_job_async(job_id: str) -> None:
 
         job["completed_at"] = datetime.now(timezone.utc)
         job["duration_ms"] = (time.monotonic() - start) * 1000
-        job["success"] = result.success
-        job["error"] = result.error
-        job["summary_path"] = result.summary_path
-        job["analyzers"] = [
-            AnalyzerSummary(
-                name=r.analyzer,
-                status="skipped" if r.skipped else ("success" if r.success else "failed"),
-                output_names=sorted(r.outputs),
-                error=getattr(r, "error", None),
-            ).model_dump()
-            for r in (result.analyzer_results or [])
-        ]
-        job["status"] = JobStatus.SUCCESS if result.success else JobStatus.FAILED
+        if job.get("kind") == "lclu":
+            job.update(success=True, status=JobStatus.SUCCESS, phase="complete", result=result)
+            result["artifacts"] = {name: f"/v1/lclu/jobs/{job_id}/files/{name}" for name in result["files"]}
+        else:
+            job["success"] = result.success
+            job["error"] = result.error
+            job["summary_path"] = result.summary_path
+            job["analyzers"] = [
+                AnalyzerSummary(
+                    name=r.analyzer,
+                    status="skipped" if r.skipped else ("success" if r.success else "failed"),
+                    output_names=sorted(r.outputs),
+                    error=getattr(r, "error", None),
+                ).model_dump()
+                for r in (result.analyzer_results or [])
+            ]
+            job["status"] = JobStatus.SUCCESS if result.success else JobStatus.FAILED
 
     except Exception as e:  # pragma: no cover
         job["status"] = JobStatus.FAILED
         job["completed_at"] = datetime.now(timezone.utc)
         job["duration_ms"] = (time.monotonic() - start) * 1000
         job["success"] = False
-        job["error"] = f"{type(e).__name__}: {e}"
+        job["phase"] = "failed"
+        # Source errors may contain private mount paths or signed remote URLs.
+        job["error"] = ("Årskartan kunde inte skapas. Operatören kan kontrollera serverloggen."
+                        if job.get("kind") == "lclu" else f"{type(e).__name__}: {e}")
         logger.exception("job %s crashed", job_id)
 
     await _put_job(job_id, job)
@@ -576,3 +606,106 @@ async def unhandled(request: Request, exc: Exception) -> JSONResponse:
             "path": str(request.url.path),
         },
     )
+
+
+# Annual maps share this service's worker, queue and shutdown ownership.
+def _check_capacity() -> None:
+    if sum(j['status'] in (JobStatus.QUEUED, JobStatus.RUNNING) for j in _jobs.values()) >= _max_jobs:
+        raise HTTPException(status_code=429, detail='Job queue is full; retry later',
+                            headers={'Retry-After': '5'})
+
+
+@app.get('/v1/lclu', tags=['lclu'])
+async def lclu_info():
+    from imint.inference.lclu import HISTORICAL_NOTE, legend, YEARS
+    return {'ready': _accepting_jobs and _lclu_service is not None,
+            'model': 'TESSERA R4', 'candidate_years': YEARS, 'legend': legend(),
+            'historical_note': HISTORICAL_NOTE,
+            'locations': _lclu_service.sources.locations() if _lclu_service else [],
+            'areas': _lclu_service.sources.areas() if _lclu_service else [],
+            'message': ('Välj en plats för att kontrollera årstillgång.' if _lclu_service else
+                        'Tjänsten saknar verifierat R4-checkpoint och indatakatalog. Ingen klassificering körs.')}
+
+
+@app.get('/v1/lclu/availability', tags=['lclu'])
+async def lclu_availability(lon: float, lat: float):
+    from imint.inference.lclu import Grid
+    try:
+        grid = Grid.from_lonlat(lon, lat)
+    except ValueError:
+        raise HTTPException(status_code=422, detail='Välj en plats inom Sveriges datatäckning.') from None
+    years = _lclu_service.sources.years(grid) if _lclu_service else []
+    return {'geometry': grid.describe(), 'years': years,
+            'message': '' if years else 'Verifierade årsdata saknas för denna plats.'}
+
+
+@app.post('/v1/lclu', response_model=AnalyzeResponse, status_code=202, tags=['lclu'])
+async def submit_lclu(req: LcluRequest):
+    from imint.inference.lclu import Grid, InputUnavailable
+    from rasterio.warp import transform_bounds
+    if not _accepting_jobs or _lclu_service is None:
+        raise HTTPException(status_code=503, detail='Annual LCLU inputs/model are not configured')
+    if _max_pixels is None or _max_pixels < 512 * 512:
+        raise HTTPException(status_code=422, detail='Annual preparation requires a 512×512 pixel budget')
+    grid = Grid.from_lonlat(req.lon, req.lat)
+    try:
+        key = _lclu_service.key(grid, req.year)
+    except InputUnavailable as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    # No await between deduplication, admission and insertion: atomic on this
+    # event loop even for bursts of simultaneous identical submissions.
+    previous = _jobs.get(_lclu_requests.get(key, ''))
+    if previous and previous['status'] != JobStatus.FAILED:
+        return AnalyzeResponse(job_id=previous['job_id'], status=previous['status'],
+                               submitted_at=previous['submitted_at'],
+                               poll_url=f"/v1/jobs/{previous['job_id']}")
+    _check_capacity()
+    response = AnalyzeResponse(poll_url='')
+    response.poll_url = f'/v1/jobs/{response.job_id}'
+    b = grid.bounds(504)
+    bbox = dict(zip(('west', 'south', 'east', 'north'), transform_bounds(
+        'EPSG:3006', 'EPSG:4326', b['west'], b['south'], b['east'], b['north'])))
+    _jobs[response.job_id] = {
+        'job_id': response.job_id, 'date': None, 'bbox': bbox, 'kind': 'lclu',
+        'year': req.year, 'status': JobStatus.QUEUED, 'phase': 'queued',
+        'submitted_at': response.submitted_at, 'started_at': None, 'completed_at': None,
+        'duration_ms': None, 'success': None, 'analyzers': [], 'summary_path': None,
+        'error': None, 'result': None, '_request': req.model_dump(), '_grid': grid,
+    }
+    _lclu_requests[key] = response.job_id
+    task = asyncio.create_task(_run_job_serial(response.job_id))
+    _pending_jobs.add(task)
+    task.add_done_callback(lambda done: _finish_job_task(response.job_id, done))
+    return response
+
+
+@app.get('/v1/lclu/jobs/{job_id}/files/{name}', tags=['lclu'])
+async def lclu_file(job_id: str, name: str):
+    job = await _get_job(job_id)
+    allowed = {'classification.tif': 'image/tiff', 'overlay.png': 'image/png',
+               'legend.json': 'application/json', 'provenance.json': 'application/json'}
+    if (not job or job.get('kind') != 'lclu' or job['status'] != JobStatus.SUCCESS
+            or name not in allowed or _lclu_service is None):
+        raise HTTPException(status_code=404, detail='Completed artifact not found')
+    result = await asyncio.to_thread(_lclu_service.cached, job['result']['cache_key'])
+    if result is None:
+        raise HTTPException(status_code=404, detail='Artifact is no longer available')
+    return FileResponse(_lclu_service.output_root / result['cache_key'] / name,
+                        media_type=allowed[name], filename=name)
+
+
+_WEB_ROOT = Path(__file__).resolve().parents[3] / 'docs'
+
+
+@app.get('/lclu', include_in_schema=False)
+async def lclu_page():
+    return FileResponse(_WEB_ROOT / 'lclu.html')
+
+
+@app.get('/lclu-assets/{name}', include_in_schema=False)
+async def lclu_asset(name: str):
+    files = {'lclu.js': 'js/lclu.js', 'lclu.css': 'css/lclu.css', 'styles.css': 'css/styles.css',
+             'leaflet.js': 'js/vendor/leaflet.min.js', 'leaflet.css': 'css/leaflet.css'}
+    if name not in files:
+        raise HTTPException(status_code=404)
+    return FileResponse(_WEB_ROOT / files[name])

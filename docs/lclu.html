@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Årskarta · IMINT / Digital Earth Sweden</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/lclu-assets/styles.css?v=2">
+  <link rel="stylesheet" href="/lclu-assets/leaflet.css">
+  <link rel="stylesheet" href="/lclu-assets/lclu.css">
+  <script defer src="/lclu-assets/leaflet.js"></script>
+  <script defer src="/lclu-assets/lclu.js"></script>
+</head>
+<body>
+<header class="header">
+  <div class="header-left"><div><h1><span>IMINT</span> / Årskarta</h1><p>Digital Earth Sweden</p></div></div>
+  <span class="theme-tab active">Marktäcke · TESSERA R4</span>
+</header>
+<main>
+  <section class="intro"><p class="eyebrow" id="area-title">SVERIGE / HISTORISKA ÅR</p><h2>En plats. Ett år. En karta.</h2>
+    <p>Klicka i kartan och välj ett tillgängligt år. Varje karta täcker 5,04 × 5,04 km i 10 meters upplösning.</p>
+  </section>
+  <div class="workspace">
+    <section class="map-panel" aria-label="Geografisk karta">
+      <div id="map" aria-label="Klicka för att välja plats" tabindex="0"></div>
+      <p class="map-caption" id="map-caption">Konturen visar den färdiga kartans utbredning. Punkter visar förberedda platser.</p>
+    </section>
+    <aside class="controls">
+      <p class="eyebrow">DIN ÅRSKARTA</p>
+      <h3 id="location-title">Välj en plats</h3>
+      <form id="location-form" class="coordinate-form">
+        <label>Latitud<input id="lat" type="number" step="any" min="55" max="70" value="59.86" required></label>
+        <label>Longitud<input id="lon" type="number" step="any" min="10" max="25" value="17.64" required></label>
+        <button class="secondary" type="submit">Visa plats</button>
+      </form>
+      <label class="year-label" for="year">Tillgängligt år</label>
+      <select id="year" disabled><option value="">Välj plats först</option></select>
+      <button id="create" disabled>Skapa årskarta <span aria-hidden="true">↗</span></button>
+      <div id="status" role="status" aria-live="polite">Kontrollerar tjänsten …</div>
+      <progress id="progress" aria-label="Bearbetning" hidden></progress>
+      <section id="result" hidden>
+        <h3 id="result-title">Årskarta klar</h3>
+        <p id="coverage"></p>
+        <p id="timing"></p>
+        <label for="opacity">Kartlagrets synlighet <output id="opacity-value">80 %</output></label>
+        <input id="opacity" type="range" min="0" max="100" value="80">
+        <div class="downloads"><a id="download-tif" download>Hämta GeoTIFF ↓</a><a id="download-provenance" download>Datakällor och proveniens ↓</a></div>
+      </section>
+      <p class="operator-note">Lokal operatörsprototyp · modellresultat för granskning.</p>
+    </aside>
+  </div>
+  <section class="testimonial"><h3>Vad betyder året?</h3><p id="historical-note"></p>
+    <p>Genomskinliga pixlar saknar användbara indata. Svart är modellklassen bakgrund (0). Modellens klassning är en skattning.</p>
+  </section>
+  <section class="legend-section"><h3>Teckenförklaring</h3><div id="legend" class="legend"></div></section>
+</main>
+<footer class="section-byline">IMINT · Digital Earth Sweden · 504 × 504 pixlar · SWEREF 99 TM</footer>
+</body></html>

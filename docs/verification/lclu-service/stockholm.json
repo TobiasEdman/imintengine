@@ -1,0 +1,139 @@
+{
+  "date": "2026-10-29",
+  "municipality": "Stockholm (0180)",
+  "year": 2024,
+  "model": "TESSERA R4",
+  "source_archive_sha256": "2730f76fd6be469510382cfac7d66558671aaf97a3b81f761e222435070840d7",
+  "source_manifest_sha256": "2f91a7f6b2f4fdcf228fd682dc1c7c4f27e80c3177595219b3ad912e169a7f31",
+  "execution_mode": "source-recipe",
+  "base_image": "python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f",
+  "resources": {
+    "cpu": 4,
+    "memory_gib": 8,
+    "cache_gib": 20,
+    "max_hours": 24
+  },
+  "deadline_utc": "2026-10-30T12:45:33+00:00",
+  "staging": {
+    "year": 2024,
+    "blocks": 28,
+    "original_bytes": 2589836344,
+    "cog_bytes": 1958791490,
+    "seconds": 460.90047235414386,
+    "scope": {
+      "sha256": "51d968701df6f1d2f71f973c90ec7e305598e865588c33bf09255adb089c8118",
+      "size": 98845
+    },
+    "sources": {
+      "sha256": "bd267a87f66f44fd7611fb95329a856c03ccd25e20a36dfa0be74033335cd3bd",
+      "size": 101707
+    },
+    "qualification": {
+      "sha256": "d6b82ebab6bca0ce65cc01341b91095e1c61161143ab3052e56b754d1ed6207b",
+      "size": 7571
+    }
+  },
+  "embedding_parity": {
+    "test": "real_Stockholm_native_COG_seam",
+    "values": 33554432,
+    "valid_pixels": 262144,
+    "exact": true,
+    "native_crs": [
+      "EPSG:32633",
+      "EPSG:32634"
+    ]
+  },
+  "canonical_parity": {
+    "test": "real_R4_canonical_parity",
+    "valid_pixels": 254016,
+    "exact": true,
+    "first_request_s": 18.09706863714382,
+    "cached_request_s": 1.0362629112787545
+  },
+  "service_timing_ms": {
+    "preparation": 12857.995012775064,
+    "inference": 4634.228909388185,
+    "export": 582.6869355514646
+  },
+  "http": {
+    "point": {
+      "lon": 18.0686,
+      "lat": 59.3293,
+      "year": 2024
+    },
+    "first_s": 18.253420624998398,
+    "repeat_s": 0.15420783299487084,
+    "outside_area_rejected": true,
+    "unqualified_2025_rejected": true,
+    "files": {
+      "classification.tif": {
+        "size": 256656,
+        "sha256": "23445353b93c6e654357992368eb3ec068eace6e530d2ed3d1d14455ba10089c"
+      },
+      "overlay.png": {
+        "size": 95011,
+        "sha256": "3833f69926ede07eb84216a7342e02ca2f76a264ff2e28410b3341c8f7bfd246"
+      },
+      "legend.json": {
+        "size": 2072,
+        "sha256": "e5b4730e1852824c8d714941f1c302ac5599af1c7a83ca3c01c070d62035b2f0"
+      },
+      "provenance.json": {
+        "size": 19110,
+        "sha256": "9f5ec6e23ec1b3b73dbb0f7506bf53051cf409b32fb0a6c99eb30341d349ebde"
+      }
+    }
+  },
+  "export": {
+    "crs": "EPSG:3006",
+    "shape": [
+      504,
+      504
+    ],
+    "transform": [
+      10.0,
+      0.0,
+      672050.0,
+      0.0,
+      -10.0,
+      6583260.0
+    ],
+    "valid_pixels": 252916,
+    "classes": {
+      "1": 4572,
+      "2": 46,
+      "3": 26391,
+      "4": 95,
+      "5": 159,
+      "7": 80,
+      "9": 133502,
+      "10": 39295,
+      "15": 1007,
+      "16": 1307,
+      "24": 6536,
+      "25": 14233,
+      "26": 24313,
+      "27": 1380
+    }
+  },
+  "browser": {
+    "point": {
+      "lat": 59.37,
+      "lon": 17.81
+    },
+    "year": 2024,
+    "first_display_s": 19.1,
+    "repeat_display_s": 0.5,
+    "valid_pixels": 254016,
+    "visible_checks": [
+      "Stockholm municipality outline",
+      "qualified year2024",
+      "georeferenced result overlay",
+      "status: \u00c5rskartan \u00e4r klar.",
+      "opacity changed80% to45%",
+      "GeoTIFF and provenance links"
+    ]
+  },
+  "accuracy_validation": false,
+  "model_weights_exported": false
+}

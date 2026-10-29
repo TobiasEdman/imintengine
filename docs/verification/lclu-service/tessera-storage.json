@@ -1,0 +1,361 @@
+{
+  "date": "2026-10-29",
+  "units": "Decimal: 1 TB = 10^12 bytes; 1 GB = 10^9 bytes; 1 MB = 10^6 bytes.",
+  "scope": "Sweden, native v1/vultr TESSERA embedding blocks, 128 bands at approximately 10 m; complete registry rows, one stored copy.",
+  "inventory": {
+    "dataset": "v1/vultr",
+    "years": {
+      "2018": {
+        "blocks": 8335,
+        "pixels_full_blocks": 5014062414,
+        "block_grid_area_km2": 501406.2414,
+        "source_int8_npy_plus_scales_bytes": 661858372408,
+        "float32_uncompressed_payload_bytes": 2567199955968,
+        "float16_payload_bytes": 1283599977984,
+        "classification_uint8_payload_bytes": 5014062414
+      },
+      "2019": {
+        "blocks": 8337,
+        "pixels_full_blocks": 5015468569,
+        "block_grid_area_km2": 501546.8569,
+        "source_int8_npy_plus_scales_bytes": 662043985380,
+        "float32_uncompressed_payload_bytes": 2567919907328,
+        "float16_payload_bytes": 1283959953664,
+        "classification_uint8_payload_bytes": 5015468569
+      },
+      "2020": {
+        "blocks": 8336,
+        "pixels_full_blocks": 5014777765,
+        "block_grid_area_km2": 501477.7765,
+        "source_int8_npy_plus_scales_bytes": 661952798996,
+        "float32_uncompressed_payload_bytes": 2567566215680,
+        "float16_payload_bytes": 1283783107840,
+        "classification_uint8_payload_bytes": 5014777765
+      },
+      "2021": {
+        "blocks": 8335,
+        "pixels_full_blocks": 5014050725,
+        "block_grid_area_km2": 501405.0725,
+        "source_int8_npy_plus_scales_bytes": 661856829460,
+        "float32_uncompressed_payload_bytes": 2567193971200,
+        "float16_payload_bytes": 1283596985600,
+        "classification_uint8_payload_bytes": 5014050725
+      },
+      "2022": {
+        "blocks": 8337,
+        "pixels_full_blocks": 5015502533,
+        "block_grid_area_km2": 501550.2533,
+        "source_int8_npy_plus_scales_bytes": 662048468628,
+        "float32_uncompressed_payload_bytes": 2567937296896,
+        "float16_payload_bytes": 1283968648448,
+        "classification_uint8_payload_bytes": 5015502533
+      },
+      "2023": {
+        "blocks": 8335,
+        "pixels_full_blocks": 5014050725,
+        "block_grid_area_km2": 501405.0725,
+        "source_int8_npy_plus_scales_bytes": 661856829460,
+        "float32_uncompressed_payload_bytes": 2567193971200,
+        "float16_payload_bytes": 1283596985600,
+        "classification_uint8_payload_bytes": 5014050725
+      },
+      "2024": {
+        "blocks": 8349,
+        "pixels_full_blocks": 5023504617,
+        "block_grid_area_km2": 502350.4617,
+        "source_int8_npy_plus_scales_bytes": 663104746788,
+        "float32_uncompressed_payload_bytes": 2572034363904,
+        "float16_payload_bytes": 1286017181952,
+        "classification_uint8_payload_bytes": 5023504617
+      }
+    },
+    "totals": {
+      "blocks": 58364,
+      "pixels_full_blocks": 35111417348,
+      "block_grid_area_km2": 3511141.7347999997,
+      "source_int8_npy_plus_scales_bytes": 4634722031120,
+      "float32_uncompressed_payload_bytes": 17977045682176,
+      "float16_payload_bytes": 8988522841088,
+      "classification_uint8_payload_bytes": 35111417348
+    },
+    "boundary": {
+      "source": "Repository Lantmateriet sve5milj land5y KKOD 901 coarse mask",
+      "sha256": "a4c82c9083000a78b8a37426c16ddfc35c078dc77988217c24723267650f086f",
+      "area_km2": 438917.76569148776,
+      "features": 56,
+      "bounds_4326": [
+        11.106923007759493,
+        55.32659897844063,
+        24.177168766879678,
+        69.05423458948513
+      ]
+    },
+    "selection": "Full 0.1-degree blocks whose footprints intersect the coarse Swedish polygon; includes foreign/coastal pixels and omits sub-resolution islands not represented by the coarse boundary. No national raster download.",
+    "payload_assumption": "NPY header 128 bytes verified on sampled native blocks; all complete selected grid/scales sizes agree with int8 128 bands plus float32 per-pixel scale.",
+    "incomplete_registry_rows_excluded": [
+      {
+        "version": "1.0",
+        "variant": "vultr",
+        "year": 2024,
+        "lon": 13.35,
+        "lat": 58.15,
+        "grid_size": 88940672,
+        "scales_size": 0
+      }
+    ],
+    "samples_2024": {
+      "uppsala": {
+        "version": "1.0",
+        "variant": "vultr",
+        "year": 2024,
+        "lon": 17.65,
+        "lat": 59.85,
+        "grid_size": 87894528,
+        "scales_size": 2746828
+      },
+      "central": {
+        "version": "1.0",
+        "variant": "vultr",
+        "year": 2024,
+        "lon": 14.65,
+        "lat": 62.85,
+        "grid_size": 73632768,
+        "scales_size": 2301148
+      },
+      "north": {
+        "version": "1.0",
+        "variant": "vultr",
+        "year": 2024,
+        "lon": 20.25,
+        "lat": 67.85,
+        "grid_size": 62218368,
+        "scales_size": 1944448
+      }
+    }
+  },
+  "source_receipts": {
+    "manifest.parquet": {
+      "url": "https://data.source.coop/tessera/tessera/npy/v1/manifest.parquet",
+      "bytes": 212614861,
+      "sha256": "b7d0717c20f3955b4832ee006aa6d835f18b3a376083f7616205add134246c5a",
+      "download_s": 25.44969537499128
+    },
+    "grid_17.65_59.85.npy": {
+      "url": "https://data.source.coop/tessera/tessera/npy/v1/2024/grid_17.65_59.85/grid_17.65_59.85.npy",
+      "bytes": 87894528,
+      "sha256": "9ed08b6192574830c963d027c28a85a2c38d37d25bae854a78d0616b4bd920aa",
+      "download_s": 18.81625387497479
+    },
+    "grid_17.65_59.85_scales.npy": {
+      "url": "https://data.source.coop/tessera/tessera/npy/v1/2024/grid_17.65_59.85/grid_17.65_59.85_scales.npy",
+      "bytes": 2746828,
+      "sha256": "ac353f78374a92f50df5f2e602be265e595c0c32cf29aa16aa2235cb91728fde",
+      "download_s": 2.5711602499941364
+    },
+    "grid_17.65_59.85.tiff": {
+      "url": "https://data.source.coop/tessera/tessera/landmasks/v1/grid_17.65_59.85.tiff",
+      "bytes": 13075,
+      "sha256": "1321446cddf2e4bdfc75a0bb797ed56dede8ce6bafac9bd5cf49955ac0060553",
+      "download_s": 1.2359454580000602
+    }
+  },
+  "float32_measurements": {
+    "sample": {
+      "year": 2024,
+      "lon": 17.65,
+      "lat": 59.85,
+      "shape_hwc": [
+        1135,
+        605,
+        128
+      ],
+      "dtype": "float32",
+      "raw_float_bytes": 351577600,
+      "source_npy_bytes": 90641356,
+      "zero_vectors": 0
+    },
+    "runtime": {
+      "rasterio": "1.4.4",
+      "gdal": "3.10.3"
+    },
+    "measurements": {
+      "geotessera_default_lzw": {
+        "bytes": 314890878,
+        "ratio_to_raw_float32": 0.8956511393217316,
+        "seconds": 7.8568052090122364,
+        "overviews": [],
+        "image_structure": {
+          "COMPRESSION": "LZW",
+          "INTERLEAVE": "PIXEL"
+        },
+        "options": {
+          "tiled": 256,
+          "compress": "LZW",
+          "predictor": 1
+        },
+        "all_128_bands_bit_exact": true,
+        "sha256": "30d2011a63ee8df3daa93ef11ff94e775b24737a9f463d0570664355c1ce7a8c"
+      },
+      "cog_zstd_no_overviews": {
+        "bytes": 296826132,
+        "ratio_to_raw_float32": 0.8442691798339826,
+        "seconds": 7.202904167002998,
+        "overviews": [],
+        "image_structure": {
+          "LAYOUT": "COG",
+          "COMPRESSION": "ZSTD",
+          "INTERLEAVE": "PIXEL",
+          "PREDICTOR": "3"
+        },
+        "options": {
+          "BLOCKSIZE": 256,
+          "COMPRESS": "ZSTD",
+          "LEVEL": 9,
+          "PREDICTOR": "FLOATING_POINT",
+          "OVERVIEWS": "NONE",
+          "RESAMPLING": "AVERAGE",
+          "NUM_THREADS": "2",
+          "BIGTIFF": "IF_SAFER"
+        },
+        "all_128_bands_bit_exact": true,
+        "sha256": "7141792bd8c0fc51984155422244b5e42e76b03e143d963939220dec1d097bce"
+      }
+    }
+  },
+  "compact_measurements": {
+    "sample": "v1/vultr 2024 17.65 59.85",
+    "measurements": {
+      "quantized": {
+        "bytes": 71465268,
+        "bit_exact": true,
+        "dtype": "int8",
+        "bands": 128,
+        "seconds": 7.7362321660039015,
+        "image_structure": {
+          "LAYOUT": "COG",
+          "COMPRESSION": "ZSTD",
+          "INTERLEAVE": "PIXEL",
+          "PREDICTOR": "2"
+        }
+      },
+      "scales": {
+        "bytes": 2068961,
+        "bit_exact": true,
+        "dtype": "float32",
+        "bands": 1,
+        "seconds": 0.30430129199521616,
+        "image_structure": {
+          "LAYOUT": "COG",
+          "COMPRESSION": "ZSTD",
+          "INTERLEAVE": "BAND",
+          "PREDICTOR": "3"
+        }
+      }
+    },
+    "reconstructed_float32_bit_exact": true,
+    "total_bytes": 73534229,
+    "ratio_to_raw_float32": 0.20915504571394763
+  },
+  "pyramid_measurement": {
+    "bytes": 393233845,
+    "ratio_to_raw_float32": 1.118483785656424,
+    "seconds": 13.018056791974232,
+    "options": {
+      "BLOCKSIZE": 256,
+      "COMPRESS": "ZSTD",
+      "LEVEL": 9,
+      "PREDICTOR": "FLOATING_POINT",
+      "OVERVIEWS": "AUTO",
+      "RESAMPLING": "AVERAGE",
+      "NUM_THREADS": "2",
+      "BIGTIFF": "IF_SAFER"
+    },
+    "overviews": [
+      2,
+      4,
+      8
+    ],
+    "image_structure": {
+      "LAYOUT": "COG",
+      "COMPRESSION": "ZSTD",
+      "INTERLEAVE": "PIXEL",
+      "PREDICTOR": "3"
+    },
+    "all_128_base_bands_bit_exact": true,
+    "sha256": "b9ed414d323dd28b3293aed95a5cca7ba91961abf84ee136a6522e3ceb25584f"
+  },
+  "projection_2024": {
+    "float32_uncompressed": {
+      "bytes_estimated": 2572034363904,
+      "TB": 2.572034363904
+    },
+    "float32_tiled_lzw": {
+      "bytes_estimated": 2303645508405,
+      "TB": 2.3036455084052627
+    },
+    "float32_cog_zstd_no_overviews": {
+      "bytes_estimated": 2171489342918,
+      "TB": 2.1714893429180493
+    },
+    "int8_cog_plus_float32_scale_cog_no_overviews": {
+      "bytes_estimated": 537953964960,
+      "TB": 0.5379539649601853
+    },
+    "float32_cog_zstd_with_overviews": {
+      "bytes_estimated": 2876778732178,
+      "TB": 2.8767787321777583
+    },
+    "source_npy_int8_plus_scales": {
+      "bytes_inventory": 663104746788,
+      "TB": 0.663104746788
+    },
+    "classification_uint8_uncompressed": {
+      "bytes_inventory": 5023504617,
+      "GB": 5.023504617
+    }
+  },
+  "projection_2018_through_2024": {
+    "float32_uncompressed": {
+      "bytes_estimated": 17977045682176,
+      "TB": 17.977045682176
+    },
+    "float32_tiled_lzw": {
+      "bytes_estimated": 16101161446880,
+      "TB": 16.10116144687975
+    },
+    "float32_cog_zstd_no_overviews": {
+      "bytes_estimated": 15177465613929,
+      "TB": 15.177465613928769
+    },
+    "int8_cog_plus_float32_scale_cog_no_overviews": {
+      "bytes_estimated": 3759989811457,
+      "TB": 3.7599898114572463
+    },
+    "float32_cog_zstd_with_overviews": {
+      "bytes_estimated": 20107034109519,
+      "TB": 20.107034109518683
+    },
+    "source_npy_int8_plus_scales": {
+      "bytes_inventory": 4634722031120,
+      "TB": 4.63472203112
+    },
+    "classification_uint8_uncompressed": {
+      "bytes_inventory": 35111417348,
+      "GB": 35.111417348
+    }
+  },
+  "assumptions_and_limits": [
+    "Compressed national capacities extrapolate one mixed-landscape Uppsala 2024 block; they are estimates, not a full-country conversion.",
+    "Full intersecting blocks include coastal/foreign pixels. The coarse Swedish land polygon omits small islands. One incomplete 2024 row is excluded and recorded.",
+    "Base resolution is bit-exact in all measured formats. The compact representation needs both COGs and float32(int8_values) * per_pixel_scale; no additional quantization is introduced.",
+    "No-overview estimates exclude pyramids. Average embedding overviews are a storage measurement only and are not a validated substitute for full-resolution model input.",
+    "Capacity excludes auxiliary source rasters, backups, replication, prepared inference caches and conversion scratch. Retaining source NPY adds its own listed capacity.",
+    "Float32 capacity clipped exactly to the coarse Swedish land area would be 2.2472589603404173 TB/year before compression; full source blocks give approximately 2.57 TB/year."
+  ],
+  "references": [
+    "https://geotessera.readthedocs.io/en/latest/architecture.html",
+    "https://gdal.org/en/stable/drivers/raster/cog.html",
+    "https://github.com/ucam-eo/geotessera"
+  ],
+  "verification": "All 128 base-resolution bands reopened and compared bit-exact; CRS, transform and shape checked. National pixel/byte accounting and seven-year sums asserted by summarize.py."
+}

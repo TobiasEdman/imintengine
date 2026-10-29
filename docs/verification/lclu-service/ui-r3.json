@@ -1,0 +1,23 @@
+{
+  "changed_source_files": [
+    "docs/js/lclu.js",
+    "docs/css/lclu.css"
+  ],
+  "legend_color": "#1a4338",
+  "legend_background": "#ffffff",
+  "legend_font_px": 14,
+  "legend_items_verified": 29,
+  "contrast_ratio": 11.030054259972832,
+  "zoom_before_selection": 15,
+  "zoom_after_selection": 15,
+  "qualified_year_after_selection": 2024,
+  "syntax_check": "node --check docs/js/lclu.js passed",
+  "independent_review": "No findings",
+  "archive_sha256": "c543acade1f105436773b5f6579f4a4ab74b66973bac9be7e00b3aab3911f909",
+  "live_url": "http://127.0.0.1:8788/lclu",
+  "live_legend_color": "rgb(26, 67, 56)",
+  "live_zoom": 15,
+  "live_r4_disk_cache_reused": true,
+  "live_export_sha256": "23445353b93c6e654357992368eb3ec068eace6e530d2ed3d1d14455ba10089c",
+  "live_export_matches_r2": true
+}
