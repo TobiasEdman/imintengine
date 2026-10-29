@@ -1,0 +1,9 @@
+{
+  "id": "0128",
+  "subject": "Expand municipality demo to all TESSERA years",
+  "description": "User requested parallel IM024 demo and IM023 class investigation. Own demo configuration, shared deduplicated staging, municipality/year catalogue, source coverage preflight, tests and deployment proposal. Carry forward own task0126 uncommitted prototype changes without modifying its running immutable bundle. Preserve live demo resources and expiry; obtain approval for major expanded storage/deployment. Track0127 agent owns class analysis in separate worktree. Implementation commits require user approval; metadata commits follow repository protocol.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/codex/demo-multiyear-0128",
+  "created_at": "2026-10-29T16:18:27.079238+00:00"
+}
