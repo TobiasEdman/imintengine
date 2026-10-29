@@ -2,9 +2,12 @@
   "id": "0124",
   "subject": "Build annual TESSERA R4 LCLU map service",
   "description": "Local trusted-operator prototype in this exclusive worktree. Own imint/api/v1 annual lifecycle integration, imint/inference annual preparation/export modules, map UI, focused tests and service documentation. Reuse canonical checkpoint/input/schema/export contracts. Exact year, native 504 output, bounded admission and persistent identity-bound cache. No training, private results publication, bulk downloads, cluster mutations or public deployment. Implementation commit and PR require user approval.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/codex/lclu-annual-service",
   "created_at": "2026-10-29T07:58:17.825824+00:00",
-  "updated_at": "2026-10-29T07:58:17.825824+00:00"
+  "updated_at": "2026-10-29T07:58:23Z",
+  "claimed_by": "te-codex-lclu-01a186a8",
+  "runtime": "codex",
+  "claimed_at": "2026-10-29T07:58:23Z"
 }
