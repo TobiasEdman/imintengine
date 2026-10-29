@@ -2,9 +2,12 @@
   "id": "0122",
   "subject": "Audit NFI plot reuse and prepare TESSERA R5 pilot",
   "description": "Continue the approved plan after PR #120: audit frozen NFI teacher/holdout cross-year reuse with geographic checks, then prepare a TESSERA v2-only R5 pilot protocol, data gates and job configuration for review. Scope: new audit/pilot scripts and tests, experiment protocol and generated pilot manifests. Keep real audit records private; GPU execution requires a separate cost decision.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/codex/r5-tessera-pilot",
   "created_at": "2026-10-29T06:55:00.833077Z",
-  "updated_at": "2026-10-29T06:55:00.833077Z"
+  "updated_at": "2026-10-29T06:55:07Z",
+  "claimed_by": "te-codex-01a1836d",
+  "runtime": "codex",
+  "claimed_at": "2026-10-29T06:55:07Z"
 }
