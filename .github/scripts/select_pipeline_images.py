@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Select the pipeline images build-pipeline-images.yml builds for one event.
 
-Pull requests build only images whose ``docker/<image>/`` directory changed,
-or every image when the workflow or this selector changed. Every other event
-keeps the existing choice: the requested image, ``ladder-crop-distill`` for a
+Pull requests and path-filtered pushes select changed image directories or
+the explicit R5 runtime source paths; build-logic changes select every image.
+Manual dispatch keeps the existing choice: the requested image, ``ladder-crop-distill`` for a
 feature-branch dispatch without input, otherwise all images.
 
 Prints two ``key=value`` lines for ``$GITHUB_OUTPUT``: ``matrix`` (JSON with
@@ -27,16 +27,22 @@ IMAGES = {
                             "platforms": "linux/amd64"},
 }
 # A change to how images are selected or built affects every image.
+R5_SOURCE_PATHS = {
+    "scripts/r5_tessera_pilot.py", "scripts/run_r5_tessera.py",
+    "config/r5_tessera_pilot.json", "imint/training/unified_dataset.py",
+}
+
 BUILD_LOGIC = (".github/workflows/build-pipeline-images.yml",
                ".github/scripts/select_pipeline_images.py")
 
 
 def select(event: str, ref: str, requested: str, changed: list[str]) -> list[str]:
-    if event == "pull_request":
+    if event == "pull_request" or (event == "push" and changed):
         if any(path in BUILD_LOGIC for path in changed):
             return list(IMAGES)
         return [name for name in IMAGES
-                if any(path.startswith(f"docker/{name}/") for path in changed)]
+                if any(path.startswith(f"docker/{name}/") for path in changed)
+                or (name == "ladder-crop-distill" and any(path in R5_SOURCE_PATHS for path in changed))]
     if not requested and event == "workflow_dispatch" and ref != "refs/heads/main":
         requested = "ladder-crop-distill"
     if requested in ("", "all"):

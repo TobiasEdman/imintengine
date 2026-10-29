@@ -117,3 +117,47 @@ def test_workflow_detects_both_sides_of_real_rename(tmp_path, destination, expec
     assert "docker/cloud-models/run_cloud_models.py" in paths
     assert destination in paths
     assert _select(tmp_path, "pull_request", changed=paths) == expected
+
+
+def test_workflow_push_uses_entire_multi_commit_range(tmp_path):
+    import os
+    import shutil
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=repo, check=True,
+                              capture_output=True, text=True).stdout.strip()
+    git("init")
+    git("config", "user.name", "Test")
+    git("config", "user.email", "test@example.invalid")
+    target = repo / ".github/scripts/select_pipeline_images.py"
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(SCRIPT, target)
+    git("add", ".")
+    git("commit", "-m", "Base")
+    before = git("rev-parse", "HEAD")
+    pilot = repo / "scripts/run_r5_tessera.py"
+    pilot.parent.mkdir()
+    pilot.write_text("# synthetic source change\n")
+    git("add", ".")
+    git("commit", "-m", "Pilot change")
+    (repo / "README.md").write_text("Documentation only tip\n")
+    git("add", ".")
+    git("commit", "-m", "Docs")
+    after = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    step = next(s for s in workflow["jobs"]["select_images"]["steps"] if s.get("id") == "select")
+    assert step["env"]["PUSH_BEFORE"] == "${{ github.event.before }}"
+    assert step["env"]["PUSH_AFTER"] == "${{ github.event.after }}"
+    output = tmp_path / "github-output"
+    env = {**os.environ, "EVENT_NAME": "push", "REF_NAME": "refs/heads/main",
+           "REQUESTED_IMAGE": "", "PUSH_BEFORE": before, "PUSH_AFTER": after,
+           "RUNNER_TEMP": str(tmp_path), "GITHUB_OUTPUT": str(output)}
+    subprocess.run(["bash", "-c", step["run"]], cwd=repo, env=env, check=True,
+                   capture_output=True, text=True)
+    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    names = [entry["image"] for entry in json.loads(values["matrix"])["include"]]
+    assert names == ["ladder-crop-distill"]
+    assert set((tmp_path / "changed-files.txt").read_text().splitlines()) == {
+        "scripts/run_r5_tessera.py", "README.md"}
