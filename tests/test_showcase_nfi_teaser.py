@@ -144,6 +144,36 @@ def test_a_tile_missing_a_background_layer_is_refused_before_writing(tmp_path: P
     assert not (tmp_path / "out").exists()
 
 
+@pytest.mark.parametrize("layer", ["dem", "tessera", "labels"])
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_undersized_layers_are_refused_before_any_output_changes(
+        tmp_path: Path, layer: str, existing_output: bool) -> None:
+    args = _tile(tmp_path)
+    source_flag = "--nmd2023" if layer == "labels" else "--tile-npz"
+    source = Path(args[args.index(source_flag) + 1])
+    with np.load(source, allow_pickle=False) as z:
+        arrays = {key: z[key] for key in z.files}
+    keys = ("label", "parcel_area_ha", "harvest_mask") if layer == "labels" else (layer,)
+    for key in keys:
+        arrays[key] = arrays[key][..., :WINDOW // 2, :WINDOW // 2]
+    np.savez(source, **arrays)
+    out = tmp_path / "out"
+    existing = {name: f"previous {name}".encode()
+                for name in ("rgb.png", "dem.png", "MANIFEST.json")}
+    if existing_output:
+        out.mkdir()
+        for name, content in existing.items():
+            (out / name).write_bytes(content)
+
+    result = _run(*args)
+
+    assert result.returncode != 0 and "input smaller than crop" in result.stderr
+    if existing_output:
+        assert {p.name: p.read_bytes() for p in out.iterdir()} == existing
+    else:
+        assert not out.exists()
+
+
 def test_an_nmd_code_without_a_display_mapping_is_refused_before_writing(tmp_path: Path) -> None:
     result = _run(*_tile(tmp_path, nmd_codes=(111, 999)))
     assert result.returncode != 0 and "without a display mapping: [999]" in result.stderr

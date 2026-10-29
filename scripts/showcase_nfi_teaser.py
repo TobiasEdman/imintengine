@@ -96,6 +96,8 @@ def git_state(root: Path) -> tuple[str, bool]:
 def centre_crop(array: np.ndarray, side: int, *, channels_first: bool = False) -> np.ndarray:
     """Centre-crop the spatial axes to ``side``: (H, W[, C]), or (C, H, W) if channels_first."""
     height, width = array.shape[-2:] if channels_first else array.shape[:2]
+    if height < side or width < side:
+        raise ValueError(f"cannot centre-crop {(height, width)} to {side}: input smaller than crop")
     if height != width or (width - side) % 2:
         raise ValueError(f"cannot centre-crop {(height, width)} to {side}: non-square or odd margin")
     m = (width - side) // 2
