@@ -16,16 +16,10 @@
       "area_id": "0180",
       "name": "Stockholm",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 22,
       "original_bytes": 2034616804,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -52,16 +46,10 @@
       "area_id": "0180",
       "name": "Stockholm",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 22,
       "original_bytes": 2034616804,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -88,16 +76,10 @@
       "area_id": "0180",
       "name": "Stockholm",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 22,
       "original_bytes": 2034616804,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -130,80 +112,50 @@
       "area_id": "1480",
       "name": "Göteborg",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 21,
       "original_bytes": 2024688168,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1480",
       "name": "Göteborg",
       "year": 2018,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 22,
       "original_bytes": 2120657704,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1480",
       "name": "Göteborg",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 21,
       "original_bytes": 2024688168,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1480",
       "name": "Göteborg",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 22,
       "original_bytes": 2120657704,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1480",
       "name": "Göteborg",
       "year": 2021,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 21,
       "original_bytes": 2024688168,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -220,16 +172,10 @@
       "area_id": "1480",
       "name": "Göteborg",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 21,
       "original_bytes": 2024688168,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -262,112 +208,70 @@
       "area_id": "1280",
       "name": "Malmö",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 15,
       "original_bytes": 1481307840,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1280",
       "name": "Malmö",
       "year": 2018,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 15,
       "original_bytes": 1481307840,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1280",
       "name": "Malmö",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 15,
       "original_bytes": 1481307840,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1280",
       "name": "Malmö",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 15,
       "original_bytes": 1481307840,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1280",
       "name": "Malmö",
       "year": 2021,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 15,
       "original_bytes": 1481307840,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1280",
       "name": "Malmö",
       "year": 2022,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 15,
       "original_bytes": 1481307840,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1280",
       "name": "Malmö",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 15,
       "original_bytes": 1481307840,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -400,16 +304,10 @@
       "area_id": "0380",
       "name": "Uppsala",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 71,
       "original_bytes": 6402993920,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -426,32 +324,20 @@
       "area_id": "0380",
       "name": "Uppsala",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 71,
       "original_bytes": 6402993920,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0380",
       "name": "Uppsala",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 71,
       "original_bytes": 6402993920,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -468,32 +354,20 @@
       "area_id": "0380",
       "name": "Uppsala",
       "year": 2022,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 71,
       "original_bytes": 6402993920,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0380",
       "name": "Uppsala",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 71,
       "original_bytes": 6402993920,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -526,16 +400,10 @@
       "area_id": "0580",
       "name": "Linköping",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 53,
       "original_bytes": 4656389072,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -552,32 +420,20 @@
       "area_id": "0580",
       "name": "Linköping",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 53,
       "original_bytes": 4656389072,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0580",
       "name": "Linköping",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 53,
       "original_bytes": 4656389072,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -604,16 +460,10 @@
       "area_id": "0580",
       "name": "Linköping",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 53,
       "original_bytes": 4656389072,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -646,64 +496,40 @@
       "area_id": "1980",
       "name": "Västerås",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 42,
       "original_bytes": 3687732768,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1980",
       "name": "Västerås",
       "year": 2018,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 42,
       "original_bytes": 3687732768,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1980",
       "name": "Västerås",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 42,
       "original_bytes": 3687732768,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1980",
       "name": "Västerås",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 42,
       "original_bytes": 3687732768,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -720,32 +546,20 @@
       "area_id": "1980",
       "name": "Västerås",
       "year": 2022,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 42,
       "original_bytes": 3687732768,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1980",
       "name": "Västerås",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 42,
       "original_bytes": 3687732768,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -778,64 +592,40 @@
       "area_id": "1880",
       "name": "Örebro",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 60,
       "original_bytes": 5100974124,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1880",
       "name": "Örebro",
       "year": 2018,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 60,
       "original_bytes": 5100974124,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1880",
       "name": "Örebro",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 60,
       "original_bytes": 5100974124,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1880",
       "name": "Örebro",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 60,
       "original_bytes": 5100974124,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -852,32 +642,20 @@
       "area_id": "1880",
       "name": "Örebro",
       "year": 2022,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 60,
       "original_bytes": 5100974124,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1880",
       "name": "Örebro",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 60,
       "original_bytes": 5100974124,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -910,16 +688,10 @@
       "area_id": "1283",
       "name": "Helsingborg",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 23,
       "original_bytes": 2264696360,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -936,32 +708,20 @@
       "area_id": "1283",
       "name": "Helsingborg",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 23,
       "original_bytes": 2264696360,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "1283",
       "name": "Helsingborg",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 23,
       "original_bytes": 2264696360,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -988,16 +748,10 @@
       "area_id": "1283",
       "name": "Helsingborg",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 23,
       "original_bytes": 2264696360,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -1030,64 +784,40 @@
       "area_id": "0680",
       "name": "Jönköping",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 62,
       "original_bytes": 5563328000,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0680",
       "name": "Jönköping",
       "year": 2018,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 62,
       "original_bytes": 5563328000,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0680",
       "name": "Jönköping",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 62,
       "original_bytes": 5563328000,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0680",
       "name": "Jönköping",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 62,
       "original_bytes": 5563328000,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -1114,16 +844,10 @@
       "area_id": "0680",
       "name": "Jönköping",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 62,
       "original_bytes": 5563328000,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -1156,16 +880,10 @@
       "area_id": "0581",
       "name": "Norrköping",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 63,
       "original_bytes": 5642829348,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -1182,80 +900,50 @@
       "area_id": "0581",
       "name": "Norrköping",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 63,
       "original_bytes": 5642829348,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0581",
       "name": "Norrköping",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 63,
       "original_bytes": 5642829348,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0581",
       "name": "Norrköping",
       "year": 2021,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 63,
       "original_bytes": 5642829348,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0581",
       "name": "Norrköping",
       "year": 2022,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 63,
       "original_bytes": 5642829348,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "0581",
       "name": "Norrköping",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 63,
       "original_bytes": 5642829348,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -1288,16 +976,10 @@
       "area_id": "kiruna_tatort",
       "name": "Kiruna tätort",
       "year": 2017,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 9,
       "original_bytes": 577614636,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -1314,80 +996,50 @@
       "area_id": "kiruna_tatort",
       "name": "Kiruna tätort",
       "year": 2019,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 9,
       "original_bytes": 577614636,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "kiruna_tatort",
       "name": "Kiruna tätort",
       "year": 2020,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 9,
       "original_bytes": 577614636,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "kiruna_tatort",
       "name": "Kiruna tätort",
       "year": 2021,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 9,
       "original_bytes": 577614636,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "kiruna_tatort",
       "name": "Kiruna tätort",
       "year": 2022,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 9,
       "original_bytes": 577614636,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
       "area_id": "kiruna_tatort",
       "name": "Kiruna tätort",
       "year": 2023,
-      "status": "missing_vpp",
+      "status": "source_ready",
       "blocks": 9,
       "original_bytes": 577614636,
-      "vpp_missing_metrics": [
-        "SOSD",
-        "EOSD",
-        "LENGTH",
-        "MAXV",
-        "MINV"
-      ],
+      "vpp_missing_metrics": [],
       "vpp_missing_files": []
     },
     {
@@ -1418,19 +1070,19 @@
     }
   ],
   "vpp_index": {
-    "sha256": "b1c9aa5c27e90ab383f1d5bf3b63b36d8bcd18df8610f6e0428809392918bde5",
-    "size": 246694
+    "sha256": "f0eb52d6b0a130b05bfc6d1c3405902d896affc3f4c8d168ff74195779c255c9",
+    "size": 367482
   },
   "shared_aux": {
     "temporal_policy": "shared across all years; no annual duplication",
     "missing_files": [],
     "dem": "shared public COG windows, verified during staging"
   },
-  "source_ready_unique_blocks": 1194,
-  "source_ready_original_bytes": 107236132164,
+  "source_ready_unique_blocks": 3416,
+  "source_ready_original_bytes": 305680252544,
   "requested_unique_blocks": 3842,
   "requested_original_bytes": 343794121988,
-  "existing_vpp_files": 300,
-  "existing_vpp_bytes": 33277550043,
+  "existing_vpp_files": 760,
+  "existing_vpp_bytes": 82696186877,
   "note": "Metadata and file presence only. Each pair still needs preparation and real model qualification."
 }
