@@ -64,6 +64,134 @@ en blocker) uppdaterar tabellen i samma PR där det är möjligt.
 | IM-018 | Repo-isolation för parallella workstreams: utvärdera monorepo + submodules vs separate repos | investigation | open | — | 2026-05-22 incident: bf18671 (aircraft_parallax GIF) läckte in i `fix/refetch-late-autumn-frames` via worktree-mess mellan parallella agent-sessioner. PR #16 visar nu en ovidkommande commit. Worktree-isolation (intended boundary) räcker inte. Alternativ: (1) status quo monorepo + striktare conventions, (2) separate repo per workstream, (3) monorepo + git submodules som hård gräns. Beslutas vid nästa retro |
 | IM-021 | Showcase-sajten scrollar i sidled vid 375 px | bug | open | — | Headerns rad med sex `theme-tab` är 569 px bred, och `.sub-tab-nav` radbryter inte, så undersidornas knappar blir en rad per knapp. Fanns före radarundersidan (task 0104); uppmätt 2026-10-10 med headless Chromium. Fix i den delade `docs/css/styles.css` (wrap/scroll för nav), så alla flikar berörs |
 | IM-022 | Ny källa för SKS-auxkanaler (markfukt, grunddata, trädhöjd) när nya tiles behöver dem | infra | **done** 2026-10-13 | #74 (task 0107, merge `2e34ff9`) + #78 (spegel stagad, mosaikfix, paritet) | Spegeln stagad på PVC 2026-10-13 01:04Z (Job `skg-open-stage` + `-r2`, VRT ombyggda från d6b60cc): 174 filer, 97,3 GiB rå + 79,2 GiB COG, 10 VRT, `MANIFEST.json`; paritet mätt nationellt mot proxy-hämtade cache-arrayer (`k8s/skg-open-parity-job.yaml`, siffror och tolkning i `docs/data/skg_open_mirror.md`): grunddata ≥ 99,75 % identiska pixlar (nfi2024-referenser ≥ 99,97 %), markfukt 35,8 % identiska / MAE 5 (trolig modellversionsskillnad, hypotes). Separata beslut (Tobias): trädhöjd (329 GiB rå, 1 m, reproducerar inte lagrad kanal; Jobbet stödjer `STAGE_PRODUCTS=tradhojd`) och keep/scrap av `raw/` efter berikning. Implementerad i #74 (task 0107, merge `2e34ff9`, 2026-10-12): markfukt-, grunddata- och trädhöjdsfetcharna läser en spegel av de öppna per-läns-zipparna via `imint/training/skg_open.py` (se `docs/data/skg_open_mirror.md`) och kastar `SkgMirrorMissingError` när spegeln saknas på disk. Ingen berikning av tiles är gjord än (census-sessionens pass). Historik (2026-10-12, före #74): kartor.skogsstyrelsen.se-proxyerna pensionerades 2026 (302 → skogenskarta / WAF 403); fetcharna kastar nu `SkgEndpointRetiredError` (task 0106). Befintliga tiles har kvar sina aux-kanaler. Öppen ersättare utan inloggning: per-läns-zip på geodpags.skogsstyrelsen.se/geodataport/data/ — `sksSLUMarkfuktighet<län>` (21 filer, 86,5 GB, 2 m uint16, nodata 65535, ej tilad), `sks_<Volym|Grundyta|Medeldiameter>_omdrev<1-3>_<län>` (~18 GB), trädhöjd `sksTradhojd<län>` (353,5 GB) eller `sks_Tradhojd_omdrev3` (9 län, 40,5 GB). Fjärrläsning ur zip fungerar inte (deflate + strips) → engångsspegling till PVC i 10 m + VRT, kodningsmappning verifierad mot befintliga tiles, grunddata-mosaik senaste omdrev. Görs först när en kampanj behöver nya tiles (beslut Tobias 2026-10-12) |
+| IM-024 | Årskartor för de tio största kommunerna, alla TESSERA-år | infra | open | — | Etapp 1: få ut demon med befintlig modell, de tio kommunerna och samtliga publicerade TESSERA-år. Kiruna tätort kvar som extra demo. Prioriterat först av Tobias 2026-10-29 |
+| IM-023 | Behåll barrblandskog separat från lövskog i nästa modell | bug | open | — | Etapp 2, efter IM-024: utred mappningens ursprung och testa separerbarhet med befintliga vikter/resultat före schema- och träningsbeslut. Se planen nedan; Tobias 2026-10-29 |
+
+---
+
+## IM-024 — Tio kommuner och samtliga TESSERA-år
+
+**Typ:** infra · **Status:** open · **Planering:** etapp 1, demon först.
+**Källa:** Tobias, 2026-10-29: de tio kommunerna för alla TESSERA-år;
+senaste prioritering: "lägg det före, vi vill ha ut demon först".
+
+**Ordning:** leverera kommun- och årsutbyggnaden med den befintliga
+verifierade modellen och dess nuvarande klasschema. Behåll förklaringarna
+av sammanslagna klasser i legenden och proveniensen. Därefter följer
+IM-023:s historik- och separerbarhetsanalys, klasschema-/modellbeslut och
+nästa modellträning.
+
+**Omfattning:** de tidigare utvalda tio största kommunerna efter folkmängd:
+Stockholm (0180), Göteborg (1480), Malmö (1280), Uppsala (0380),
+Linköping (0580), Västerås (1980), Örebro (1880), Helsingborg (1283),
+Jönköping (0680) och Norrköping (0581). Urvalet finns sparat med SCB:s
+befolkningsreferens 2025-12-31 i
+[`config/lclu/stockholm.json`](../config/lclu/stockholm.json),
+`boundary_source.municipalities`. Hela kommunernas områden ingår.
+Kiruna tätort behålls som ett separat extra demoområde utöver dessa tio.
+
+- [ ] Inventera samtliga publicerade TESSERA-år mot ett pinnat
+  producentregister. Nuvarande planeringsintervall är 2018–2025;
+  bekräfta år och täckning per kommun, inklusive nödvändig randzon.
+  Utbyggnadens mål är alla år, inte enbart den nu verifierade 2024-demon.
+- [ ] Skapa en täckningsmatris kommun × år för TESSERA och årsberoende
+  stödlager, inklusive HR-VPP. Fyll tillgängliga källuckor och redovisa
+  kvarstående hinder uttryckligen. Ett annat års data får inte ersätta
+  det begärda året; enbart en post i TESSERA-registret kvalificerar inte
+  en färdig årskarta.
+- [ ] Förbered förlustfria kompakta TESSERA-COG:ar och verifiera deras
+  paritet med originalen. Återanvänd befintlig cache och deduplicera block
+  som delas mellan kommuner. Läs aux-fönster vid behov från kvalificerade
+  källor och cachelagra förberedda indata och resultat enligt demoupplägget.
+- [ ] Dimensionera lagring, konvertering, samtidighet och drift för hela
+  omfattningen. Uppdatera ICE-kostnadsunderlaget med engångsarbete och
+  löpande kostnad innan den utökade driftsättningen.
+- [ ] Utöka områdes- och årsväljaren samt API:ts katalog och routning.
+  Aktivera varje kommun/år först när källor och modellkörning verifierats;
+  visa kvarstående täckningsbrister tydligt.
+- [ ] Verifiera hela kommun × år-matrisen, med skarpa provkörningar,
+  årskorrekt proveniens och kontroller vid kommun-, block- och UTM-gränser.
+  Redovisa temporal modellprestanda separat från teknisk datatillgång.
+- [ ] Behåll NMD-anpassad legend, klassinformation vid klick, 100 %
+  opacitet som standard, reglage och skarp pixelvisning vid zoom 15 och
+  högre. Export och cache ska identifiera både modell- och schemaversion.
+
+Underlag: [tjänst och källkrav](lclu-service.md),
+[lagringsmätningar](tessera-geotiff-storage.md) och
+[befintlig ICE-demo](../docker/lclu/README.md).
+
+---
+
+## IM-023 — Separera barrblandskog från lövskog
+
+**Typ:** bug · **Status:** open · **Planering:** etapp 2, efter demoleveransen i IM-024.
+**Källa:** Tobias, 2026-10-29: barrblandskog ska behållas separat och inte
+slås ihop med lövskog. Befintliga vikter och resultat ska ge underlag för
+vilka klasser som kan separeras eller lämpligen redovisas tillsammans.
+
+**Känt:** Nuvarande `NMD2023_TO_UNIFIED` mappar 113 (barrblandskog på
+fastmark) till samma klass som 115–117 (lövskogstyper). Kodkommentaren
+beskriver grupperingen som ärvd från NMD2018 och bevarad för kompatibilitet,
+inte för korrekthet. Kommentaren är ett spår att följa, inte bevis för hur
+det ursprungliga beslutet fattades eller vilka etiketter R4 faktiskt använde.
+
+**Öppet:** Klassens faktiska svårighetsgrad, sammanslagningens ursprung och
+om en kommunikationsmiss bidrog. Ingen orsak eller ansvarsfördelning är
+fastställd; användarens kontroll ska inte antas ha brustit.
+
+**Spår A — Hur uppstod sammanslagningen?**
+
+- [ ] Följ NMD2018-/NMD2023-mappningen genom git-historik, PR:er och
+  tillgängliga beslutsanteckningar. Skilj ett uttryckligt klassbeslut från
+  en implementeringsmiss eller ett kompatibilitetsarv. Redovisa belägg och
+  luckor; avsaknad av dokumentation fastställer inte en orsak.
+- [ ] Verifiera de faktiska träningsetiketterna och labelbyggets version
+  för R4 och berörda tidigare checkpointar mot råkällorna. Dokumentera
+  vilka modeller som påverkats; dra inte slutsatsen enbart från dagens kod.
+
+**Spår B — Kan modellerna skilja klasserna åt?**
+
+- [ ] Inventera och återanvänd befintliga vikter, förväxlingsmatriser,
+  sannolikheter och modellegenskaper där de finns. Analysera förväxlingar
+  per modell, klass och geografiskt område på samma jämförbara underlag.
+- [ ] Börja med barrblandskog/lövskog: använd separata referensetiketter
+  och testa en liten klassificerare på frysta modellegenskaper före
+  beslut om full omträning. Den sammanslagna slutklassen kan inte ensam
+  visa om den interna representationen fortfarande skiljer klasserna åt.
+- [ ] Använd geografiskt separerade utvecklingsdata och redovisa antal
+  exempel, klassvis IoU, precision/recall samt osäkerhet. Behåll sluttestet
+  orört under schema- och modellval. NMD-etiketter mäter överensstämmelse
+  med NMD; använd oberoende fältreferenser där de stöder klassdefinitionerna.
+- [ ] Skilj bristande separerbarhet från etikettfel, få exempel och
+  otillräckliga indata. Hög förväxling är inte ensam skäl för sammanslagning.
+  Redovisa om underlaget stöder separata klasser, behov av bättre data eller
+  en grövre redovisningsnivå. En högre poäng efter sammanslagning är inte
+  i sig belägg för en bättre modell.
+
+**Beslut och nästa modelliteration**
+
+- [ ] Sammanställ spår A och B separat före schema- och träningsbeslut.
+  Dokumentera varje ändring av klassernas betydelse, motiv, underlag och
+  uttryckligt beslut med användaren. Bevara de ursprungliga klassernas
+  identitet även om en grövre presentationsnivå används.
+- [ ] Inför ett versionerat klasschema där barrblandskog har en separat
+  målklass från lövskog och lövblandad barrskog (NMD 114). Uppdatera
+  labelbygget och lägg regressionstest som hindrar att 113 och 115–117
+  åter slås ihop. Dokumentera hanteringen av motsvarande våtmarksklasser.
+- [ ] Återskapa berörda tränings- och utvärderingsetiketter från råkällorna
+  och genomför den träningsinsats som separerbarhetstestet motiverar:
+  nytt klassificeringshuvud, finjustering eller bredare omträning.
+  Spara schemaversion,
+  klasslista och etikettproveniens i checkpointen; redovisa hur äldre
+  checkpointar kan användas vid initiering.
+- [ ] Utvärdera barrblandskog och lövskog separat, med klassvis IoU,
+  precision/recall och förväxlingsmatris, innan den nya modellen tas i bruk.
+- [ ] Uppdatera legend, pixelinformation och exporter tillsammans med
+  modellversionen. En namnändring av den nuvarande sammanslagna klassen
+  räcker inte; befintliga R4-resultat behåller sin ursprungliga betydelse.
+
+Bakgrund och verifierad klassmappning:
+[NMD-legendkontroll](verification/lclu-service/nmd-legend.md).
 
 ---
 

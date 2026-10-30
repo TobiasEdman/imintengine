@@ -75,7 +75,7 @@ def test_geometry_native_crop_and_geotiff_roundtrip(tmp_path):
     rgba = np.array(Image.open(tmp_path / 'overlay.png'))
     # Reprojection never invents interpolated class colors; 0 is opaque black.
     assert set(map(tuple, np.unique(rgba.reshape(-1, 4), axis=0))) == {
-        (0, 0, 0, 255), (139, 90, 43, 255), (0, 0, 0, 0)}
+        (0, 0, 0, 255), (194, 156, 213, 255), (0, 0, 0, 0)}
     assert result['valid_pixels'] == 504**2 - 70*80
     assert result['display_resampling'] == 'nearest'
 

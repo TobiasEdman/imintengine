@@ -41,7 +41,7 @@ if not (environment/'READY').exists():
         subprocess.run([str(python), '-m', 'pip', 'freeze', '--all'], stdout=stream, check=True)
     (environment/'READY').write_text(lock_hash+'\n')
 os.environ['PYTHONPATH'] = str(source)
-os.environ['IMINT_LCLU_MANIFEST'] = '/work/stockholm/serving.json'
+os.environ['IMINT_LCLU_MANIFEST'] = '/work/demo/serving.json'
 os.environ['IMINT_API_OUTPUT_DIR'] = '/work/results'
 os.environ['LCLU_EXECUTION_MODE'] = 'source-recipe'
 system_root = Path('/work/system/expat-2.5.0-1-deb12u5')

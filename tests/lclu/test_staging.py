@@ -100,3 +100,33 @@ def test_system_runtime_rejects_corrupted_cached_package_before_extraction(tmp_p
     monkeypatch.setattr(module.subprocess, 'run', lambda *_a, **_k: pytest.fail('Must not extract unverified bytes'))
     with pytest.raises(ValueError, match='identity'):
         module.install(tmp_path)
+
+
+def test_run_publishes_two_verified_regions_into_fresh_directory(tmp_path, monkeypatch):
+    from docker.lclu import run
+    from imint.inference.lclu import write_json
+    source, work, data = (tmp_path/name for name in ('source','work','data'))
+    source.mkdir()
+    write_json(source/'SOURCE_MANIFEST.json', {'files':{}})
+    calls=[]
+    checkpoint={'path':'/data/model.pt','sha256':'a'*64,'size':1}
+    def staged(scope, year, reference, root):
+        assert year==2024 and reference==data
+        root.mkdir(parents=True)
+        preparation={'config':{'path':str(root/'sources.json'),'sha256':'b'*64,'size':2},
+                     'python':'/runtime/bin/python','timeout_seconds':300}
+        write_json(root/'serving.json', {'checkpoint':checkpoint,'preparation':preparation})
+        calls.append(scope.stem)
+    monkeypatch.setattr(run,'stage',staged)
+    monkeypatch.setenv('LCLU_YEAR','2024')
+    monkeypatch.setenv('LCLU_IMAGE','python@sha256:'+'c'*64)
+    monkeypatch.setenv('IMINT_LCLU_MANIFEST','unused')
+    launched=[]
+    monkeypatch.setattr(run.os,'execv',lambda *args:launched.append(args))
+    run.main(source,work,data)
+    assert calls==['stockholm','kiruna_tatort']
+    published=json.loads((work/'demo/serving.json').read_text())
+    assert published['checkpoint']==checkpoint and len(published['preparations'])==2
+    assert run.os.environ['IMINT_LCLU_MANIFEST']==str(work/'demo/serving.json')
+    assert json.loads((work/'demo/MANIFEST.json').read_text())['run_args']['areas']==['Stockholm','Kiruna tätort']
+    assert len(launched)==1

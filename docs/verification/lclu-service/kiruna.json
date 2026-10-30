@@ -1,0 +1,103 @@
+{
+  "date": "2026-10-29",
+  "area": "Kiruna t\u00e4tort",
+  "boundary": "SCB Tatorter_2023, 2584TC103, 2023-12-31",
+  "year": 2024,
+  "blocks": 9,
+  "source_npy_bytes": 577614636,
+  "compact_cog_bytes": 452870047,
+  "staging_seconds": 211.5494830859825,
+  "config_sha256": "4f146a8f2321d1469f4437349191fdf0a34ba30fd6fc57f8fdb2e65f7cc31f4a",
+  "clickable_grid_check": {
+    "method": "Exhaustive conservative snapped10m centres within official projected polygon buffered sqrt(50)+0.01m. Each 5120m input checked with21 interior points per projected edge.",
+    "centres": 116264,
+    "block_count_histogram": {
+      "2": 71986,
+      "3": 43467,
+      "4": 811
+    },
+    "max_blocks": 4,
+    "max_example": {
+      "blocks": 4,
+      "center_3006": [
+        717720,
+        7538090
+      ],
+      "center_lonlat": [
+        20.185209920794904,
+        67.8752482533427
+      ]
+    }
+  },
+  "embedding_values_exact": 33554432,
+  "embedding_valid_pixels": 262144,
+  "canonical_class_pixels_exact": 254016,
+  "first_request_seconds": 18.909822213929147,
+  "cached_request_seconds": 1.0651221489533782,
+  "verification_point": [
+    20.197573827965233,
+    67.87611539512876
+  ],
+  "verification_scope": "Transport and pipeline parity, not independent classification accuracy",
+  "archive_sha256": "69bb2da786e682bea6beb896bae3dce42b7a999ecb2ee9df5a8584586a1b632e",
+  "active_job": "lclu-stockholm-0124-r5",
+  "actual_expiry_utc": "2026-10-30T12:42:51+00:00",
+  "browser": {
+    "area": "Kiruna t\u00e4tort",
+    "year": 2024,
+    "valid_pixels": 254016,
+    "nodata_pixels": 0,
+    "browser_first_seconds": 18.5,
+    "browser_repeat_seconds": 0.2,
+    "zoom": 15,
+    "opacity": 1,
+    "image_rendering": "pixelated",
+    "native_overlay_size": [
+      545,
+      545
+    ],
+    "area_switch_stockholm_and_back": true,
+    "classification_sha256": "363843b0521a3fe05a7cc6cb21e15b5a72bdd39cb43903ac59d30762b0487f4f",
+    "job_id": "06d7c4b5-05a9-4535-87f8-ad847d80f632"
+  },
+  "live_api": {
+    "areas": [
+      "Stockholm",
+      "Kiruna t\u00e4tort"
+    ],
+    "points": [
+      {
+        "area": "Kiruna four-block",
+        "seconds": 20.31762929202523,
+        "classification_sha256": "52b0b7079e7b891c92cbb1b85b8e03728b596f9c598eac6a7a8ebbe1624225c5",
+        "valid_pixels": 254016,
+        "job_id": "2f2893c8-a8b1-4706-923d-d97550373547"
+      },
+      {
+        "area": "Stockholm",
+        "seconds": 19.061007042007986,
+        "classification_sha256": "23445353b93c6e654357992368eb3ec068eace6e530d2ed3d1d14455ba10089c",
+        "valid_pixels": 252916,
+        "job_id": "33b3167d-9932-46f8-b2ed-f3033bd76d23"
+      }
+    ],
+    "rejections": [
+      {
+        "request": {
+          "lon": 20.8,
+          "lat": 67.85,
+          "year": 2024
+        },
+        "status": 422
+      },
+      {
+        "request": {
+          "lon": 20.254529,
+          "lat": 67.853118,
+          "year": 2025
+        },
+        "status": 422
+      }
+    ]
+  }
+}
