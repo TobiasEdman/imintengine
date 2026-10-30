@@ -239,3 +239,17 @@ def test_empty_crop_named_tile_still_fails(case):
     assert result["status"] == "failed" and "no LPIS overlay" in result["reason"]
     assert renamed.read_bytes() == source
     assert not (case["out"] / renamed.name).exists()
+
+
+def test_nmd2023_barrblandskog_builds_class_28(case):
+    # 113 → 28 (IM-023) must pass the write-time range check, not fail the tile.
+    with rasterio.open(case["root"] / "nmd.tif", "r+") as dst:
+        dst.write(np.full((32, 32), 113, dtype=np.uint16), 1)
+    result = builder.build_tile_label(
+        str(case["tile"]), str(case["root"] / "nmd.tif"),
+        str(case["root"] / "refs"), str(case["root"] / "refs"), nmd_version=2023,
+        label_out_dir=str(case["out"]) if case["sidecar"] else None,
+    )
+    assert result["status"] == "ok", result
+    with np.load(case["target"]) as z:
+        assert np.all(z["label"] == 28)
