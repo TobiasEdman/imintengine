@@ -99,6 +99,13 @@ Kiruna tätort behålls som ett separat extra demoområde utöver dessa tio.
   kvarstående hinder uttryckligen. Ett annat års data får inte ersätta
   det begärda året; enbart en post i TESSERA-registret kvalificerar inte
   en färdig årskarta.
+  *2026-10-30:* matrisen finns i
+  [`coverage-matrix.md`](verification/lclu-service/coverage-matrix.md): TESSERA
+  täcker alla 99 celler, HR-VPP bara 30. Luckfyllnaden är planerad men inte
+  körd: [`vpp-gapfill-plan.json`](verification/lclu-service/vpp-gapfill-plan.json)
+  listar 133 MGRS × år-par (665 COG:ar, uppskattat ~74 GB på
+  `training-data-cephfs`) via WEkEO, utan CDSE PU. Kräver godkännande av
+  lagringen; 2025 kan sakna publicerad HR-VPP och står då kvar som hinder.
 - [ ] Förbered förlustfria kompakta TESSERA-COG:ar och verifiera deras
   paritet med originalen. Återanvänd befintlig cache och deduplicera block
   som delas mellan kommuner. Läs aux-fönster vid behov från kvalificerade

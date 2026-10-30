@@ -1,0 +1,1333 @@
+{
+  "version": 1,
+  "campaign_sha256": "947431c67f6d4be059b6496b43d87ca1cf51d44ccba6076612d826791d52c70b",
+  "preflight_sha256": "e2aa007ee7b8905aeac66f64db1c8c47fabe17f78a9012440127dfa446daa744",
+  "preflight_vpp_index": {
+    "sha256": "b1c9aa5c27e90ab383f1d5bf3b63b36d8bcd18df8610f6e0428809392918bde5",
+    "size": 246694
+  },
+  "status_counts": {
+    "missing_vpp": 69,
+    "source_ready": 30
+  },
+  "missing_vpp_cells": [
+    {
+      "area_id": "0180",
+      "name": "Stockholm",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXF",
+        "34VCL"
+      ]
+    },
+    {
+      "area_id": "0180",
+      "name": "Stockholm",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXF",
+        "34VCL"
+      ]
+    },
+    {
+      "area_id": "0180",
+      "name": "Stockholm",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXF",
+        "34VCL"
+      ]
+    },
+    {
+      "area_id": "0180",
+      "name": "Stockholm",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXF",
+        "34VCL"
+      ]
+    },
+    {
+      "area_id": "1480",
+      "name": "Göteborg",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "32VPJ",
+        "32VPK",
+        "33VUD",
+        "33VUE"
+      ]
+    },
+    {
+      "area_id": "1480",
+      "name": "Göteborg",
+      "year": 2018,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "32VPJ",
+        "32VPK",
+        "33VUD",
+        "33VUE"
+      ]
+    },
+    {
+      "area_id": "1480",
+      "name": "Göteborg",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "32VPJ",
+        "32VPK",
+        "33VUD",
+        "33VUE"
+      ]
+    },
+    {
+      "area_id": "1480",
+      "name": "Göteborg",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "32VPJ",
+        "32VPK",
+        "33VUD",
+        "33VUE"
+      ]
+    },
+    {
+      "area_id": "1480",
+      "name": "Göteborg",
+      "year": 2021,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "32VPJ",
+        "32VPK",
+        "33VUD",
+        "33VUE"
+      ]
+    },
+    {
+      "area_id": "1480",
+      "name": "Göteborg",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "32VPJ",
+        "32VPK",
+        "33VUD",
+        "33VUE"
+      ]
+    },
+    {
+      "area_id": "1480",
+      "name": "Göteborg",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "32VPJ",
+        "32VPK",
+        "33VUD",
+        "33VUE"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2018,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2021,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2022,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "1280",
+      "name": "Malmö",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB"
+      ]
+    },
+    {
+      "area_id": "0380",
+      "name": "Uppsala",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXG",
+        "34VCM"
+      ]
+    },
+    {
+      "area_id": "0380",
+      "name": "Uppsala",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXG",
+        "34VCM"
+      ]
+    },
+    {
+      "area_id": "0380",
+      "name": "Uppsala",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXG",
+        "34VCM"
+      ]
+    },
+    {
+      "area_id": "0380",
+      "name": "Uppsala",
+      "year": 2022,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXG",
+        "34VCM"
+      ]
+    },
+    {
+      "area_id": "0380",
+      "name": "Uppsala",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXG",
+        "34VCM"
+      ]
+    },
+    {
+      "area_id": "0380",
+      "name": "Uppsala",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VXG",
+        "34VCM"
+      ]
+    },
+    {
+      "area_id": "0580",
+      "name": "Linköping",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF"
+      ]
+    },
+    {
+      "area_id": "0580",
+      "name": "Linköping",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF"
+      ]
+    },
+    {
+      "area_id": "0580",
+      "name": "Linköping",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF"
+      ]
+    },
+    {
+      "area_id": "0580",
+      "name": "Linköping",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF"
+      ]
+    },
+    {
+      "area_id": "0580",
+      "name": "Linköping",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF"
+      ]
+    },
+    {
+      "area_id": "1980",
+      "name": "Västerås",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWF",
+        "33VWG",
+        "33VXF",
+        "33VXG"
+      ]
+    },
+    {
+      "area_id": "1980",
+      "name": "Västerås",
+      "year": 2018,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWF",
+        "33VWG",
+        "33VXF",
+        "33VXG"
+      ]
+    },
+    {
+      "area_id": "1980",
+      "name": "Västerås",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWF",
+        "33VWG",
+        "33VXF",
+        "33VXG"
+      ]
+    },
+    {
+      "area_id": "1980",
+      "name": "Västerås",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWF",
+        "33VWG",
+        "33VXF",
+        "33VXG"
+      ]
+    },
+    {
+      "area_id": "1980",
+      "name": "Västerås",
+      "year": 2022,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWF",
+        "33VWG",
+        "33VXF",
+        "33VXG"
+      ]
+    },
+    {
+      "area_id": "1980",
+      "name": "Västerås",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWF",
+        "33VWG",
+        "33VXF",
+        "33VXG"
+      ]
+    },
+    {
+      "area_id": "1980",
+      "name": "Västerås",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWF",
+        "33VWG",
+        "33VXF",
+        "33VXG"
+      ]
+    },
+    {
+      "area_id": "1880",
+      "name": "Örebro",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVF",
+        "33VVG",
+        "33VWF",
+        "33VWG"
+      ]
+    },
+    {
+      "area_id": "1880",
+      "name": "Örebro",
+      "year": 2018,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVF",
+        "33VVG",
+        "33VWF",
+        "33VWG"
+      ]
+    },
+    {
+      "area_id": "1880",
+      "name": "Örebro",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVF",
+        "33VVG",
+        "33VWF",
+        "33VWG"
+      ]
+    },
+    {
+      "area_id": "1880",
+      "name": "Örebro",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVF",
+        "33VVG",
+        "33VWF",
+        "33VWG"
+      ]
+    },
+    {
+      "area_id": "1880",
+      "name": "Örebro",
+      "year": 2022,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVF",
+        "33VVG",
+        "33VWF",
+        "33VWG"
+      ]
+    },
+    {
+      "area_id": "1880",
+      "name": "Örebro",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVF",
+        "33VVG",
+        "33VWF",
+        "33VWG"
+      ]
+    },
+    {
+      "area_id": "1880",
+      "name": "Örebro",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVF",
+        "33VVG",
+        "33VWF",
+        "33VWG"
+      ]
+    },
+    {
+      "area_id": "1283",
+      "name": "Helsingborg",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB",
+        "33UUC",
+        "33VUC"
+      ]
+    },
+    {
+      "area_id": "1283",
+      "name": "Helsingborg",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB",
+        "33UUC",
+        "33VUC"
+      ]
+    },
+    {
+      "area_id": "1283",
+      "name": "Helsingborg",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB",
+        "33UUC",
+        "33VUC"
+      ]
+    },
+    {
+      "area_id": "1283",
+      "name": "Helsingborg",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB",
+        "33UUC",
+        "33VUC"
+      ]
+    },
+    {
+      "area_id": "1283",
+      "name": "Helsingborg",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33UUB",
+        "33UUC",
+        "33VUC"
+      ]
+    },
+    {
+      "area_id": "0680",
+      "name": "Jönköping",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVD",
+        "33VVE"
+      ]
+    },
+    {
+      "area_id": "0680",
+      "name": "Jönköping",
+      "year": 2018,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVD",
+        "33VVE"
+      ]
+    },
+    {
+      "area_id": "0680",
+      "name": "Jönköping",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVD",
+        "33VVE"
+      ]
+    },
+    {
+      "area_id": "0680",
+      "name": "Jönköping",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVD",
+        "33VVE"
+      ]
+    },
+    {
+      "area_id": "0680",
+      "name": "Jönköping",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVD",
+        "33VVE"
+      ]
+    },
+    {
+      "area_id": "0680",
+      "name": "Jönköping",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VVD",
+        "33VVE"
+      ]
+    },
+    {
+      "area_id": "0581",
+      "name": "Norrköping",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF",
+        "33VXE",
+        "33VXF"
+      ]
+    },
+    {
+      "area_id": "0581",
+      "name": "Norrköping",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF",
+        "33VXE",
+        "33VXF"
+      ]
+    },
+    {
+      "area_id": "0581",
+      "name": "Norrköping",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF",
+        "33VXE",
+        "33VXF"
+      ]
+    },
+    {
+      "area_id": "0581",
+      "name": "Norrköping",
+      "year": 2021,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF",
+        "33VXE",
+        "33VXF"
+      ]
+    },
+    {
+      "area_id": "0581",
+      "name": "Norrköping",
+      "year": 2022,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF",
+        "33VXE",
+        "33VXF"
+      ]
+    },
+    {
+      "area_id": "0581",
+      "name": "Norrköping",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF",
+        "33VXE",
+        "33VXF"
+      ]
+    },
+    {
+      "area_id": "0581",
+      "name": "Norrköping",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "33VWE",
+        "33VWF",
+        "33VXE",
+        "33VXF"
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2017,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "34WDA"
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2019,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "34WDA"
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2020,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "34WDA"
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2021,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "34WDA"
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2022,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "34WDA"
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2023,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "34WDA"
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2025,
+      "vpp_missing_metrics": [
+        "SOSD",
+        "EOSD",
+        "LENGTH",
+        "MAXV",
+        "MINV"
+      ],
+      "mgrs_tiles": [
+        "34WDA"
+      ]
+    }
+  ],
+  "pairs_by_year": {
+    "2017": [
+      "32VPJ",
+      "32VPK",
+      "33UUB",
+      "33UUC",
+      "33VUC",
+      "33VUD",
+      "33VUE",
+      "33VVD",
+      "33VVE",
+      "33VVF",
+      "33VVG",
+      "33VWE",
+      "33VWF",
+      "33VWG",
+      "33VXE",
+      "33VXF",
+      "33VXG",
+      "34VCL",
+      "34VCM",
+      "34WDA"
+    ],
+    "2018": [
+      "32VPJ",
+      "32VPK",
+      "33UUB",
+      "33VUD",
+      "33VUE",
+      "33VVD",
+      "33VVE",
+      "33VVF",
+      "33VVG",
+      "33VWF",
+      "33VWG",
+      "33VXF",
+      "33VXG"
+    ],
+    "2019": [
+      "32VPJ",
+      "32VPK",
+      "33UUB",
+      "33UUC",
+      "33VUC",
+      "33VUD",
+      "33VUE",
+      "33VVD",
+      "33VVE",
+      "33VVF",
+      "33VVG",
+      "33VWE",
+      "33VWF",
+      "33VWG",
+      "33VXE",
+      "33VXF",
+      "33VXG",
+      "34VCM",
+      "34WDA"
+    ],
+    "2020": [
+      "32VPJ",
+      "32VPK",
+      "33UUB",
+      "33UUC",
+      "33VUC",
+      "33VUD",
+      "33VUE",
+      "33VVD",
+      "33VVE",
+      "33VVF",
+      "33VVG",
+      "33VWE",
+      "33VWF",
+      "33VWG",
+      "33VXE",
+      "33VXF",
+      "33VXG",
+      "34VCL",
+      "34VCM",
+      "34WDA"
+    ],
+    "2021": [
+      "32VPJ",
+      "32VPK",
+      "33UUB",
+      "33VUD",
+      "33VUE",
+      "33VWE",
+      "33VWF",
+      "33VXE",
+      "33VXF",
+      "34WDA"
+    ],
+    "2022": [
+      "33UUB",
+      "33VVF",
+      "33VVG",
+      "33VWE",
+      "33VWF",
+      "33VWG",
+      "33VXE",
+      "33VXF",
+      "33VXG",
+      "34VCM",
+      "34WDA"
+    ],
+    "2023": [
+      "32VPJ",
+      "32VPK",
+      "33UUB",
+      "33UUC",
+      "33VUC",
+      "33VUD",
+      "33VUE",
+      "33VVD",
+      "33VVE",
+      "33VVF",
+      "33VVG",
+      "33VWE",
+      "33VWF",
+      "33VWG",
+      "33VXE",
+      "33VXF",
+      "33VXG",
+      "34VCL",
+      "34VCM",
+      "34WDA"
+    ],
+    "2025": [
+      "32VPJ",
+      "32VPK",
+      "33UUB",
+      "33UUC",
+      "33VUC",
+      "33VUD",
+      "33VUE",
+      "33VVD",
+      "33VVE",
+      "33VVF",
+      "33VVG",
+      "33VWE",
+      "33VWF",
+      "33VWG",
+      "33VXE",
+      "33VXF",
+      "33VXG",
+      "34VCL",
+      "34VCM",
+      "34WDA"
+    ]
+  },
+  "n_pairs": 133,
+  "storage_estimate": {
+    "cogs": 665,
+    "bytes_at_cached_mean": 73765235929,
+    "basis": "mean size of the COGs already cached for this footprint"
+  },
+  "prefetch_commands": [
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 32VPJ,32VPK,33UUB,33UUC,33VUC,33VUD,33VUE,33VVD,33VVE,33VVF,33VVG,33VWE,33VWF,33VWG,33VXE,33VXF,33VXG,34VCL,34VCM,34WDA --years 2017 --dest-dir /data/vpp_wekeo",
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 32VPJ,32VPK,33UUB,33VUD,33VUE,33VVD,33VVE,33VVF,33VVG,33VWF,33VWG,33VXF,33VXG --years 2018 --dest-dir /data/vpp_wekeo",
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 32VPJ,32VPK,33UUB,33UUC,33VUC,33VUD,33VUE,33VVD,33VVE,33VVF,33VVG,33VWE,33VWF,33VWG,33VXE,33VXF,33VXG,34VCM,34WDA --years 2019 --dest-dir /data/vpp_wekeo",
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 32VPJ,32VPK,33UUB,33UUC,33VUC,33VUD,33VUE,33VVD,33VVE,33VVF,33VVG,33VWE,33VWF,33VWG,33VXE,33VXF,33VXG,34VCL,34VCM,34WDA --years 2020 --dest-dir /data/vpp_wekeo",
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 32VPJ,32VPK,33UUB,33VUD,33VUE,33VWE,33VWF,33VXE,33VXF,34WDA --years 2021 --dest-dir /data/vpp_wekeo",
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 33UUB,33VVF,33VVG,33VWE,33VWF,33VWG,33VXE,33VXF,33VXG,34VCM,34WDA --years 2022 --dest-dir /data/vpp_wekeo",
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 32VPJ,32VPK,33UUB,33UUC,33VUC,33VUD,33VUE,33VVD,33VVE,33VVF,33VVG,33VWE,33VWF,33VWG,33VXE,33VXF,33VXG,34VCL,34VCM,34WDA --years 2023 --dest-dir /data/vpp_wekeo",
+    "python scripts/prefetch_vpp_wekeo.py --mgrs-tiles 32VPJ,32VPK,33UUB,33UUC,33VUC,33VUD,33VUE,33VVD,33VVE,33VVF,33VVG,33VWE,33VWF,33VWG,33VXE,33VXF,33VXG,34VCL,34VCM,34WDA --years 2025 --dest-dir /data/vpp_wekeo"
+  ],
+  "note": "Rerun the campaign preflight after the prefetch: a year that WEkEO has not published stays missing_vpp and is an explicit blocker, never filled from another year."
+}
