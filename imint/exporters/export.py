@@ -425,21 +425,21 @@ def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
         # Skog utanför våtmark
         111: (0, 100, 0),       # Tallskog
         112: (34, 139, 34),     # Granskog
-        113: (20, 120, 20),     # Tall/gran-blandskog
-        114: (60, 179, 113),    # Barrblandskog
+        113: (20, 120, 20),     # Barrblandskog
+        114: (60, 179, 113),    # Lövblandad barrskog
         115: (50, 205, 50),     # Triviallövskog
         116: (80, 180, 60),     # Ädellövskog
-        117: (100, 200, 80),    # Trivial/ädellövblandskog
-        118: (70, 160, 100),    # Barr/lövblandskog
+        117: (100, 200, 80),    # Triviallövskog med ädellövinslag
+        118: (70, 160, 100),    # Temporärt ej skog
         # Skog på våtmark
         121: (46, 79, 46),      # Tallskog våtmark
         122: (58, 95, 58),      # Granskog våtmark
-        123: (50, 85, 50),      # Tall/gran våtmark
-        124: (90, 143, 90),     # Barrblandskog våtmark
+        123: (50, 85, 50),      # Barrblandskog våtmark
+        124: (90, 143, 90),     # Lövblandad barrskog våtmark
         125: (74, 127, 74),     # Triviallövskog våtmark
         126: (85, 140, 80),     # Ädellövskog våtmark
-        127: (95, 155, 90),     # Lövblandskog våtmark
-        128: (80, 130, 80),     # Barr/löv våtmark
+        127: (95, 155, 90),     # Triviallövskog med ädellövinslag våtmark
+        128: (80, 130, 80),     # Temporärt ej skog våtmark
         # Öppen mark
         2:   (139, 90, 43),     # Öppen våtmark
         3:   (255, 215, 0),     # Åkermark
