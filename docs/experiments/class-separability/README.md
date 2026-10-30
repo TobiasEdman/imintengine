@@ -100,9 +100,15 @@ inte själv något jobb till klustret.
 
 ```sh
 python -m pytest tests/test_forest_separability.py -q
-python scripts/render_forest_separability_job.py --output <ny-receptkatalog>
+python scripts/render_forest_separability_job.py --output <ny-receptkatalog> \
+  --scheme binary --feature-year 2022
 kubectl --context icekube -n prithvi-training-default create --dry-run=server -f <ny-receptkatalog>/job.json
 ```
+
+`--scheme` är obligatoriskt i extraktion, prov och rendering och skrivs in i
+extraktionskvittot; provet vägrar ett kvitto med annat schema. Det första
+binära provet kördes innan fältet fanns, så dess kvitto saknar schema och
+kan inte provas om med den här versionen. Resultatet står kvar som det är.
 
 Det godkända provets sammanlagda tak är 2 CPU, 4 GiB, ingen GPU och
 30 minuters resursanvändning inklusive resultatinsamling. Första försöket
@@ -163,3 +169,62 @@ användas som belägg för att alla äldre 113→löv-etiketter har försvunnit.
 Ingen full omträning har startats och inga servervikter eller numeriska
 klasser har ändrats. Det återstår ett schema-/träningsbeslut efter denna
 evidens, medan demoutbyggnaden fortsätter oberoende.
+
+## Förregistrering: flerklassdiagnos `forest5` (2026-10-30)
+
+Skriven innan någon körning gjorts. Ändras inte efter att resultat setts;
+avvikelser redovisas som avvikelser.
+
+**Fråga.** Var hamnar barrblandskog (NMD 113) när den måste skiljas från
+*alla* skogstyper på fastmark: tallskog (111), granskog (112), lövblandad
+barrskog (114) och lövskog (115–117)? Och vilken unified-klass ger
+basmappningen, de destillerade etiketterna och R4:s utdata varje NMD-typ?
+
+**Klasser.** Schemat `forest5` i `scripts/probe_forest_separability.py`:
+111, 112, 113, 114 och 115–117 som en grupp. Utanför: 118, all skog på
+våtmark (121–128) och låg fjällskog (43).
+
+**Data och urval.** Samma protokoll som det binära provet: högst 24
+historiska utvecklingstiles i `unified_v2_512`, en per 50 km-ruta och minst
+15 km mellan tilecentrum, 3×3-interiörer på 100 m-rutnät, högst 128 pixlar
+per klass och tile, seed 42. En tile kvalificeras bara om **alla fem**
+klasserna har minst åtta sådana pixlar. Det utesluter områden där en klass
+är sällsynt och ska stå i tolkningen. Referens är rå NMD2023.
+
+- Primär körning: TESSERA 2022 mot NMD2023 (samma som det binära provet).
+- Temporal känslighet: TESSERA 2023 mot NMD2023, samma år. Skillnaden mellan
+  körningarna redovisas; ingen av dem väljs i efterhand som "den riktiga".
+
+**Huvud och validering.** StandardScaler + LogisticRegression (C=1,
+balanserade vikter, max_iter 2000), ingen hyperparametersökning. Fem
+geografiska foldar med 50 km-grupper och 5 km buffert; varje fold måste
+innehålla alla fem klasser i både träning och test, annars avbryts provet.
+Samma foldar för frysta R4-egenskaper och råa TESSERA-egenskaper.
+
+**Det som rapporteras, i den här ordningen.**
+
+1. Raden för barrblandskog i 5×5-förväxlingsmatrisen, för R4 och TESSERA:
+   till vilka klasser 113 förväxlas och hur mycket.
+2. Recall, precision och IoU per klass; balanserad träffsäkerhet med 95 %
+   intervall från 500 omdragningar av hela 50 km-block; majoritetsbaslinje.
+3. `assigned_unified_class`: per NMD-klass, fördelningen över unified-klasser
+   i basetiketten, den destillerade etiketten och R4:s utdata. Det visar hur
+   R4 faktiskt behandlar barrblandskog, oberoende av de nya huvudena.
+
+**Vad resultatet inte avgör.** Ingen tröskel avgör automatiskt
+sammanslagning eller uppdelning. Utfallet mäter överensstämmelse med NMD på
+interiörpixlar i historiska träningsområden, inte fältprecision, och R4 kan
+ha sett platserna. Det är underlag för schemabeslutet i IM-023, som tas av
+Tobias tillsammans med fältdefinitionen (artvolym kontra krontäckning) och
+ett matchande destillationsmål.
+
+**Körning.** Kräver godkännande och klusteråtkomst. Samma budget som det
+binära provet: 2 CPU, 4 GiB, ingen GPU, högst 30 minuter per körning.
+
+```sh
+python scripts/render_forest_separability_job.py --output <katalog-2022> \
+  --scheme forest5 --feature-year 2022
+python scripts/render_forest_separability_job.py --output <katalog-2023> \
+  --scheme forest5 --feature-year 2023
+kubectl --context icekube -n prithvi-training-default create --dry-run=server -f <katalog-2022>/job.json
+```

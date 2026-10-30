@@ -19,7 +19,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probe_forest_separability import ROLE, digest, sample_pixels, write_json
+from probe_forest_separability import CLASS_SCHEMES, ROLE, digest, sample_pixels, write_json
 
 
 def ensure_development_roots(data_dir: Path, label_dir: Path, distill_dir: Path) -> None:
@@ -34,7 +34,7 @@ def ensure_development_roots(data_dir: Path, label_dir: Path, distill_dir: Path)
 
 
 def tile_candidates(data_dir: Path, label_dir: Path, *, max_tiles: int,
-                    year: int, audit_path: Path | None = None) -> list[dict]:
+                    year: int, scheme: str, audit_path: Path | None = None) -> list[dict]:
     if not 5 <= max_tiles <= 24 or year not in (2022, 2023):
         raise ValueError("cap is 5–24 tiles; pre-specified feature year must be2022 or2023")
     paths = sorted(data_dir.glob("*.npz"), key=lambda p: hashlib.sha256(p.name.encode()).digest())
@@ -76,7 +76,8 @@ def tile_candidates(data_dir: Path, label_dir: Path, *, max_tiles: int,
         if raw.shape != (512, 512) or raw.dtype != np.uint16:
             raise ValueError("NMD2023 sidecar must retain full raw uint16 codes")
         try:
-            sample_pixels(raw[4:-4, 4:-4], np.ones((504, 504), bool), per_class=128, seed=42)
+            sample_pixels(raw[4:-4, 4:-4], np.ones((504, 504), bool), per_class=128, seed=42,
+                          scheme=scheme)
         except ValueError:
             continue
         selected.append({"path": str(path), "label_path": str(label),
@@ -134,9 +135,10 @@ def extract(args) -> None:
     torch.set_num_threads(2)
     args.output.mkdir(parents=True, exist_ok=False)
     selected = tile_candidates(args.data_dir, args.label_dir, max_tiles=args.max_tiles,
-                               year=args.feature_year, audit_path=args.output / "availability.json")
+                               year=args.feature_year, scheme=args.scheme,
+                               audit_path=args.output / "availability.json")
     checkpoint = file_identity(args.checkpoint)
-    contract = {"role": ROLE, "checkpoint": checkpoint, "selection": selected,
+    contract = {"role": ROLE, "scheme": args.scheme, "checkpoint": checkpoint, "selection": selected,
                 "feature_year": args.feature_year, "reference_year": 2023,
                 "reference_year_gap": 2023 - args.feature_year, "per_class_cap": args.per_class,
                 "source_manifest_sha256": digest(ROOT / "SOURCE_MANIFEST.json")
@@ -178,7 +180,8 @@ def extract(args) -> None:
                     raise ValueError("unexpected pixel alignment")
                 emb = inp["img5d"][0].numpy()
                 valid = np.isfinite(emb).all(0) & np.any(emb != 0, axis=0)
-                r, c = sample_pixels(raw, valid, per_class=args.per_class, seed=42)
+                r, c = sample_pixels(raw, valid, per_class=args.per_class, seed=42,
+                                     scheme=args.scheme)
                 store["feat"] = None
                 with torch.inference_mode():
                     logits = _forward_from_inputs(model, inp, torch.device("cpu"))
@@ -222,6 +225,7 @@ def main():
     ap.add_argument("--checkpoint", required=True, type=Path)
     ap.add_argument("--output", required=True, type=Path)
     ap.add_argument("--feature-year", required=True, choices=(2022, 2023), type=int)
+    ap.add_argument("--scheme", required=True, choices=sorted(CLASS_SCHEMES))
     ap.add_argument("--max-tiles", default=24, type=int)
     ap.add_argument("--per-class", default=128, type=int)
     extract(ap.parse_args())

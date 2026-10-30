@@ -7,9 +7,12 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from probe_forest_separability import CLASS_SCHEMES
 IMAGE = 'ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d'
 SCRIPTS = ('extract_forest_separability.py', 'probe_forest_separability.py',
            'inference_comparison.py', 'cache_predict.py', 'extract_plot_features.py',
@@ -34,11 +37,13 @@ try:
             '--data-dir','/data/unified_v2_512','--label-dir','/data/nmd2023_labels',
             '--distill-dir','/data/distill/tessera_r2',
             '--checkpoint','/data/checkpoints/ladder/tessera_r4/best_model.pt',
-            '--output','/scratch/results','--feature-year','2022','--max-tiles','24','--per-class','128'],
+            '--output','/scratch/results','--feature-year',os.environ['PROBE_FEATURE_YEAR'],
+            '--scheme',os.environ['PROBE_SCHEME'],'--max-tiles','24','--per-class','128'],
             stdout=stream,stderr=subprocess.STDOUT,check=True)
     with open('/scratch/probe.log','w') as stream:
         subprocess.run([python,'scripts/probe_forest_separability.py',
-            '--features','/scratch/results/features.npz','--output','/scratch/results/probe.json'],
+            '--features','/scratch/results/features.npz','--output','/scratch/results/probe.json',
+            '--scheme',os.environ['PROBE_SCHEME']],
             stdout=stream,stderr=subprocess.STDOUT,check=True)
 except Exception as exc:
     print(type(exc).__name__,str(exc),flush=True); status=1
@@ -52,16 +57,19 @@ raise SystemExit(status)
 '''
 
 
-def render(output: Path, deadline_seconds: int = 1800):
+def render(output: Path, *, scheme: str, feature_year: int, deadline_seconds: int = 1800):
     if not 60 <= deadline_seconds <= 1800:
         raise ValueError("deadline must be60–1800seconds")
+    if scheme not in CLASS_SCHEMES or feature_year not in (2022, 2023):
+        raise ValueError("scheme must be pre-registered and feature year 2022 or 2023")
     output.mkdir(parents=True, exist_ok=False)
     files = sorted((ROOT / 'imint').rglob('*.py'))
     files += [ROOT / 'scripts' / name for name in SCRIPTS]
     files += sorted((ROOT / 'imint/config').glob('*.yaml'))
     identities = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
     manifest = {'git_sha': subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
-                'uncommitted_source': True, 'files': identities, 'image': IMAGE}
+                'uncommitted_source': bool(subprocess.check_output(['git','status','--porcelain'],cwd=ROOT)),
+                'files': identities, 'image': IMAGE, 'scheme': scheme, 'feature_year': feature_year}
     manifest_bytes = (json.dumps(manifest,indent=2)+'\n').encode()
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw,mode='w:gz') as tar:
@@ -73,7 +81,7 @@ def render(output: Path, deadline_seconds: int = 1800):
     if len(bundle)>900000:
         raise ValueError('source bundle exceeds ConfigMap cap')
     sha=hashlib.sha256(bundle).hexdigest()
-    name='forest-separability-0127-'+sha[:8]
+    name=f'forest-separability-0127-{scheme}-{feature_year}-{sha[:8]}'
     cm={'apiVersion':'v1','kind':'ConfigMap','metadata':{'name':name,'namespace':'prithvi-training-default'},
         'immutable':True,'binaryData':{'source.tar.gz':base64.b64encode(bundle).decode()},
         'data':{'bootstrap.py':BOOTSTRAP}}
@@ -87,7 +95,8 @@ def render(output: Path, deadline_seconds: int = 1800):
                      'command':['/opt/venvs/model/bin/python','-u','/recipe/bootstrap.py'],
                      'securityContext':{'allowPrivilegeEscalation':False,'capabilities':{'drop':['ALL']}},
                      'env':[{'name':k,'value':v} for k,v in {
-                         'SOURCE_SHA256':sha,'OMP_NUM_THREADS':'2','MKL_NUM_THREADS':'2',
+                         'SOURCE_SHA256':sha,'PROBE_SCHEME':scheme,'PROBE_FEATURE_YEAR':str(feature_year),
+                         'OMP_NUM_THREADS':'2','MKL_NUM_THREADS':'2',
                          'OPENBLAS_NUM_THREADS':'2','NUMEXPR_NUM_THREADS':'2','PYTHONDONTWRITEBYTECODE':'1',
                          'PYTHONUNBUFFERED':'1','XDG_CACHE_HOME':'/scratch/cache',
                          'MPLCONFIGDIR':'/scratch/mpl','TORCH_HOME':'/scratch/torch','TMPDIR':'/scratch',
@@ -109,6 +118,9 @@ def render(output: Path, deadline_seconds: int = 1800):
 if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--output',required=True,type=Path)
+    ap.add_argument('--scheme',required=True,choices=sorted(CLASS_SCHEMES))
+    ap.add_argument('--feature-year',required=True,type=int)
     ap.add_argument('--deadline-seconds',default=1800,type=int)
     args=ap.parse_args()
-    render(args.output,args.deadline_seconds)
+    render(args.output,scheme=args.scheme,feature_year=args.feature_year,
+           deadline_seconds=args.deadline_seconds)
