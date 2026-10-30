@@ -86,7 +86,7 @@ class LcluRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
     lon: float = Field(ge=10, le=25)
     lat: float = Field(ge=55, le=70)
-    year: int = Field(ge=2018, le=2025)
+    year: int = Field(ge=2017, le=2025)
 
 
 class AnalyzerSummary(BaseModel):

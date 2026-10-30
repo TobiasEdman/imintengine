@@ -1,0 +1,109 @@
+{
+  "checked_at": "2026-10-29",
+  "years": [
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ],
+  "scope": "Ten complete municipalities, 3700 m buffer; Kiruna tätort extra in campaign config",
+  "registry_sha256": "b7d0717c20f3955b4832ee006aa6d835f18b3a376083f7616205add134246c5a",
+  "registry_url": "https://data.source.coop/tessera/tessera/npy/v1/manifest.parquet",
+  "vpp_index_sha256": "b1c9aa5c27e90ab383f1d5bf3b63b36d8bcd18df8610f6e0428809392918bde5",
+  "top10_unique_blocks": 3761,
+  "top10_source_bytes": 338595590264,
+  "top10_projected_cog_bytes": 274691005217,
+  "projection_basis": "One measured Uppsala native block, not actual regional conversion",
+  "shared_aux": [
+    "DEM",
+    "height",
+    "volume",
+    "basal_area",
+    "diameter",
+    "markfukt"
+  ],
+  "vpp_missing_years_in_local_index": [
+    2017,
+    2020,
+    2023,
+    2025
+  ],
+  "vpp_bbox_complete_years": {
+    "0180": [
+      2018,
+      2019,
+      2021,
+      2022,
+      2024
+    ],
+    "1480": [
+      2022,
+      2024
+    ],
+    "1280": [
+      2024
+    ],
+    "0380": [
+      2018,
+      2021,
+      2024
+    ],
+    "0580": [
+      2018,
+      2021,
+      2022,
+      2024
+    ],
+    "1980": [
+      2021,
+      2024
+    ],
+    "1880": [
+      2021,
+      2024
+    ],
+    "1283": [
+      2018,
+      2021,
+      2022,
+      2024
+    ],
+    "0680": [
+      2021,
+      2022,
+      2024
+    ],
+    "0581": [
+      2018,
+      2024
+    ]
+  },
+  "catalogue_checks": {
+    "collection": "copernicus_r_utm-wgs84_10_m_hrvpp-vpp_p_2017-now_v01",
+    "tile": "33VXF",
+    "verified_five_metrics_years": [
+      2017,
+      2020,
+      2023
+    ],
+    "global_2025_count": 0,
+    "global_2025_response_sha256": "5f923014a007a8f8c28cb6a27460f4070339c1600b0b36f34ba9fb3a1466602c",
+    "global_2025_url": "https://phenology.vgt.vito.be/products.geojson?collection=copernicus_r_utm-wgs84_10_m_hrvpp-vpp_p_2017-now_v01&count=1&start=2025-01-01&end=2025-12-31",
+    "current_accessedFrom_options": [
+      "S3",
+      "S3-private"
+    ],
+    "http_access_option_status": 400,
+    "ice_remote_range_reads_verified": false,
+    "source_urls": [
+      "https://github.com/eea/clms-hrvpp-tools-python",
+      "https://help.wekeo.eu/en/articles/6771578-how-to-use-the-harmonized-data-access-rest-api-with-curl"
+    ]
+  },
+  "verification_scope": "Metadata and source presence; neither all pixels nor temporal model accuracy qualified"
+}

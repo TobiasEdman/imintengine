@@ -23,6 +23,52 @@ from imint.inference.lclu import (
 from scripts.cache_predict import contract_pin, file_identity
 
 
+class RegionalSources:
+    """Route each exact-year request to one independently qualified inventory."""
+
+    def __init__(self, settings: list[dict], base: Path, cache: Path):
+        if not isinstance(settings, list) or not settings:
+            raise ValueError('At least one regional preparation inventory is required')
+        self.sources = [RepositorySources(item, base, cache) for item in settings]
+
+    def years(self, grid: Grid) -> list[int]:
+        return sorted({year for source in self.sources for year in source.years(grid)})
+
+    def _source(self, grid: Grid, year: int):
+        matches = [source for source in self.sources if year in source.years(grid)]
+        if not matches:
+            raise InputUnavailable('Verifierad källtäckning saknas för platsen och året.')
+        if len(matches) != 1:
+            raise ValueError('Overlapping regional preparation inventories')
+        return matches[0]
+
+    def identity(self, grid: Grid, year: int) -> dict:
+        return self._source(grid, year).identity(grid, year)
+
+    def prepare(self, grid: Grid, year: int) -> tuple[Path, dict]:
+        return self._source(grid, year).prepare(grid, year)
+
+    def locations(self) -> list[dict]:
+        tx = Transformer.from_crs(3006, 4326, always_xy=True)
+        project = Transformer.from_crs(4326, 3006, always_xy=True).transform
+        points = [transform(project, shape(area['geometry'])).representative_point()
+                  for area in self.areas()]
+        return [dict(zip(('lon', 'lat'), tx.transform(p.x, p.y))) for p in points]
+
+    def areas(self) -> list[dict]:
+        grouped = {}
+        for source in self.sources:
+            for area in source.areas():
+                key = json.dumps({'name': area['properties']['name'],
+                                  'geometry': area['geometry']}, sort_keys=True)
+                if key not in grouped:
+                    grouped[key] = area
+                else:
+                    grouped[key]['properties']['years'] = sorted(set(
+                        grouped[key]['properties']['years'] + area['properties']['years']))
+        return list(grouped.values())
+
+
 class RepositorySources:
     def __init__(self, settings: dict, base: Path, cache: Path):
         self.settings = settings

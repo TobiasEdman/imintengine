@@ -188,3 +188,36 @@ def test_county_mask_is_pinned_independently_of_omdrev_aux_selection(tmp_path):
     raster(path, np.zeros((20,20), np.int16), transform)
     with pytest.raises(ValueError, match='identity mismatch'):
         prep.verify_county_masks(manifest, tuple(bounds), tmp_path/'receipts')
+
+
+def test_regional_sources_route_exact_year_without_cross_region_fallback(tmp_path, monkeypatch):
+    from imint.inference.lclu_sources import RegionalSources
+    from shapely.geometry import box, mapping
+    from shapely.ops import transform
+    from pyproj import Transformer
+
+    settings, grids = [], [Grid.from_lonlat(18.07, 59.33), Grid.from_lonlat(20.23, 67.85)]
+    for i, grid in enumerate(grids):
+        polygon = box(grid.east-1000, grid.north-1000, grid.east+1000, grid.north+1000)
+        geometry = mapping(transform(Transformer.from_crs(3006, 4326, always_xy=True).transform, polygon))
+        path = tmp_path/f'{i}.json'
+        write_json(path, {'version':1, 'embedding':EMBEDDING, 'qualified_regions':[
+            {'country':'SE', 'name':f'Region {i}', 'verification':'test', 'years':[2024],
+             'geometry':geometry, 'bounds_3006':[grid.east-4000, grid.north-4000,
+                                               grid.east+4000, grid.north+4000]}]})
+        settings.append({'config':file_identity(path), 'python':'unused', 'timeout_seconds':10})
+    sources = RegionalSources(settings, tmp_path, tmp_path/'cache')
+    assert [a['properties']['name'] for a in sources.areas()] == ['Region 0','Region 1']
+    assert len(sources.locations()) == 2
+    for i, grid in enumerate(grids):
+        assert sources.years(grid) == [2024]
+        assert sources.identity(grid, 2024) == sources.sources[i].identity(grid, 2024)
+        monkeypatch.setattr(sources.sources[i], 'prepare', lambda g, y, i=i: (i, g, y))
+        assert sources.prepare(grid, 2024) == (i, grid, 2024)
+        with pytest.raises(InputUnavailable): sources.prepare(grid, 2025)
+    outside = Grid.from_lonlat(19, 63)
+    assert sources.years(outside) == []
+    with pytest.raises(InputUnavailable): sources.identity(outside, 2024)
+    with pytest.raises(ValueError, match='At least one'): RegionalSources([], tmp_path, tmp_path)
+    ambiguous = RegionalSources([settings[0], settings[0]], tmp_path, tmp_path)
+    with pytest.raises(ValueError, match='Overlapping'): ambiguous.identity(grids[0], 2024)

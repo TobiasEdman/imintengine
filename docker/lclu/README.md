@@ -1,10 +1,10 @@
-# Private Stockholm LCLU demo
+# Private Stockholm and Kiruna LCLU demo
 
 Temporary, single-worker TESSERA R4 inference for public clicks inside Stockholm
-municipality. The map is 504×504 pixels at 10 m; each input has 512×512 pixels.
-The municipal polygon restricts the snapped centre. Its 3,700 m source buffer
+municipality and Kiruna tätort (SCB 2023 boundary). The map is 504×504 pixels at 10 m; each input has 512×512 pixels.
+Each area polygon restricts the snapped centre. Its 3,700 m source buffer
 covers windows at the boundary, including windows crossing into neighbouring
-municipalities. The buffer is not an extension of click admission.
+areas. The buffer is not an extension of click admission.
 
 ## Sources and runtime
 
@@ -80,11 +80,23 @@ For a recovery, render a new immutable archive and use `--reuse-volume`,
 approved duration. For this run the original expiry is 2026-10-30 12:46:25 UTC;
 a retry must not reset the 24-hour budget. Keep the previous archive and Job
 manifest as evidence. The active UI revision uses
-`outputs/lclu-stockholm-20261029/demo-job-r3.json`. Revision r2 also preserves
+`outputs/lclu-stockholm-20261029/demo-job-r6.json`. Revision r2 also preserves
 the venv executable symlink when launching preparation subprocesses; resolving
 that link incorrectly selected the package-free system interpreter. Revision r3
 changes only the two UI assets: DES forest-green legend text and selection that
-preserves the user's current detail zoom (15 verified; maximum 18).
+preserves the user's current detail zoom (15 verified; maximum 18). Revision r4
+sets default result opacity to 100%, retains the slider, and renders categorical
+pixels without smoothing or animated zoom/fade transitions. Revision r5 adds
+Kiruna tätort and the area selector, retaining the same resource budget.
+Revision r6 adds native-pixel class inspection and the NMD presentation
+palette; the numerical classifications remain identical. Its actual expiry
+is 2026-10-30 12:40:48 UTC, within the original approval.
+
+Kiruna uses `config/lclu/kiruna_tatort.json`: the exact SCB tätort polygon,
+not the full municipality. It has a separate source inventory and persistent
+cache in `/work/kiruna_tatort`; Stockholm remains in `/work/stockholm`. The
+launcher qualifies both before publishing `/work/demo/serving.json`. A single
+resident R4 model routes each request to its exact region and year.
 
 ## Start, access and stop
 
@@ -106,7 +118,7 @@ do not recreate the initial resources:
 
 ```sh
 kubectl --context icekube -n prithvi-training-default port-forward \
-  --address 127.0.0.1 job/lclu-stockholm-0124-r3 8788:8000
+  --address 127.0.0.1 job/lclu-stockholm-0124-r6 8788:8000
 ```
 
 Open `http://127.0.0.1:8788/lclu`. The recipe creates no public Service, Ingress or
@@ -119,7 +131,7 @@ cache; never discard it implicitly. Stop the current Job before changing code
 or source configuration used by it. Stop the active 2026-10-29 recovery with:
 
 ```sh
-kubectl --context icekube -n prithvi-training-default delete job lclu-stockholm-0124-r3
+kubectl --context icekube -n prithvi-training-default delete job lclu-stockholm-0124-r6
 ```
 
 The cache remains billable until separately removed. Remove the PVC only after
@@ -137,5 +149,5 @@ The preflight confirms source inventory, not the scientific accuracy of R4.
 Real Stockholm inference, canonical pixel parity, cache timing and browser
 verification passed on 2026-10-29; see `docs/verification/lclu-service/verification.md`.
 New maps took 18–19 s, repeated HTTP retrieval 0.15 s, verified disk-cache reuse
-1.04 s. The active Job stops by 2026-10-30 13:45:02 Stockholm time. `MANIFEST.json` on the demo volume
+1.04 s. The active Job stops by 2026-10-30 13:42:51 Stockholm time. `MANIFEST.json` on the demo volume
 records base/application image, execution mode, exact source and input hashes.

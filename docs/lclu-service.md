@@ -5,7 +5,15 @@ historical year, submit a job, view its overlay and download GeoTIFF/provenance.
 The annual path uses a resident strict-loaded TESSERA R4 head and canonical
 inference inputs. It never calls the exact-day DES path. `/v1/analyze` remains.
 
-**Real R4 execution is verified for Uppsala and Stockholm, year 2024.**
+Click a completed map to read the class at the native 10 m cell, without
+starting another inference. `GET /v1/lclu/jobs/{job_id}/pixel?lon=…&lat=…`
+returns the saved result's class ID, display name, colour and aggregation
+note; nodata and outside-footprint points are distinct. Choose a new place
+outside the result or with the coordinate fields. The [NMD legend check](verification/lclu-service/nmd-legend.md)
+documents official colours and the model's aggregated/extended classes.
+
+**Real R4 execution is verified for Uppsala, Stockholm and Kiruna tätort, year 2024.**
+The demo supports independently qualified regions, with an area selector in the map.
 The Stockholm municipality demo reads lossless compact COGs and prepares
 auxiliary windows on demand. New maps took 18–19 seconds; repeated HTTP
 retrieval took under one second. A 504×504 Stockholm map matches canonical

@@ -29,9 +29,9 @@ def main():
     files = sorted((ROOT/'imint').rglob('*.py')) + sorted((ROOT/'imint/config').glob('*.yaml'))
     files += [ROOT/'scripts'/name for name in (
         'inference_comparison.py', 'cache_predict.py', 'enrich_tiles_tessera.py',
-        'prepare_lclu.py', 'stage_lclu_demo.py')]
+        'prepare_lclu.py', 'stage_lclu_demo.py', 'stage_lclu_campaign.py')]
     files += [ROOT/path for path in (
-        'config/lclu/stockholm.json', 'docs/lclu.html', 'docs/js/lclu.js',
+        'config/lclu/stockholm.json', 'config/lclu/kiruna_tatort.json', 'config/lclu/municipalities.json', 'docs/lclu.html', 'docs/js/lclu.js', 'docs/js/lclu-config.js',
         'docs/js/vendor/leaflet.min.js', 'docs/css/lclu.css', 'docs/css/styles.css',
         'docs/css/leaflet.css', 'docker/lclu/Dockerfile', 'docker/lclu/requirements.lock',
         'docker/lclu/run.py', 'docker/lclu/bootstrap.py', 'docker/lclu/smoke.py',

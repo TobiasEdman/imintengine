@@ -78,8 +78,10 @@ def main(argv=None):
     server.app.router.lifespan_context=life
     # Replace only the test page endpoint; production code has no synthetic switch.
     page=(Path(__file__).resolve().parents[2]/'docs/lclu.html').read_text()
+    for name, target in server._LCLU_ASSETS.items():
+        page = page.replace('src="'+target+'"', 'src="/lclu-assets/'+name+'"').replace('href="'+target, 'href="/lclu-assets/'+name)
     page=page.replace('<body>','<body><div style="position:sticky;top:0;z-index:2000;background:#cff8e4;padding:10px;text-align:center;font-weight:700">SYNTHETIC DEMO · RANDOM WEIGHTS · NOT AN R4 CLASSIFICATION</div>')
-    page=page.replace('Lokal operatörsprototyp · modellresultat för granskning.',
+    page=page.replace('Interaktiv demo · befintlig TESSERA R4-modell.',
                       'Syntetisk demo · båda åren använder samma testmönster, ingen historisk förändring visas.')
     page=page.replace('Hämta GeoTIFF ↓', 'Hämta syntetisk GeoTIFF ↓')
     async def synthetic_page(): return HTMLResponse(page)

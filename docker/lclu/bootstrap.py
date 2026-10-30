@@ -5,6 +5,7 @@ Python base is digest-pinned; source bundle and all Python distributions are
 hash-pinned. This process never alters the mounted reference-data volume.
 """
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -12,15 +13,18 @@ import subprocess
 import sys
 import tarfile
 
-bundle = Path('/recipe/source.tar.gz')
-bundle_hash = hashlib.sha256(bundle.read_bytes()).hexdigest()
+parts = sorted(Path('/recipe').glob('source.tar.gz*'))
+if not parts:
+    raise ValueError('Missing source archive')
+bundle = b''.join(part.read_bytes() for part in parts)
+bundle_hash = hashlib.sha256(bundle).hexdigest()
 if bundle_hash != os.environ['LCLU_BUNDLE_SHA256']:
     raise ValueError('Source archive identity mismatch')
 source = Path('/work/source')/bundle_hash
 if not source.exists():
     staging = source.with_name(bundle_hash+'.partial')
     staging.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(bundle) as archive:
+    with tarfile.open(fileobj=io.BytesIO(bundle), mode='r:gz') as archive:
         archive.extractall(staging, filter='data')
     staging.rename(source)
 manifest = json.loads((source/'SOURCE_MANIFEST.json').read_text())
@@ -41,7 +45,7 @@ if not (environment/'READY').exists():
         subprocess.run([str(python), '-m', 'pip', 'freeze', '--all'], stdout=stream, check=True)
     (environment/'READY').write_text(lock_hash+'\n')
 os.environ['PYTHONPATH'] = str(source)
-os.environ['IMINT_LCLU_MANIFEST'] = '/work/stockholm/serving.json'
+os.environ['IMINT_LCLU_MANIFEST'] = '/work/demo/serving.json'
 os.environ['IMINT_API_OUTPUT_DIR'] = '/work/results'
 os.environ['LCLU_EXECUTION_MODE'] = 'source-recipe'
 system_root = Path('/work/system/expat-2.5.0-1-deb12u5')

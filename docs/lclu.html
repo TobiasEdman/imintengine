@@ -5,16 +5,17 @@
   <title>Årskarta · IMINT / Digital Earth Sweden</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/lclu-assets/styles.css?v=2">
-  <link rel="stylesheet" href="/lclu-assets/leaflet.css">
-  <link rel="stylesheet" href="/lclu-assets/lclu.css">
-  <script defer src="/lclu-assets/leaflet.js"></script>
-  <script defer src="/lclu-assets/lclu.js"></script>
+  <link rel="stylesheet" href="css/styles.css?v=2">
+  <link rel="stylesheet" href="css/leaflet.css">
+  <link rel="stylesheet" href="css/lclu.css">
+  <script defer src="js/vendor/leaflet.min.js"></script>
+  <script defer src="js/lclu-config.js"></script>
+  <script defer src="js/lclu.js"></script>
 </head>
 <body>
 <header class="header">
   <div class="header-left"><div><h1><span>IMINT</span> / Årskarta</h1><p>Digital Earth Sweden</p></div></div>
-  <span class="theme-tab active">Marktäcke · TESSERA R4</span>
+  <nav class="header-nav" aria-label="Showcase"><a class="theme-tab" href="index.html">← Showcase</a><span class="theme-tab active">Årskarta · TESSERA R4</span></nav>
 </header>
 <main>
   <section class="intro"><p class="eyebrow" id="area-title">SVERIGE / HISTORISKA ÅR</p><h2>En plats. Ett år. En karta.</h2>
@@ -27,6 +28,10 @@
     </section>
     <aside class="controls">
       <p class="eyebrow">DIN ÅRSKARTA</p>
+      <div id="area-control" hidden>
+        <label for="area">Visa område</label>
+        <select id="area" aria-label="Visa område"></select>
+      </div>
       <h3 id="location-title">Välj en plats</h3>
       <form id="location-form" class="coordinate-form">
         <label>Latitud<input id="lat" type="number" step="any" min="55" max="70" value="59.86" required></label>
@@ -42,17 +47,23 @@
         <h3 id="result-title">Årskarta klar</h3>
         <p id="coverage"></p>
         <p id="timing"></p>
-        <label for="opacity">Kartlagrets synlighet <output id="opacity-value">80 %</output></label>
-        <input id="opacity" type="range" min="0" max="100" value="80">
+        <p>Klicka på resultatet för att visa markklass. Välj en ny plats utanför resultatet eller med koordinatfälten.</p>
+        <label for="opacity">Kartlagrets synlighet <output id="opacity-value">100 %</output></label>
+        <input id="opacity" type="range" min="0" max="100" value="100">
         <div class="downloads"><a id="download-tif" download>Hämta GeoTIFF ↓</a><a id="download-provenance" download>Datakällor och proveniens ↓</a></div>
       </section>
-      <p class="operator-note">Lokal operatörsprototyp · modellresultat för granskning.</p>
+      <p class="operator-note">Interaktiv demo · befintlig TESSERA R4-modell.</p>
     </aside>
   </div>
-  <section class="testimonial"><h3>Vad betyder året?</h3><p id="historical-note"></p>
+  <section class="testimonial"><h3>Vad betyder året?</h3><p id="historical-note">Året gäller TESSERA och HR-VPP. Trädhöjd, skogliga grunddata, markfukt och DEM är fasta stödlager som delas mellan åren.</p>
     <p>Genomskinliga pixlar saknar användbara indata. Svart är modellklassen bakgrund (0). Modellens klassning är en skattning.</p>
   </section>
-  <section class="legend-section"><h3>Teckenförklaring</h3><div id="legend" class="legend"></div></section>
+  <section class="legend-section"><h3>Teckenförklaring</h3>
+    <p>Färger och benämningar följer <a href="https://geodata.naturvardsverket.se/nedladdning/marktacke/NMD2023/Basskikt_v2_x/" target="_blank" rel="noopener">NMD 2023</a> där klasserna motsvarar varandra.
+      Sammanslagna klasser använder representativa färger. Jordbruksklasser och hygge är modellens egna tillägg.</p>
+    <div id="legend" class="legend"></div>
+    <details class="legend-details"><summary>Så motsvarar modellklasserna NMD</summary><ul id="legend-details"></ul></details>
+  </section>
 </main>
 <footer class="section-byline">IMINT · Digital Earth Sweden · 504 × 504 pixlar · SWEREF 99 TM</footer>
 </body></html>

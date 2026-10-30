@@ -308,3 +308,78 @@ and the original resource/time limits apply. [UI verification](ui-r3.json).
 
 The updated live r3 runtime passed its import/export smoke and served the
 corrected CSS. Its deadline is 2026-10-30 13:45:02 Stockholm time.
+
+
+## Opaque, sharp result pixels — 2026-10-29
+
+The result now defaults to 100% opacity; the existing slider remains active.
+Only classification overlays use pixelated image rendering. Zoom and fade
+animations are disabled to avoid a blurred transition. The original 10 m
+classification and nearest-neighbour exported overlay are unchanged.
+
+The browser preview verified default opacity 1, slider adjustment to 0.01 and
+back to 1, a 526×527 native overlay, and sharp display at zoom 15. Live r4
+verification confirmed the same default, rendering and zoom; screenshots were
+visually inspected. The downloaded GeoTIFF is byte-identical to the earlier
+verified result. JS syntax and independent review passed.
+[Machine-readable receipt](ui-r4.json). The same 4 CPU, 8 GiB and 20 GiB cache
+are retained; the deadline remains within the original approval.
+
+
+## Kiruna tätort — 2026-10-29
+
+The user selected Kiruna tätort instead of Abisko or the full municipality.
+The demo uses SCB's exact 2023 tätort polygon (2584TC103), with a 3,700 m
+source buffer. All 116,264 possible snapped centre candidates, including a
+rounding margin, were checked: every input needs at most four native blocks.
+The five exact-year HR-VPP metrics cover the entire buffered preparation extent.
+
+Nine 2024 TESSERA blocks took 211.55 s to stage and verify. Originals occupy
+577,614,636 bytes and compact COGs 452,870,047 bytes. Every base-resolution COG
+pixel was reopened and compared to its original during conversion.
+
+A real four-block window at 20.197573827965233 E, 67.87611539512876 N matched
+all 33,554,432 original-pipeline embedding values and their validity mask.
+All 254,016 classified output pixels matched canonical R4 inference, with
+no nodata in this test window. The first run took 18.91 s and verified cache
+reuse 1.07 s. This establishes pipeline parity, not classification accuracy
+against independent reference labels. [Numeric receipt](kiruna.json).
+
+Both regions retain separate inventories/caches and use one resident model.
+The UI's area selector switches between Stockholm and Kiruna tätort.
+[158 focused tests passed](pytest-kiruna.txt), including exact-year routing,
+outside-area rejection, ambiguous-overlap rejection and combined startup in
+a fresh directory. Independent review found no remaining actionable issues.
+
+Live r5 API checks passed for both Stockholm and Kiruna. Both GeoTIFF hashes
+match the previously verified outputs. Requests outside the tätort and for
+2025 are rejected (422). Browser area switching Stockholm → Kiruna → Stockholm
+→ Kiruna passed; stale results clear on switching. The representative Kiruna
+map took 18.5 s, then 0.2 s on repeat; all 254,016 pixels were valid. The
+GeoTIFF/PNG were downloaded, hash-checked and reopened. The browser was left
+on Kiruna at zoom 15, 100% opacity, with pixelated rendering. Live r5 ends
+2026-10-30 13:42:51 Stockholm time within the original approval.
+
+
+## Native pixel inspection and NMD legend (2026-10-29, r6)
+
+Task 0126 follow-up scope includes the user-requested click inspector and
+NMD legend check. The official QML and aggregation limitations are recorded
+in [nmd-legend.md](nmd-legend.md). Tests: 161 passed; independent review
+found no actionable issues. Full receipts: [pixel-nmd.json](pixel-nmd.json).
+
+Live r6 compared both Kiruna and Stockholm with the saved r5 GeoTIFFs:
+254,016 native class values per map were exactly equal, with unchanged CRS,
+transform and nodata. The palette metadata and resulting PNG colours changed
+together. HTTP pixel queries matched all 15 classes present in each map;
+outside queries returned inside=false. Synthetic tests additionally cover
+nodata, class 0, all four edges, invalid coordinates, corrupt artifacts and
+absence of additional inference.
+
+Browser checks: Kiruna result retained after click; popup displayed
+Buskdominerad mark and its NMD aggregation note. Zoom 15, opacity 100%,
+pixelated rendering, all 29 legend entries and expandable notes verified.
+The live Job is lclu-stockholm-0124-r6, source archive
+d36c27894b1461767e958c8dfe427d2901f5e9a58116c347894ddd0275dda6d4.
+It uses the same 4CPU/8Gi/20Gi budget, preserves caches and expires
+2026-10-30 12:40:48 UTC. Implementation commit remains pending user request.

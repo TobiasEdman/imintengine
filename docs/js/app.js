@@ -562,7 +562,7 @@
     }
 
     function bindSubTabSwitching() {
-        document.querySelectorAll('.sub-tab').forEach(function(tab) {
+        document.querySelectorAll('.sub-tab[data-subtab]').forEach(function(tab) {
             tab.addEventListener('click', function(e) {
                 e.preventDefault();
                 var nav = this.closest('.sub-tab-nav');
