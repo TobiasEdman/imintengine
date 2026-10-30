@@ -679,19 +679,63 @@ async def submit_lclu(req: LcluRequest):
     return response
 
 
-@app.get('/v1/lclu/jobs/{job_id}/files/{name}', tags=['lclu'])
-async def lclu_file(job_id: str, name: str):
+async def _lclu_artifacts(job_id: str) -> tuple[dict, Path]:
     job = await _get_job(job_id)
-    allowed = {'classification.tif': 'image/tiff', 'overlay.png': 'image/png',
-               'legend.json': 'application/json', 'provenance.json': 'application/json'}
+    service = _lclu_service
     if (not job or job.get('kind') != 'lclu' or job['status'] != JobStatus.SUCCESS
-            or name not in allowed or _lclu_service is None):
+            or service is None):
         raise HTTPException(status_code=404, detail='Completed artifact not found')
-    result = await asyncio.to_thread(_lclu_service.cached, job['result']['cache_key'])
+    try:
+        result = await asyncio.to_thread(service.cached, job['result']['cache_key'])
+    except RuntimeError:
+        logger.exception('Annual artifact integrity check failed for job %s', job_id)
+        raise HTTPException(status_code=503, detail='Kartfilen kunde inte verifieras.') from None
     if result is None:
         raise HTTPException(status_code=404, detail='Artifact is no longer available')
-    return FileResponse(_lclu_service.output_root / result['cache_key'] / name,
-                        media_type=allowed[name], filename=name)
+    return result, service.output_root / result['cache_key']
+
+
+@app.get('/v1/lclu/jobs/{job_id}/files/{name}', tags=['lclu'])
+async def lclu_file(job_id: str, name: str):
+    allowed = {'classification.tif': 'image/tiff', 'overlay.png': 'image/png',
+               'legend.json': 'application/json', 'provenance.json': 'application/json'}
+    if name not in allowed:
+        raise HTTPException(status_code=404, detail='Completed artifact not found')
+    _, directory = await _lclu_artifacts(job_id)
+    return FileResponse(directory / name, media_type=allowed[name], filename=name)
+
+
+@app.get('/v1/lclu/jobs/{job_id}/pixel', tags=['lclu'])
+async def lclu_pixel(job_id: str, lon: float, lat: float):
+    """Read the clicked native 10 m class; never rerun inference or sample RGB."""
+    if not (math.isfinite(lon) and math.isfinite(lat) and -180 <= lon <= 180 and -90 <= lat <= 90):
+        raise HTTPException(status_code=422, detail='Ogiltig koordinat.')
+    result, directory = await _lclu_artifacts(job_id)
+    ring = result['geometry']['footprint']['coordinates'][0]
+    if not (min(p[0] for p in ring) <= lon <= max(p[0] for p in ring)
+            and min(p[1] for p in ring) <= lat <= max(p[1] for p in ring)):
+        return {'inside': False, 'year': result['year']}
+
+    def sample():
+        import rasterio
+        from rasterio.warp import transform
+        from rasterio.windows import Window
+        import json
+        from imint.inference.lclu import NODATA
+
+        with rasterio.open(directory / 'classification.tif') as src:
+            east, north = transform('EPSG:4326', src.crs, [lon], [lat])
+            row, col = src.index(east[0], north[0])
+            if not (0 <= row < src.height and 0 <= col < src.width):
+                return {'inside': False, 'year': result['year']}
+            value = int(src.read(1, window=Window(col, row, 1, 1))[0, 0])
+        items = json.loads((directory / 'legend.json').read_text())
+        item = next(item for item in items if item['id'] == value)
+        return {'inside': True, 'year': result['year'], 'row': row, 'col': col,
+                'class_id': value, 'name': item['name'], 'color': item['color'],
+                'nodata': value == NODATA, 'note': item.get('note', '')}
+
+    return await asyncio.to_thread(sample)
 
 
 _WEB_ROOT = Path(__file__).resolve().parents[3] / 'docs'

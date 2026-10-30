@@ -26,7 +26,8 @@ from rasterio.transform import array_bounds, from_bounds
 from rasterio.warp import Resampling, calculate_default_transform, reproject, transform_bounds
 
 from imint.job import GeoContext
-from imint.schema.unified_schema import UNIFIED_CLASSES, UNIFIED_COLORS
+from imint.schema.unified_schema import UNIFIED_CLASSES
+from imint.inference.lclu_legend import MAP_COLORS, legend
 from imint.training.tile_config import TileConfig
 from scripts.cache_predict import atomic_write, contract_pin, file_identity
 
@@ -298,12 +299,6 @@ class TesseraR4:
             _close_inference_inputs(inputs)
 
 
-def legend() -> list[dict]:
-    return [{"id": key, "name": name, "color": "#%02x%02x%02x" % UNIFIED_COLORS[key]}
-            for key, name in UNIFIED_CLASSES.items()] + [
-                {"id": NODATA, "name": "Data saknas", "color": None}]
-
-
 def export_map(prediction: np.ndarray, valid: np.ndarray, grid: Grid, output: Path) -> dict:
     from imint.exporters.export import save_geotiff
     from PIL import Image
@@ -318,7 +313,7 @@ def export_map(prediction: np.ndarray, valid: np.ndarray, grid: Grid, output: Pa
     save_geotiff(classes, str(path), geo=geo)
     with rasterio.open(path, "r+") as dst:
         dst.nodata = NODATA
-        dst.write_colormap(1, {**{k: (*v, 255) for k, v in UNIFIED_COLORS.items()},
+        dst.write_colormap(1, {**{k: (*v, 255) for k, v in MAP_COLORS.items()},
                               NODATA: (0, 0, 0, 0)})
     # Verify the actual bytes after reopening, including the 40 m crop shift.
     with rasterio.open(path) as src:
@@ -335,7 +330,7 @@ def export_map(prediction: np.ndarray, valid: np.ndarray, grid: Grid, output: Pa
                   dst_transform=transform, dst_crs="EPSG:3857", src_nodata=NODATA,
                   dst_nodata=NODATA, resampling=Resampling.nearest)
     palette = np.zeros((256, 4), np.uint8)
-    for key, color in UNIFIED_COLORS.items():
+    for key, color in MAP_COLORS.items():
         palette[key] = (*color, 255)  # class 0 remains opaque black
     Image.fromarray(palette[display]).save(output / "overlay.png")
     west, south, east, north = transform_bounds(
@@ -352,7 +347,8 @@ def implementation_identity() -> dict:
     files = [ROOT / "scripts/inference_comparison.py", ROOT / "scripts/cache_predict.py",
              ROOT / "imint/training/unified_dataset.py", ROOT / "imint/training/tile_config.py",
              ROOT / "imint/exporters/export.py", ROOT / "imint/schema/unified_schema.py",
-             Path(__file__), ROOT / "imint/inference/lclu_sources.py",
+             Path(__file__), ROOT / "imint/inference/lclu_legend.py",
+             ROOT / "imint/inference/lclu_sources.py",
              ROOT / "imint/inference/lclu_cog.py",
              ROOT / "scripts/prepare_lclu.py"] + sorted((ROOT / "imint/fm").rglob("*.py"))
     return {str(p.relative_to(ROOT)): file_identity(p)["sha256"] for p in files}
@@ -373,7 +369,12 @@ class LcluService:
         manifest = json.loads(path.read_text())
         if manifest["version"] != 1:
             raise ValueError("Unsupported serving manifest")
-        if "preparation" in manifest:
+        if sum(key in manifest for key in ("preparation", "preparations", "inputs")) != 1:
+            raise ValueError("Exactly one source catalog type is required")
+        if "preparations" in manifest:
+            from imint.inference.lclu_sources import RegionalSources
+            sources = RegionalSources(manifest["preparations"], path.parent, output_root)
+        elif "preparation" in manifest:
             from imint.inference.lclu_sources import RepositorySources
             sources = RepositorySources(manifest["preparation"], path.parent, output_root)
         else:

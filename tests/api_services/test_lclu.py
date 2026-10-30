@@ -12,14 +12,14 @@ from .helpers import drain
 REQUEST = {'lon': 17.64, 'lat': 59.86, 'year': 2024}
 
 
-def install(api, monkeypatch):
+def install(api, monkeypatch, *, prediction=None, valid=None):
     # Import after the API fixture's isolated module setup.
     from imint.inference.lclu import Grid, LcluService, BundleCatalog, EMBEDDING, AUX_NAMES
     from scripts.cache_predict import file_identity
     grid = Grid.from_lonlat(17.64, 59.86)
     path = api.tmp / 'synthetic.npz'
     arrays = {'tessera': np.full((128,512,512), .25, np.float16),
-              'valid_embedding': np.ones((512,512), bool), 'year': 2024,
+              'valid_embedding': np.ones((512,512), bool) if valid is None else valid, 'year': 2024,
               'tessera_year': 2024, 'vpp_year': 2024, 'crs': np.array('EPSG:3006'),
               'transform': np.array(list(grid.transform())[:6])}
     arrays.update({name: np.ones((512,512), np.float32) for name in AUX_NAMES})
@@ -36,7 +36,7 @@ def install(api, monkeypatch):
         calls = 0
         def predict(self, path, record):
             self.calls += 1
-            return np.zeros((504,504), np.uint8)
+            return np.zeros((504,504), np.uint8) if prediction is None else prediction.copy()
     service = LcluService(Model(), BundleCatalog(entries,api.tmp), api.tmp / 'artifacts')
     monkeypatch.setattr(api.server, '_lclu_service', service)
     return service
@@ -121,4 +121,48 @@ def test_queue_bound_failure_retry_and_shutdown(api,monkeypatch):
             assert job.status == 'failed' and '/private/' not in job.error
             retried=await api.server.submit_lclu(api.server.LcluRequest(**REQUEST))
             assert retried.job_id != failed.job_id
+    asyncio.run(run())
+
+
+def test_pixel_inspection_reads_native_classes_nodata_and_edges_without_inference(api, monkeypatch):
+    from pyproj import Transformer
+    from imint.inference.lclu import Grid
+    grid = Grid.from_lonlat(REQUEST['lon'], REQUEST['lat'])
+    tx = Transformer.from_crs(3006, 4326, always_xy=True)
+    def position(row, col):
+        return tx.transform(*(grid.transform(504)*(col+.5, row+.5)))
+    prediction=np.zeros((504,504),np.uint8)
+    prediction[0,0]=9;prediction[1,2]=7;prediction[503,503]=27
+    valid=np.ones((512,512),bool);valid[6,7]=False
+    async def run():
+        async with api.server.lifespan(api.server.app):
+            service=install(api,monkeypatch,prediction=prediction,valid=valid)
+            submitted=await api.server.submit_lclu(api.server.LcluRequest(**REQUEST))
+            await asyncio.gather(*tuple(api.server._pending_jobs))
+            for row,col,value,name in [(0,0,9,'Exploaterad mark'),(1,2,7,'Öppen våtmark'),
+                                       (2,3,255,'Data saknas'),(3,4,0,'bakgrund'),
+                                       (503,503,27,'öppen mark utan vegetation')]:
+                lon,lat=position(row,col)
+                pixel=await api.server.lclu_pixel(submitted.job_id,lon,lat)
+                assert pixel['inside'] and (pixel['row'],pixel['col'])==(row,col)
+                assert (pixel['class_id'],pixel['name'])==(value,name)
+                assert pixel['nodata']==(value==255) and pixel['year']==2024
+                assert (pixel['color'] is None)==(value==255)
+            for row,col in [(-1,0),(504,0),(0,-1),(0,504)]:
+                assert (await api.server.lclu_pixel(submitted.job_id,*position(row,col)))['inside'] is False
+            assert (await api.server.lclu_pixel(submitted.job_id,-75,0))['inside'] is False
+            for lon,lat in [(float('nan'),59),(18,float('inf')),(181,59)]:
+                with pytest.raises(api.server.HTTPException) as invalid:
+                    await api.server.lclu_pixel(submitted.job_id,lon,lat)
+                assert invalid.value.status_code==422
+            with pytest.raises(api.server.HTTPException) as absent:
+                await api.server.lclu_pixel('unknown',REQUEST['lon'],REQUEST['lat'])
+            assert absent.value.status_code==404
+            assert service.model.calls==1 and not api.calls and not api.jobs
+            result=api.server._jobs[submitted.job_id]['result']
+            path=service.output_root/result['cache_key']/'classification.tif'
+            path.write_bytes(b'corrupted map')
+            with pytest.raises(api.server.HTTPException) as missing:
+                await api.server.lclu_pixel(submitted.job_id,REQUEST['lon'],REQUEST['lat'])
+            assert missing.value.status_code==503 and service.model.calls==1
     asyncio.run(run())

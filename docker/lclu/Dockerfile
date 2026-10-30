@@ -15,7 +15,7 @@ COPY SOURCE_MANIFEST.json SOURCE_MANIFEST.json
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/imintengine \
     OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 GDAL_CACHEMAX=256 VPP_SOURCE=wekeo \
     IMINT_API_MAX_PIXELS=262144 IMINT_API_MAX_JOBS=4 \
-    IMINT_LCLU_MANIFEST=/work/stockholm/serving.json IMINT_API_OUTPUT_DIR=/work/results
+    IMINT_LCLU_MANIFEST=/work/demo/serving.json IMINT_API_OUTPUT_DIR=/work/results
 EXPOSE 8000
 RUN python docker/lclu/smoke.py
 CMD ["python", "-m", "uvicorn", "imint.api.v1:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--lifespan", "on"]

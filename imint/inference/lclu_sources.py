@@ -23,6 +23,38 @@ from imint.inference.lclu import (
 from scripts.cache_predict import contract_pin, file_identity
 
 
+class RegionalSources:
+    """Route each exact-year request to one independently qualified inventory."""
+
+    def __init__(self, settings: list[dict], base: Path, cache: Path):
+        if not isinstance(settings, list) or not settings:
+            raise ValueError('At least one regional preparation inventory is required')
+        self.sources = [RepositorySources(item, base, cache) for item in settings]
+
+    def years(self, grid: Grid) -> list[int]:
+        return sorted({year for source in self.sources for year in source.years(grid)})
+
+    def _source(self, grid: Grid, year: int):
+        matches = [source for source in self.sources if year in source.years(grid)]
+        if not matches:
+            raise InputUnavailable('Verifierad källtäckning saknas för platsen och året.')
+        if len(matches) != 1:
+            raise ValueError('Overlapping regional preparation inventories')
+        return matches[0]
+
+    def identity(self, grid: Grid, year: int) -> dict:
+        return self._source(grid, year).identity(grid, year)
+
+    def prepare(self, grid: Grid, year: int) -> tuple[Path, dict]:
+        return self._source(grid, year).prepare(grid, year)
+
+    def locations(self) -> list[dict]:
+        return [point for source in self.sources for point in source.locations()]
+
+    def areas(self) -> list[dict]:
+        return [area for source in self.sources for area in source.areas()]
+
+
 class RepositorySources:
     def __init__(self, settings: dict, base: Path, cache: Path):
         self.settings = settings
