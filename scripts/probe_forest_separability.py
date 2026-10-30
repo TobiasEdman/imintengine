@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Development-only frozen-feature diagnostic for NMD dryland forest types.
+"""Development-only frozen-feature diagnostic for NMD forest types.
 
-Two pre-registered class schemes: ``binary`` (NMD 113 versus 115–117, the
-first IM-023 question) and ``forest5`` (111, 112, 113, 114 and 115–117).
+Pre-registered class schemes (scripts/forest_separability_schemes.py):
+``binary`` (NMD 113 versus 115–117, the first IM-023 question), ``forest5``
+(dryland 111, 112, 113, 114, 115–117) and ``sumpskog5`` (the same types on
+wetland, 121–127).
 
 This never trains a serving model. Raw NMD labels measure agreement with NMD,
 not independent field accuracy. Historical training locations may have been
@@ -184,7 +186,7 @@ def run_probe(bundle: Path, *, scheme: str, n_splits: int = 5, block_m: float = 
             raise ValueError("every class must be present in every train and test fold")
     reference = " versus ".join(f"{name} ({', '.join(map(str, codes))})" for name, codes in classes)
     report = {"role": ROLE, "scheme": scheme,
-              "reference": f"NMD2023 raw {reference}; dryland only",
+              "reference": f"NMD2023 raw {reference}",
               "feature_year": meta["feature_year"], "reference_year": meta["reference_year"],
               "reference_year_gap": meta["reference_year"] - meta["feature_year"],
               "limitations": ["Historical training locations; not an unseen-area model evaluation.",
