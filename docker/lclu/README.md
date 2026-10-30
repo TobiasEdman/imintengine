@@ -123,6 +123,12 @@ API holds a single-worker flock in its output directory; the running demo's
 the old Job once the campaign Job is Ready. Its deadline is the remainder of
 the approved week, not a new week.
 
+`docker/lclu/run_full_demo.sh` performs the whole sequence unattended from the
+operator's machine: wait for the HR-VPP gap-fill Job, commit its preflight,
+expand the PVC, create r8, wait until it serves, move the 8788 port-forward
+and stop r7. Each step is skipped when already done, so it is re-run after an
+interruption; it stops before changing anything if an upstream Job failed.
+
 ## Start, access and stop
 
 Actual creation requires the operator's explicit approval for the demo scope.
