@@ -1,0 +1,58 @@
+{
+  "initial_nmd": {
+    "commit": "63d8c19cd13d789f29981b8b3b2afcd7e7611132",
+    "metadata": "commit 63d8c19cd13d789f29981b8b3b2afcd7e7611132\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Sun Feb 22 14:32:15 2026 +0100\nCommit:     Tobias Edman <tobias@modinedman.se>\nCommitDate: Sun Feb 22 14:32:15 2026 +0100\n\n    feat: add NMD land cover analyzer with DES fetch and cross-referencing\n    \n    Integrate Nationellt Markt\u00e4ckedata (NMD) from Digital Earth Sweden to\n    provide land cover context for all other analyzers. The NMD analyzer\n    cross-references spectral, change detection and object detection results\n    with LULC classes (forest, open land, developed, water) at two detail\n    levels. Includes NMD data fetching via openEO with local file caching,\n    SCL-based cloud masking, and date window search for Sentinel-2 data.\n    \n    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n",
+    "path": "imint/analyzers/nmd.py",
+    "source_sha256": "70cab0fe64490cecaaed08fd9f2f5e00956be8d1a94bd618e8dbfd88cc3e6d8b"
+  },
+  "training_lookup": {
+    "commit": "9e1c5ce33d2ed9249e4c9519e107fed62148076d",
+    "metadata": "commit 9e1c5ce33d2ed9249e4c9519e107fed62148076d\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Tue Feb 24 08:56:47 2026 +0100\nCommit:     Tobias Edman <tobias@modinedman.se>\nCommitDate: Tue Feb 24 08:56:47 2026 +0100\n\n    feat: add LULC training module with rare-class handling strategy\n    \n    Standalone Prithvi-EO-2.0 + UPerNet training pipeline for NMD Level 2\n    land cover classification across Sweden. Includes:\n    \n    - Training module (imint/training/): config, class schema (19/10-class),\n      geographic grid sampler, PyTorch dataset, data preparation, trainer,\n      evaluator, and focal loss\n    - Rare class strategy: tile-level oversampling by rarity score,\n      grid densification in urban/coastal/alpine areas, focal loss option,\n      per-class IoU monitoring with worst-class early stopping\n    - Entry scripts: prepare_lulc_data.py and train_lulc.py\n    - TASK_HEAD_REGISTRY: nmd_lulc entry with local_path support\n    \n    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\n",
+    "path": "imint/training/class_schema.py",
+    "source_sha256": "76ef941163b87c95c2567a11979a8efb457db0751966f87f3129c8e9dccb8b96"
+  },
+  "partial_repair": {
+    "commit": "083459ac532244be906f0b6323491e330f277063",
+    "metadata": "commit 083459ac532244be906f0b6323491e330f277063\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Mon Mar 23 06:24:19 2026 +0100\nCommit:     Tobias Edman <tobias@modinedman.se>\nCommitDate: Mon Mar 23 06:24:19 2026 +0100\n\n    fix: correct NMD code mapping + gap-fill bbox alignment\n    \n    NMD codes 115-117 are deciduous forest subtypes (triviall\u00f6vskog,\n    \u00e4dell\u00f6vskog), not clearcuts. Only 118 is tempor\u00e4rt ej skog.\n    Code 241 mapped to open_land. Wetland codes 125-127 mapped to\n    wetland deciduous, only 128 to wetland temp.\n    \n    Gap-fill bbox was using easting as west corner + 10km offset\n    instead of center \u00b1 grid_half through _sweref99_to_wgs84 \u2192\n    _to_nmd_grid. This caused replacement frames to show a\n    completely different location than the original data.\n    \n    Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\n",
+    "path": "imint/analyzers/nmd.py",
+    "source_sha256": "560f56d1da68d5251f04159b915f3ffb5745ee7b06b8e36b0bd6f82c0e27ad4e"
+  },
+  "nmd2023_compatibility": {
+    "commit": "df45803a5851dd9fe440d086ca9da8aa0ac28d13",
+    "metadata": "commit df45803a5851dd9fe440d086ca9da8aa0ac28d13\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Wed Aug 5 21:58:24 2026 +0200\nCommit:     Tobias Edman <tobias@modinedman.se>\nCommitDate: Wed Aug 5 21:58:24 2026 +0200\n\n    feat(schema): NMD2023 \u2192 unified 29-class mapping (retrain step 1)\n    \n    First executable step of the NMD2023 label-source retrain\n    (docs/experiments/nmd2023_label_source_retrain.md): the schema + mapping that\n    lets build_labels emit NMD2023-based labels.\n    \n    Why: NMD2023's basskikt codes differ from NMD2018 for open land (4-digit codes\n    > uint8) and carry structure detail NMD2018 has no codes for. The existing\n    uint8 nmd_raster_to_lulc LUT silently clips those to background, so a dedicated\n    mapping is required.\n    \n    How:\n    - Schema grows 23 \u2192 29. Six NMD2023-only classes: 23 torvt\u00e4kt, 24/25/26\n      busk/ris/gr\u00e4s-dominated open land, 27 bare open land, 28 sn\u00f6/is (glacier +\n      snowfield merged). Moisture level (torr/frisk/frisk-fuktig) collapsed \u2014 it is\n      DEM-derived, not spectral.\n    - nmd2023_to_unified(): direct raw-uint16 \u2192 unified LUT. Forest codes 111-128\n      resolve to the SAME unified classes as NMD2018 so a v8b finetune keeps a\n      consistent forest label space; only the open-land/peat/snow detail is new.\n      Out-of-range / no-data (raster 0) \u2192 background.\n    - k8s: the per-plot v8b eval job (produced the committed benchmark dump) and the\n      one-off cephfs-cleanup pod (freed the 520G pre-recoreg backup) recorded for\n      reproducibility.\n    \n    Not in this commit: build_labels wiring, the label rebuild run, and the model\n    head expansion 23 \u2192 29 \u2014 the next steps in the plan.\n    \n    Verified-by: pytest tests/test_schema.py -q \u2014 27 passed\n    Verified-by: nmd2023_to_unified on a real 2000\u00b2 NMD2023 window \u2014 48 codes, 0 unmapped, classes 0-27 sane\n    Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>\n",
+    "path": "imint/training/unified_schema.py",
+    "source_sha256": "db35e61cecf1e47f792aa1691ace32f93aa9194265521eac459b854e0509029d"
+  },
+  "distillation_finding": {
+    "commit": "c1ebf948c3196dce9fb7ba4d4ce667a2ec0f0957",
+    "metadata": "commit c1ebf948c3196dce9fb7ba4d4ce667a2ec0f0957\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Mon Aug 10 11:54:34 2026 +0200\nCommit:     Tobias Edman <tobias@modinedman.se>\nCommitDate: Mon Aug 10 11:54:34 2026 +0200\n\n    docs(distill): held-out verdict \u2014 distilled dense model beats NMD2023 +0.07\n    \n    Held-out 209 plots (untouched by head/distill/finetune): 0.502/0.371 vs NMD2023\n    0.431/0.298. Full 28-class model, all classes alive. Closes the arc: hard labels\n    cap at the proxy ceiling; NFI-target supervision breaks it (head 0.617 points,\n    fractions 0.579 forest-layer, distillation 0.502 full product).\n    \n    Verified-by: nfi-validate-distill job + local held-out scoring via distill_split.json\n    Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n",
+    "path": "docs/data/distill_finding.md",
+    "source_sha256": "63ebff8b005ec08736a58bdd7711e54cdc550320576647b2fb29ff120e3e4761"
+  },
+  "nmd2018": {
+    "sha256": "8faa67351c71a641a7ee2f4e4d868c076e44e1810b9dfeec99241e3769752dfd",
+    "file": "nmd2018bas_ogeneraliserad_v1_1.qml"
+  },
+  "nmd2023": {
+    "sha256": "0154ee34d2ccc150246ea4901adaac3765b9cf02b1ea5c2d35ff07fc800a4322",
+    "file": "NMD2023bas_v2_1.qml"
+  },
+  "field_class_rule": {
+    "commit": "4fa549b3b72f3e511592a07af4cc6242f4bd48a0",
+    "metadata": "commit 4fa549b3b72f3e511592a07af4cc6242f4bd48a0\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Thu Jun 11 20:55:23 2026 +0200\nCommit:     GitHub <noreply@github.com>\nCommitDate: Thu Jun 11 20:55:23 2026 +0200\n\n    feat: NFI field-truth validation + retire LUCAS crop-only pipeline (#25)\n    \n    NFI loader/co-location/coverage gate/validation harness (982 plots co-located on ICE; validate-don't-train). Retires the redundant LUCAS crop-only pipeline (LPIS supersedes it); SJV_TO_CROP relocated to crop_schema, LUCAS now validation-only. See docs/data/nfi_validation_findings.md.\n",
+    "path": "scripts/validate_against_nfi.py",
+    "source_sha256": "6ac511e5922f10ab11a708f1e343955b07cadc2674b40f2e21820942c8c53dcf"
+  },
+  "forest_override_rule": {
+    "commit": "4378a6bea57fcabf4c8f78bb95a812ca474b61c2",
+    "metadata": "commit 4378a6bea57fcabf4c8f78bb95a812ca474b61c2\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Sun Aug 9 21:11:59 2026 +0200\nCommit:     Tobias Edman <tobias@modinedman.se>\nCommitDate: Sun Aug 9 21:11:59 2026 +0200\n\n    feat(distill): NFI-head distillation \u2014 final head + dense pseudo-label script\n    \n    Distill the field-truth-calibrated head into the dense model. Honest-eval\n    protocol: grouped 80/20 tile split (208 train tiles / 735 plots vs 53 test\n    tiles / 209 plots, no tile straddles); the final head is trained on the TRAIN\n    side only, so the test-tile plots stay untouched for the end-to-end eval of the\n    distilled seg model.\n    \n    - train_distill_head.py: grouped split, scaler+MLP(128,) on train plots,\n      exported as a dependency-free npz (numpy forward asserted == sklearn .predict\n      on all 944). Head-only preview on held-out test plots: 0.6172 (+0.124 over\n      NMD2023 0.493) \u2014 consistent with the leak-free OOF 0.632-0.637.\n    - distill_forest_labels.py: dense head forward over every tile (hook + bilinear\n      upsample, same geometry as extract_plot_features), conservative override of\n      the NMD2023 label sidecars \u2014 a pixel changes iff original label AND head pred\n      are both in {tall,gran,l\u00f6v,bland}; everything else keeps the original label.\n      Border ring (512\u2192504 crop) preserved. Atomic writes, skip-existing.\n    - data/distill/{distill_head.npz,distill_split.json} (143 KB, force-added past\n      the data/ ignore) \u2014 the job's git-clone ships them to the cluster.\n    \n    Verified-by: npz forward == sklearn .predict on 944 plots (asserted)\n    Verified-by: synthetic D2 end-to-end \u2014 offset placement, border ring, override truth-table, key preservation\n    Verified-by: pytest test_validate_against_nfi test_schema \u2014 32 passed\n    Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n",
+    "path": "scripts/distill_forest_labels.py",
+    "source_sha256": "599010e726cb860295fa6cf2b4ee91d28639caecb86511eecf87c8170da87f5a"
+  },
+  "field_input_validation_only": {
+    "commit": "a9d1ad983df9002e432b1ff0e9fc70cdb38141c1",
+    "metadata": "commit a9d1ad983df9002e432b1ff0e9fc70cdb38141c1\nAuthor:     Tobias Edman <tobias@modinedman.se>\nAuthorDate: Thu Oct 8 16:27:23 2026 +0200\nCommit:     Tobias Edman <tobias@modinedman.se>\nCommitDate: Thu Oct 8 16:27:23 2026 +0200\n\n    Bind NFI evaluation to approved input provenance\n    \n    Require the approved freeze digest and reverify the complete sealed\n    runtime before execution. Bind prediction records to consumed bytes.\n    \n    Audit all checkpoint input channels and teacher heads/sidecars before\n    freezing. Exclude every recorded teacher feature plot-year because\n    historical heads do not authenticate their exact split. Keep tract-years\n    in one spatial block and compute exact paired sign-flip probabilities.\n    \n    Addresses Claude's reviews of #68. Real input freezing and execution\n    remain gated by promotion completion and Tobias's go/no-go.\n    \n    Verified-by: CPU regression \u2014 328 passed in 62.97s; synthetic NMD smoke\n    Co-Authored-By: GPT-6 <noreply@openai.com>\n",
+    "path": "scripts/validate_against_nfi.py",
+    "source_sha256": "7207155f89e4971039dc46438ae32339ceff7cb2678aab5579fc12d11840c1d5"
+  }
+}
