@@ -115,7 +115,7 @@ One composite per area, shared by every map year, like the static aux layers
     sen2cor version, window and method (repo checklist item 7).
   - Estimated size: 35 450 km² of bounding boxes, 8 bands × uint16, about
     5.7 GB uncompressed. Measure the real size on the first area.
-- **Code.** A new `scripts/build_2016_composite.py` plus a k8s job modelled on
+- **Code.** A new script, proposed as `scripts/build_2016_composite.py`, plus a k8s job modelled on
   `k8s/sen2cor-frame2016-512-job.yaml`, pinned to a commit and image digest.
   Fill the sen2cor image's `MANIFEST.json` `image_digest`, today
   `TBD-after-first-build`, before the first run.
@@ -158,7 +158,8 @@ NFI-distilled labels `/cephfs/distill/prithvi600m_r2`, fraction head with
 its table row.
 
 - One recipe script with a flag-parity test against the ladder manifest, as
-  `scripts/im023_retrain.py` does for TESSERA.
+  `scripts/im023_retrain.py` does for TESSERA (on branch
+  `agent/te/claude/im023-barrblandskog`).
 - A one-epoch smoke of every arm, then the full runs.
 - **Arm B needs `frame_2016` on its training tiles.** CLAUDE.md requires the
   frame for training tiles.
