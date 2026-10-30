@@ -228,3 +228,61 @@ python scripts/render_forest_separability_job.py --output <katalog-2023> \
   --scheme forest5 --feature-year 2023
 kubectl --context icekube -n prithvi-training-default create --dry-run=server -f <katalog-2022>/job.json
 ```
+
+## Resultat `forest5`, TESSERA 2022 mot NMD2023 (2026-10-30)
+
+Körningen följde förregistreringen ovan: 6 738 interiörpixlar från 24 tiles,
+varav 787 NMD 113. Endast platsfria aggregat återges här; `probe.json` och
+bundle-hashar ligger i den privata evidenskatalogen
+`ImintEngine/class-separability-0127/forest5-2022/`.
+
+1. **Raden för barrblandskog** (787 pixlar), nya huvuden i fem geografiska
+   foldar: R4-egenskaper tallskog 16 %, granskog 16 %, **barrblandskog 58 %**,
+   lövblandad barrskog 10 %, lövskog 0,1 %. Råa TESSERA: 15 %, 17 %, **57 %**,
+   11 %, 0,1 %.
+2. **Balanserad träffsäkerhet** över fem klasser: R4 0,770 (95 % blockbootstrap
+   0,726–0,804), TESSERA 0,771 (0,728–0,804); slump 0,20.
+3. **Tilldelad unified-klass för NMD 113:** destillerade etiketter tallskog
+   74 %, granskog 22 %, blandskog 4 %, lövskog 0 %; R4:s utdata tallskog 71 %,
+   granskog 22 %, blandskog 4 %, sumpskog 2 %, lövskog 0 %.
+
+Tolkning inom förregistreringens gränser: barrblandskog förväxlas nästan
+aldrig med lövskog och ligger mellan tall- och granskog. Den frysta
+R4-representationen och råa TESSERA skiljer klasserna lika bra, så det som
+saknas är en målklass, inte information i indata. **Beslut (Tobias
+2026-10-30):** barrblandskog blir egen unified-klass 28 och modellen tränas om,
+TESSERA först.
+
+**Avvikelse:** körningen med TESSERA 2023 avbröts i extraktionen
+(`OUTPUT_READY 1`) och gav inget resultat. Urvalsräkningen gick förlorad
+eftersom podden kvitterades direkt; trolig orsak är att färre än fem
+2023-tiles har alla fem klasser. `scripts/run_forest_separability.sh` sparar
+nu urval och loggslut före kvitteringen. Den temporala känslighetsanalysen
+är därmed inte genomförd.
+
+## Förregistrering: `sumpskog5` (2026-10-30)
+
+Skriven innan någon körning. Fråga: bör sumpskog (unified 5) delas upp efter
+trädslag? Schemat `sumpskog5` jämför samma typer på våtmark: 121 tallskog,
+122 granskog, 123 barrblandskog, 124 lövblandad barrskog och 125–127
+lövskog. 128 (temporärt ej skog) och låg fjällskog (23/230) ingår inte.
+
+Protokoll, rapporteringsordning och begränsningar är desamma som för
+`forest5` (TESSERA 2022 mot NMD2023, högst 24 tiles, 3×3-interiörer, fem
+geografiska foldar). Läs i den här ordningen:
+
+1. förväxlingsmatrisen per klass, särskilt om barrblandskog på våtmark beter
+   sig som på fastmark;
+2. balanserad träffsäkerhet med blockbootstrap och majoritetsbaslinje;
+3. `assigned_unified_class`: vilka klasser R4 och de destillerade etiketterna
+   faktiskt ger våtmarksskogen.
+
+Om färre än fem tiles har alla fem klasser avbryts körningen. Det är i sig ett
+resultat: undertyperna är för glesa för att bära egna klasser, och urvalet
+redovisas från `availability.json`. Ingen tröskel delar automatiskt upp
+sumpskog. En uppdelning prövas i så fall i en egen omträning efter
+barrblandskogen, inte i samma, så att effekterna går att skilja åt.
+
+```sh
+bash scripts/run_forest_separability.sh sumpskog5 2022
+```

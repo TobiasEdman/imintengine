@@ -27,6 +27,14 @@ def test_forest5_keeps_every_dryland_forest_type_apart():
         class_labels(raw, "forest4")
 
 
+def test_sumpskog5_splits_wetland_forest_by_type_only():
+    raw = np.array([121, 122, 123, 124, 125, 126, 127], np.uint16)
+    assert class_labels(raw, "sumpskog5").tolist() == [0, 1, 2, 3, 4, 4, 4]
+    for outside in (111, 113, 128, 23):  # dryland, temporarily non-forest wetland, low mountain
+        with pytest.raises(ValueError, match="outside"):
+            class_labels(np.array([outside], np.uint16), "sumpskog5")
+
+
 def test_sampling_uses_valid_interiors_and_caps_classes():
     raw = np.full((140, 140), 113, dtype=np.uint16)
     raw[:, 70:] = 115
@@ -258,3 +266,10 @@ def test_renderer_runs_without_numpy_on_the_operator_machine():
                             stdin=subprocess.DEVNULL, timeout=60)
     assert result.returncode == 0, result.stderr
     assert '--scheme' in result.stdout
+
+
+def test_sumpskog5_probe_runs_end_to_end_on_disk(tmp_path):
+    report = run_probe(make_bundle(tmp_path, "sumpskog5"), scheme="sumpskog5", n_splits=4)
+    assert report['scheme'] == 'sumpskog5' and 'dryland' not in report['reference']
+    assert list(report['models']['r4']['per_class'])[2] == 'barrblandskog på våtmark'
+    assert report['models']['tessera']['balanced_accuracy'] == 1
