@@ -33,16 +33,27 @@ from imint.schema.unified_schema import (
 # ── 1. Schema identity ─────────────────────────────────────────────────────────
 
 def test_num_classes():
-    assert NUM_UNIFIED_CLASSES == 28, "Schema must have exactly 28 classes"
+    assert NUM_UNIFIED_CLASSES == 29, "Schema must have exactly 29 classes"
+
+
+def test_barrblandskog_is_appended_without_moving_earlier_ids():
+    from imint.schema.unified_schema import FOREST_CLASSES, NUM_CLASSES_BEFORE_BARRBLANDSKOG
+    assert NUM_CLASSES_BEFORE_BARRBLANDSKOG == 28 == NUM_UNIFIED_CLASSES - 1
+    assert UNIFIED_CLASSES[28] == "barrblandskog"
+    assert [UNIFIED_CLASSES[i] for i in (1, 2, 3, 4, 5, 27)] == [
+        "tallskog", "granskog", "lövskog", "blandskog", "sumpskog", "öppen mark utan vegetation"]
+    assert UNIFIED_COLORS[28] == (0x4E, 0x6F, 0x00)  # NMD2023 QML colour of 113
+    assert set(FOREST_CLASSES) == {1, 2, 3, 4, 5, 6, 28}
 
 
 def test_nmd2023_mapping():
-    """NMD2023 raw codes → unified: forest consistent with 2018, new classes 23-28."""
-    # Forest fastmark resolves identically to the NMD2018 chain.
-    for code, want in [(111, 1), (112, 2), (113, 3), (114, 4), (118, 6)]:
+    """NMD2023 raw codes → unified: forest as NMD2018 except 113, new classes 23-28."""
+    for code, want in [(111, 1), (112, 2), (114, 4), (115, 3), (116, 3), (117, 3), (118, 6)]:
         assert nmd2023_to_unified(np.array([code]))[0] == want, code
-    # Forest wetland → sumpskog (5).
-    assert (nmd2023_to_unified(np.array([121, 124, 128])) == 5).all()
+    # Barrblandskog på fastmark has its own class; it is not deciduous (IM-023).
+    assert nmd2023_to_unified(np.array([113]))[0] == 28
+    # Forest wetland → sumpskog (5), barrblandskog på våtmark included.
+    assert (nmd2023_to_unified(np.array([121, 123, 124, 128])) == 5).all()
     # NMD2023-new classes.
     assert nmd2023_to_unified(np.array([54]))[0] == 23    # torvtäkt
     assert (nmd2023_to_unified(np.array([421, 4212])) == 24).all()  # busk (+moisture collapsed)
@@ -316,3 +327,20 @@ def test_unified_palette_json_matches_schema():
     assert pal["names"] == [str(n) for n in UNIFIED_CLASS_NAMES]
     assert [tuple(c) for c in pal["colors"]] == \
         [tuple(int(x) for x in rgb) for rgb in UNIFIED_COLOR_LIST]
+
+
+def test_harvest_applies_to_barrblandskog_but_not_open_land():
+    raw = np.array([[113, 113, 411]], dtype=np.uint16)
+    lpis = np.zeros(raw.shape, dtype=np.uint16)
+    harvest = np.array([[1, 0, 1]], dtype=np.uint8)
+    assert merge_all_2023(raw, lpis, harvest).tolist() == [[HARVEST_CLASS, 28, 27]]
+
+
+def test_r4_era_models_keep_unified_names_in_metrics():
+    from imint.metrics import compute_miou
+    target = np.array([[1, 28], [27, 3]])
+    m29 = compute_miou(target, target, num_classes=29)
+    assert "barrblandskog" in m29["per_class_iou"]
+    m28 = compute_miou(np.array([[1, 27]]), np.array([[1, 27]]), num_classes=28)
+    assert {"tallskog", "öppen mark utan vegetation"} <= set(m28["per_class_iou"])
+    assert "barrblandskog" not in m28["per_class_iou"]

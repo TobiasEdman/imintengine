@@ -1,8 +1,9 @@
 """
 imint/schema/unified_schema.py — Unified LULC + Crop + Harvest class schema
 
-Merges NMD land cover (19-class sequential) with LPIS crop detail and SKS harvest
-data into a single 23-class segmentation schema.
+Merges NMD land cover with LPIS crop detail and SKS harvest data into a single
+29-class segmentation schema. Class IDs are append-only: a model trained on an
+earlier schema (R4 and before: 28 classes, IDs 0-27) keeps its meaning.
 
 NMD provides background (forest, water, developed, wetland). LPIS overrides NMD on
 agricultural pixels with crop-specific classes. SKS marks harvested forest (hygge).
@@ -25,7 +26,9 @@ import numpy as np
 
 # ── Unified Class Schema ──────────────────────────────────────────────────────
 
-NUM_UNIFIED_CLASSES = 28
+NUM_UNIFIED_CLASSES = 29
+# Models trained before barrblandskog got class 28 (TESSERA R4 and earlier).
+NUM_CLASSES_BEFORE_BARRBLANDSKOG = 28
 
 UNIFIED_CLASSES = {
     0: "bakgrund",          # ignore_index
@@ -65,6 +68,10 @@ UNIFIED_CLASSES = {
     25: "risdominerad mark",    # NMD2023 422/42xx — dwarf-shrub-dominated
     26: "gräsdominerad mark",   # NMD2023 423/42xx — grass-dominated
     27: "öppen mark utan vegetation",  # NMD2023 411 — bare ground/rock
+    # Pine/spruce mixed conifer on dry land. Earlier schemas grouped NMD 113 with
+    # deciduous forest through a mislabel; the forest5 probe (IM-023, 2026-10-30)
+    # showed it sits between pine and spruce and is almost never deciduous.
+    28: "barrblandskog",    # NMD2023 113
     # NOTE: NMD2023 glaciär (412) + snöfält (413) → öppen mark (8). A dedicated
     # snö/is class had 0 pixel support under the pure-NMD2023 southern coverage
     # (glaciers/permanent snow are in the far-northern fjäll v2.1 doesn't cover),
@@ -104,7 +111,11 @@ UNIFIED_COLORS = {
     25: (205, 170, 102),    # risdominerad — tan-brown
     26: (255, 210, 126),    # gräsdominerad — light amber
     27: (224, 224, 224),    # öppen mark utan vegetation — light grey
+    28: (78, 111, 0),       # barrblandskog — NMD2023 113 #4e6f00
 }
+
+# Unified classes on forest land: the only pixels SKS harvest may turn into hygge.
+FOREST_CLASSES = (1, 2, 3, 4, 5, 6, 28)
 
 
 # ── NMD raw 19-class → Unified mapping ────────────────────────────────────────
@@ -138,14 +149,14 @@ _NMD19_TO_UNIFIED[19] = 10   # water_sea → vatten
 # ── NMD2023 raw code → Unified mapping (direct, uint16) ───────────────────────
 # NMD2023 basskikt v2.1 codes differ from NMD2018 for open land (4-digit codes
 # > 255) and add fine classes, so it cannot reuse the uint8 nmd_raster_to_lulc
-# LUT. Forest codes 111-128 are IDENTICAL to NMD2018 and map to the SAME unified
-# classes (so a model finetuned from v8b keeps a consistent forest label space);
-# only the NMD2023-new detail (23-28) is introduced. 113 barrblandskog follows
-# the existing NMD2018 grouping (→ lövskog) for consistency, not correctness.
+# LUT. Forest codes 111-128 are IDENTICAL to NMD2018. They map to the same unified
+# classes as the NMD2018 chain except 113 barrblandskog, which has its own class
+# 28 (Tobias 2026-10-30, IM-023) instead of the inherited mislabel → lövskog.
+# 123 barrblandskog på våtmark stays sumpskog like all forest on wetland.
 # Codes from the shipped legend data/nmd2023/sidecar/NMD2023bas_v2_1.qml.
 NMD2023_TO_UNIFIED: dict[int, int] = {
-    # Skogsmark på fastmark — same targets as the NMD2018 chain
-    111: 1, 112: 2, 113: 3, 114: 4, 115: 3, 116: 3, 117: 3, 118: 6,
+    # Skogsmark på fastmark — as the NMD2018 chain except 113 (own class 28)
+    111: 1, 112: 2, 113: 28, 114: 4, 115: 3, 116: 3, 117: 3, 118: 6,
     # Skogsmark på våtmark → sumpskog (5)
     121: 5, 122: 5, 123: 5, 124: 5, 125: 5, 126: 5, 127: 5, 128: 5,
     # Låg fjällskog (NMD2023-new base class; mountain birch)
@@ -180,9 +191,9 @@ def nmd2023_to_unified(nmd_raw: np.ndarray) -> np.ndarray:
 
     Direct raw→unified (no 19-class intermediate): NMD2023's 4-digit open-land
     codes exceed uint8, and it carries fine classes (23-28) the NMD2018 chain
-    has no codes for. Forest codes 111-128 resolve to the SAME unified classes
-    as NMD2018 so a model finetuned from v8b keeps a consistent forest label
-    space. Unmapped / out-of-range codes → 0 (background), which is also what a
+    has no codes for. Forest codes 111-128 resolve to the same unified classes
+    as NMD2018, except 113 barrblandskog → 28 (IM-023). Unmapped /
+    out-of-range codes → 0 (background), which is also what a
     no-data pixel (raster 0, outside NMD2023's rolling extent) resolves to.
     """
     raw = np.asarray(nmd_raw)
@@ -333,9 +344,8 @@ def merge_all(
                     unified[mask] = unified_class
             unified[has_parcel & ~sjv_mapped] = _SJV_DEFAULT
 
-    # Step 3: SKS harvest — only where NMD says forest (classes 1–6)
-    _NMD_FOREST = np.array([1, 2, 3, 4, 5, 6], dtype=np.uint8)
-    where_forest = np.isin(nmd_base, _NMD_FOREST)
+    # Step 3: SKS harvest — only where NMD says forest
+    where_forest = np.isin(nmd_base, FOREST_CLASSES)
 
     if harvest_mask is not None and where_forest.any():
         unified[(harvest_mask > 0) & where_forest] = HARVEST_CLASS
@@ -390,9 +400,8 @@ def merge_all_2023(
                     unified[mask] = unified_class
             unified[has_parcel & ~sjv_mapped] = _SJV_DEFAULT
 
-    # Step 3: SKS harvest — only where NMD says forest (unified 1–6).
-    _NMD_FOREST = np.array([1, 2, 3, 4, 5, 6], dtype=np.uint8)
-    where_forest = np.isin(nmd_base, _NMD_FOREST)
+    # Step 3: SKS harvest — only where NMD says forest (incl. barrblandskog 28).
+    where_forest = np.isin(nmd_base, FOREST_CLASSES)
     if harvest_mask is not None and where_forest.any():
         unified[(harvest_mask > 0) & where_forest] = HARVEST_CLASS
 

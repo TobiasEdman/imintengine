@@ -97,10 +97,11 @@ def compute_miou(
         raise ValueError("predictions on valid targets must be integer class IDs in range")
     np.add.at(cm, (target[valid].astype(np.int64), scored_pred.astype(np.int64)), 1)
 
-    # Per-class IoU — use unified 23-class names when applicable
-    from imint.schema.unified_schema import NUM_UNIFIED_CLASSES
-    if num_classes == NUM_UNIFIED_CLASSES:
-        class_names = UNIFIED_CLASSES
+    # Per-class IoU — unified names for the current schema and for models trained
+    # before barrblandskog (IDs are append-only, so IDs 0-27 keep their names).
+    from imint.schema.unified_schema import NUM_CLASSES_BEFORE_BARRBLANDSKOG, NUM_UNIFIED_CLASSES
+    if num_classes in (NUM_CLASSES_BEFORE_BARRBLANDSKOG, NUM_UNIFIED_CLASSES):
+        class_names = {c: UNIFIED_CLASSES[c] for c in range(num_classes)}
     else:
         class_names = get_class_names(num_classes)
     miou, ious_by_class = miou_from_confusion(cm, ignore_index)

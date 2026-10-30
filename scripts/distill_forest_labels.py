@@ -58,6 +58,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_pinned_plot_set import npz_key_names, npz_version_ok
 from extract_plot_features import register_preclassifier_hook
 
+# Forest types the field-trained head can refine. Barrblandskog (unified 28) is
+# deliberately absent: the head has no such output, so NMD 113 pixels keep their
+# NMD-defined class instead of being rewritten to pine or spruce (IM-023).
 FOREST_CLASSES = frozenset({1, 2, 3, 4})  # tall, gran, löv, bland
 # Sidecar keys the distilled npz must carry (superset of what any NMD2023
 # sidecar holds; we copy whatever is present + always the replaced label).

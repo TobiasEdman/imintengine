@@ -4,7 +4,8 @@ Colours verified against Naturvårdsverket NMD2023bas_v2_1.qml, SHA256
 0154ee34d2ccc150246ea4901adaac3765b9cf02b1ea5c2d35ff07fc800a4322.
 See docs/verification/lclu-service/nmd-legend.md for aggregation caveats.
 """
-from imint.schema.unified_schema import UNIFIED_CLASSES, UNIFIED_COLORS
+from imint.schema.unified_schema import (
+    NUM_CLASSES_BEFORE_BARRBLANDSKOG as R4_NUM_CLASSES, UNIFIED_CLASSES, UNIFIED_COLORS)
 
 NMD_STYLE_URL = ('https://geodata.naturvardsverket.se/nedladdning/marktacke/'
                  'NMD2023/Basskikt_v2_x/NMD2023_basskikt_v2_1.zip')
@@ -18,10 +19,11 @@ NMD_SWATCHES = {
     23: (54, '#8c1964'), 24: (4212, '#abc8a6'), 25: (4222, '#cdaa66'),
     26: (4232, '#ffd27e'), 27: (411, '#e0e0e0'),
 }
-MAP_COLORS = dict(UNIFIED_COLORS)
+MAP_COLORS = {key: rgb for key, rgb in UNIFIED_COLORS.items() if key < R4_NUM_CLASSES}
 MAP_COLORS.update({key: tuple(bytes.fromhex(color[1:]))
                    for key, (_, color) in NMD_SWATCHES.items()})
-MAP_NAMES = {**UNIFIED_CLASSES,
+# The served R4 checkpoint predicts IDs 0-27; barrblandskog (28) arrives with its successor.
+MAP_NAMES = {**{key: name for key, name in UNIFIED_CLASSES.items() if key < R4_NUM_CLASSES},
     1: 'Tallskog på fastmark', 2: 'Granskog på fastmark',
     3: 'Lövskog', 4: 'Blandskog',
     5: 'Skog på våtmark', 6: 'Temporärt ej skog på fastmark',

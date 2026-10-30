@@ -26,7 +26,7 @@ from rasterio.transform import array_bounds, from_bounds
 from rasterio.warp import Resampling, calculate_default_transform, reproject, transform_bounds
 
 from imint.job import GeoContext
-from imint.schema.unified_schema import UNIFIED_CLASSES
+from imint.schema.unified_schema import NUM_CLASSES_BEFORE_BARRBLANDSKOG as R4_NUM_CLASSES
 from imint.inference.lclu_legend import MAP_COLORS, legend
 from imint.training.tile_config import TileConfig
 from scripts.cache_predict import atomic_write, contract_pin, file_identity
@@ -271,13 +271,13 @@ class TesseraR4:
             expected_checkpoint_sha256=record["sha256"],
             expected_checkpoint_size=record["size"])
         names = inference_aux_names(self.model.ck_cfg, self.model.n_aux_channels)
-        if (names != AUX_NAMES or self.model.num_classes != 28
+        if (names != AUX_NAMES or self.model.num_classes != R4_NUM_CLASSES
                 or self.model.embed_dim != 128 or self.model.aux_fusion != "gated"
                 or self.model.frac_head is None):
             raise ValueError("Checkpoint does not satisfy the TESSERA R4 serving contract")
         self.model.eval()
         self.contract = {"checkpoint": public_identity(record), "family": "tessera",
-                         "aux_names": names, "num_classes": 28, "aux_fusion": "gated",
+                         "aux_names": names, "num_classes": R4_NUM_CLASSES, "aux_fusion": "gated",
                          "fraction_head_present": True, "device": str(self.device)}
 
     def predict(self, path: Path, record: dict) -> np.ndarray:
@@ -339,7 +339,7 @@ def export_map(prediction: np.ndarray, valid: np.ndarray, grid: Grid, output: Pa
     return {"overlay_bounds": [[south, west], [north, east]],
             "display_crs": "EPSG:3857", "display_resampling": "nearest",
             "valid_pixels": int(valid.sum()), "nodata_pixels": int((~valid).sum()),
-            "class_counts": {str(k): int((classes == k).sum()) for k in UNIFIED_CLASSES}}
+            "class_counts": {str(k): int((classes == k).sum()) for k in range(R4_NUM_CLASSES)}}
 
 
 def implementation_identity() -> dict:

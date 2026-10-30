@@ -851,9 +851,6 @@ def _resolve_explicit_cohort_location(
         "era5_request_lon": float(grid["request_lon"]),
     }
 
-# Forest classes in the unified schema (eligible for harvest override)
-_FOREST_CLASSES = frozenset({1, 2, 3, 4, 5})
-
 # Label-derived keys the dataset consumes for the segmentation target and
 # per-pixel loss weighting. When a `label_dir` sidecar is supplied, exactly
 # these keys are sourced from the sidecar npz (if present there) instead of
