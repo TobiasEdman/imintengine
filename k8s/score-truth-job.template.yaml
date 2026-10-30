@@ -1,10 +1,10 @@
 # Stage B — CPU-only scoring from the prediction cache
-# (scripts/score_against_truth.py). No GPU: reads <CACHE_DIR>/<ckpt_sha>/ and
+# (scripts/score_against_truth.py). No GPU: reads <CACHE_DIR>/<contract_sha256>/ and
 # calls the EXISTING score_against_nfi / score_against_lucas unchanged, so the
 # JSON output is bit-identical to the fused validators. Placeholders:
 #   __MEMBER__   job-name suffix / output stem
 #   __TRUTH__    nfi | lucas
-#   __CKPT_SHA__ checkpoint sha subdir written by infer-tiles (16 hex)
+#   __CKPT_SHA__ full cache-contract key returned by infer-tiles (64 hex)
 #   __TRUTH_ARGS__ truth-index args, e.g. for nfi:
 #       "--plot-index /data/nfi/nfi_index_unified_v2_512.parquet"
 #     for lucas:

@@ -1,0 +1,404 @@
+{
+  "schema": "imint-fraction-scoring-policy-v1",
+  "date": "2026-09-18",
+  "scope": "Fraction supervision decisions only; not data-role, independence or runtime clearance.",
+  "review_requirement": "Pin this file only after reviewing its decisions against the cited evidence. The hash binds the reviewed decision; it does not prove scientific truth.",
+  "sources": {
+    "e01-inference-provenance.json": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+    "checkpoint-identities.jsonl": "143f9013aa833ca1db40ab2afac75aec98151b4078ab3196397e5ab0aded8a65"
+  },
+  "entries": [
+    {
+      "cell": "clay_r1",
+      "checkpoint": {
+        "sha256": "c3e696098e47849912af751c602295015af401439f69a04cb025a7209c7c022f",
+        "size_bytes": 2601007020
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "14e818dd3d222e34095bba6a6bf29b7b2bbcda23a9bdd7f9e67183c8de808e7b",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "clay_r2",
+      "checkpoint": {
+        "sha256": "0a37ebdbbae8ac61145424350ae8f2990225d2cb15a3e1c178c9d42134c226e2",
+        "size_bytes": 2601012332
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "57105057843b4659233d9623f6a1c827709177a06becff6eacccdf0432a6ad2a",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "clay_r3",
+      "checkpoint": {
+        "sha256": "078a93b0cef7d7d60411828447cffe4e3e6180619e5d4e0a3ead570a0d66d83a",
+        "size_bytes": 2601012332
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "301485c85d1806a37df4f384261576bf24ea02bc6d643ab5bccdcba22289a76e",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "clay_r4",
+      "checkpoint": {
+        "sha256": "4efd6edc52eee83e2b43e927f713313ad79b99a395d3bdd49b42055d2a318273",
+        "size_bytes": 2601012332
+      },
+      "decision": "unverified",
+      "reason": "Nonzero training loss recorded; target lineage is not yet verified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "recorded_nonzero",
+      "training_log_sha256": "4f0970d80bb949cfebbe06b68a956a8fd6fb7f1fbbe9c24ac564048e27313604",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "croma_r1",
+      "checkpoint": {
+        "sha256": "ad824f1be8a040372aaec700392b5198c4effb9b86c5aae0c65256dccbe2a0dd",
+        "size_bytes": 834649493
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "6c61ada784298e112dd0426caadefc05fcab4dbab6c3de65a7f427497d4348d4",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "croma_r2",
+      "checkpoint": {
+        "sha256": "dbfc04cf9475ca6b604dd5133191854736e961deebeb992be855f211d152bd80",
+        "size_bytes": 834654805
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "ff58eb3903eb7b07337e5c6521764816ed3a37bc1eea1888f31c660fe73cfe3d",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "croma_r3",
+      "checkpoint": {
+        "sha256": "1fc457d6c11aa30f72fe23567463f3a307a8f5298bf023b42dec8929fd504b9c",
+        "size_bytes": 834654805
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "922700228fa0d46b52d2ea231a708b330ea444ccc082d257d8ee89f1a379b1c6",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "croma_r4",
+      "checkpoint": {
+        "sha256": "689d0e8577436f4220628cc729982e0bd7165983d2894ef35f0ebc78cdf1ffc6",
+        "size_bytes": 834654805
+      },
+      "decision": "unverified",
+      "reason": "Nonzero training loss recorded; target lineage is not yet verified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "recorded_nonzero",
+      "training_log_sha256": "0c45b55a87aa5f6a5ca167f310c7e383d4b0fd64129ea3f9e9d01f11119049c7",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m4f_r1",
+      "checkpoint": {
+        "sha256": "5da3a0f9cefd63cf2cfe4facb5c9021a9f6a71cf7c066ab5858f61a54b2694ab",
+        "size_bytes": 1370848619
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "20f17e0f6cf8e85046c8ff07d575dfb139876f2653362ac54e7883642f397c38",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m4f_r2",
+      "checkpoint": {
+        "sha256": "9f013d26fb3ba8f6afb510e0f1ca7cadf988b29201cab45a065cb35ccfd972a9",
+        "size_bytes": 1370853931
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "c99033abb28835359f43a18d8371608247ce47c0a83ce809b7985710e90a4d94",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m4f_r3",
+      "checkpoint": {
+        "sha256": "ec4530475504696497c9860a987a3fabc2c4f31efcdeae162fc2111790d7581a",
+        "size_bytes": 1370854334
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "febaf50cd4960225d6756531f54eb32e1e8582afc6a20cb9ca7ff45e175b409e",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m4f_r4",
+      "checkpoint": {
+        "sha256": "b8824fcb43b940bd77fba8cd1e1f9ddd40c05938f9cb4213f52ceb5626c1289f",
+        "size_bytes": 1370854334
+      },
+      "decision": "unverified",
+      "reason": "Nonzero training loss recorded; target lineage is not yet verified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "recorded_nonzero",
+      "training_log_sha256": "3fb1abca41ec2cd9c10e2c4c798e8d71944d88e33c2f8bd5eb98457380486f48",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m_r1",
+      "checkpoint": {
+        "sha256": "d3823ceca5b727eacad3f06b2218ba537b0846172d04ac296954313aee012ad7",
+        "size_bytes": 1285888363
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "a0be878ff4669b20548cc434d923044f52857a65829527d93295784670c6fb03",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m_r2",
+      "checkpoint": {
+        "sha256": "a27dadd9caf1c9ccfba6ecbd76ac7815fcb7236978e9df807e1d1bf7a498cda0",
+        "size_bytes": 1285893675
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "1e56d7fe45ad8e674081be02b25347c1773f165e981dfafb4d2c3022c9c66a03",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m_r3",
+      "checkpoint": {
+        "sha256": "e42c0b15f633f3adf3c68bfa5fee1292246aa5e3f333c1f270c146fc62701df7",
+        "size_bytes": 1285893675
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "1eb6f3464c08058066b24b0a67fff90e4fed0402f8ccfeaad1da0f4b8d40765d",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi300m_r4",
+      "checkpoint": {
+        "sha256": "ecd0b3724e1d009fb795467006197ba305d2f1455d9dcdc3c80a6a517dcaee84",
+        "size_bytes": 1285893675
+      },
+      "decision": "unverified",
+      "reason": "Nonzero training loss recorded; target lineage is not yet verified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "recorded_nonzero",
+      "training_log_sha256": "0e638cba5c0e1c53f8354890e2b12bc1f5b60cde2bb6315307d5382523a14a34",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi600m_r1",
+      "checkpoint": {
+        "sha256": "9115a3d411ecfd0babbaef9a6b7448ea3449ec68e97dbf0cd52abac415a63916",
+        "size_bytes": 2741613769
+      },
+      "decision": "ineligible",
+      "reason": "Recorded head disabled; fraction scoring is not supported.",
+      "head_enabled": false,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "46fa46de2072fe6b560faa272036f1c8e6503120eae025c2e14a0294a5f179ef",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi600m_r2",
+      "checkpoint": {
+        "sha256": "89d544c06fd353772722dec5600a4ba8696fd8971250f471b47f6b53828d1d46",
+        "size_bytes": 2741619081
+      },
+      "decision": "ineligible",
+      "reason": "Recorded head disabled; fraction scoring is not supported.",
+      "head_enabled": false,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "c3e6f6f44d5651b1494676ebbc4d4ada5e3d2ffe1d8264b5ca5c08ab53a71438",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi600m_r3",
+      "checkpoint": {
+        "sha256": "d4f926b2d57737982d2439b38dcde8ed723ddd31ec66369c428e4f7cd07cf43a",
+        "size_bytes": 2741619081
+      },
+      "decision": "ineligible",
+      "reason": "Recorded head disabled; fraction scoring is not supported.",
+      "head_enabled": false,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "cd14e360be2dd6d7105aadabb7beb03df39055b42011c2b941296b07113ba1a9",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "prithvi600m_r4",
+      "checkpoint": {
+        "sha256": "edf46dd6c2c19ba2f965afcdb2911b14a65d0c534057bcd185693b56b2ae3772",
+        "size_bytes": 2741619081
+      },
+      "decision": "ineligible",
+      "reason": "Recorded head disabled; fraction scoring is not supported. Intended R4 fraction treatment is contradicted.",
+      "head_enabled": false,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "b4e73af32252e849e7419b3e29b43a0e3647e9c427c8ae4e60ab8f5911d18c71",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "terramind_r1",
+      "checkpoint": {
+        "sha256": "4aea9aad163bd0e4ef67f2be678669e1d2411b1634b278d99533884960c5a551",
+        "size_bytes": 401353531
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "55e5ebe231a9d6cd207da503017de2d5c5b570a3c40cf330a4884e114a0e0910",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "terramind_r2",
+      "checkpoint": {
+        "sha256": "97316cf22612288072f0278f5c90e1a987a845a35acb1dcb431cc13432b4fc8f",
+        "size_bytes": 401358843
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "5d173f8233e312180f98a2bbe9c9b8c1fe00d43350d20a7e56461d1061beeaed",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "terramind_r3",
+      "checkpoint": {
+        "sha256": "ee752b95cbcc874f976a2db8195eaedf56388caeff9adf71630a56e5adb5df1f",
+        "size_bytes": 401358843
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "9f8b176c52cffbb3c0266de0154173775cda06f241964a4113fb2c6dcd66b657",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "terramind_r4",
+      "checkpoint": {
+        "sha256": "a8cece4a785df3d0b754df3ad63b85c4305f8bac163ff7a1137d2bb3e0926542",
+        "size_bytes": 401358843
+      },
+      "decision": "unverified",
+      "reason": "Nonzero training loss recorded; target lineage is not yet verified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "recorded_nonzero",
+      "training_log_sha256": "47463311818dd898e546197530ed5b67991acfb3b2565ef6a7c1233d48776a99",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "tessera_r1",
+      "checkpoint": {
+        "sha256": "1f31188c851f52b003e7669c962841a94d50e739800e545657e54afe6f3fc235",
+        "size_bytes": 1593570
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "5b5249215c0b23437c2a93245815fb62a5c778c785b5d68bdeeba73e1202b729",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "tessera_r2",
+      "checkpoint": {
+        "sha256": "9dd7cfcad09b26576d23c846c29c3fd540d463b97a72df0b7557f6558dbced04",
+        "size_bytes": 1596322
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "06e0a734c34be4bd872319cdf5f75547b9f0187d177b2ed4bcf4cc6bfcdbe542",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "tessera_r3",
+      "checkpoint": {
+        "sha256": "2d673c191a380da00725ad90638980afbc5f7bdaa7fe655770d701a37e583f4f",
+        "size_bytes": 1596322
+      },
+      "decision": "unverified",
+      "reason": "Head exists, but the collected log records no fraction loss; supervision is unverified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "not_recorded",
+      "training_log_sha256": "12017f241b8d5f91f0ab44d1632baed4d7620ec3e7f365a56e15cfcd266d72f0",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    },
+    {
+      "cell": "tessera_r4",
+      "checkpoint": {
+        "sha256": "1270bb2af88074840020f3b481ed5e98a72f0b7ceb51befac2b8fa4675385668",
+        "size_bytes": 1596322
+      },
+      "decision": "unverified",
+      "reason": "Nonzero training loss recorded; target lineage is not yet verified.",
+      "head_enabled": true,
+      "fraction_loss_signal": "recorded_nonzero",
+      "training_log_sha256": "d60c12d32fcdf64c087b29f76179dbd1e0854216af7629c2051ba895272df6e5",
+      "basis_report_sha256": "42621325e09fffcedb14502eb0e42d185839f5c50c49beadc4253ac80fc7b829",
+      "target_lineage_review_sha256": null
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Stage A — GPU, batched, cached inference (scripts/infer_tiles.py).
 # Produces a per-tile prediction cache ONCE per checkpoint under
-# <CACHE_DIR>/<ckpt_sha>/; every truth source then scores from it on CPU
+# <CACHE_DIR>/<contract_sha256>/; every truth source then scores from it on CPU
 # (score-truth-job.template.yaml). Placeholders substituted at launch:
 #   __MEMBER__    job-name suffix / log stem
 #   __CKPT__      checkpoint dir under /data/checkpoints (best_model.pt inside)
@@ -9,7 +9,8 @@
 #                 or empty to infer ALL *.npz in --data-dir
 #   __SHARD__     "--shard i/K" for map/reduce across GPUs, or empty
 # Mirrors nfi-validate-tessera-job.yaml (image, 2080ti node, PVC, iceguard
-# requests==limits). Do NOT apply raw.
+# requests==limits). Do NOT apply raw. This legacy runtime template is not
+# campaign-ready: pin source/image/dependencies and pass the E01 data gates first.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -54,8 +55,8 @@ spec:
               cd /workspace/imintengine
               pip install --no-cache-dir -e . --no-deps 2>/dev/null || true
               echo "CLONED $BRANCH HEAD: $(git rev-parse --short HEAD)"
-              grep -q 'return_fractions=True' scripts/infer_tiles.py \
-                || { echo "FATAL: infer_tiles.py missing/old on clone"; exit 1; }
+              grep -q 'imint-prediction-cache-v2' scripts/prediction_cache.py \
+                || { echo "FATAL: prediction-cache v2 missing/old on clone"; exit 1; }
               [ -f /data/checkpoints/__CKPT__/best_model.pt ] \
                 || { echo "FATAL: checkpoint __CKPT__ not found"; exit 1; }
 
@@ -65,15 +66,15 @@ spec:
                 --data-dir /data/unified_v2_512 \
                 __TILE_LIST__ \
                 --img-size 504 --num-classes 28 \
-                --cache-dir /data/pred_cache \
+                --cache-dir /data/pred_cache --cache-key-out /tmp/pred-cache.key \
                 --batch-size 8 --num-workers 2 \
                 --device cuda __SHARD__ \
                 --produced-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
               echo ""; echo "=== cache manifest ==="
-              SHA=$(python3 -c "import hashlib;h=hashlib.sha256(open('/data/checkpoints/__CKPT__/best_model.pt','rb').read()).hexdigest()[:16];print(h)")
-              cat /data/pred_cache/$SHA/MANIFEST.json
-              echo ""; echo "=== Done: $(date) — ckpt_sha=$SHA ==="
+              CACHE_KEY=$(cat /tmp/pred-cache.key)
+              cat "/data/pred_cache/$CACHE_KEY/MANIFEST.json"
+              echo ""; echo "=== Done: $(date) — cache_key=$CACHE_KEY ==="
           env:
             - name: PYTHONUNBUFFERED
               value: "1"

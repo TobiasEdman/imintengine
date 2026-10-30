@@ -108,8 +108,15 @@ class _FakeInfcmp:
         self._build_inference_inputs = infcmp._build_inference_inputs
         self.run_inference = infcmp.run_inference
         self.run_fraction_inference = infcmp.run_fraction_inference
+        self._forward_from_inputs = infcmp._forward_from_inputs
+        self._close_inference_inputs = infcmp._close_inference_inputs
+        self.model_has_frac_head = infcmp.model_has_frac_head
 
-    def load_model(self, ckpt_path, device, backbone_name=None, img_size=None):
+    def load_model(self, ckpt_path, device, backbone_name=None, img_size=None,
+                   expected_checkpoint_sha256=None, expected_checkpoint_size=None):
+        identity = infer_tiles.cache.file_identity(ckpt_path)
+        assert expected_checkpoint_sha256 == identity["sha256"]
+        assert expected_checkpoint_size == identity["size_bytes"]
         return self._model, 0, 0.0, TILE
 
 
@@ -148,9 +155,10 @@ def test_stage_a_writes_cache_and_manifest(tiles, cache_dir_tmp, checkpoint):
             assert z["probs"].shape == (NUM_CLASSES, TILE, TILE)
             assert z["fracs"].shape == (4, TILE, TILE)
     manifest = json.loads((sha_dir / "MANIFEST.json").read_text())
-    assert manifest["ckpt_sha"] == sha
-    assert manifest["n_tiles"] == 3
-    assert manifest["produced_at"] == "2026-08-13T00:00:00Z"
+    assert manifest["cache_key"] == sha and len(sha) == 64
+    assert len(manifest["contract"]["tiles"]) == 3
+    receipt = json.loads((sha_dir / "tileX_0.json").read_text())
+    assert receipt["produced_at"] == "2026-08-13T00:00:00Z"
 
 
 def test_stage_a_idempotent_skip(tiles, cache_dir_tmp, checkpoint):
@@ -173,6 +181,8 @@ def test_dataset_threads_model_num_frames(tiles):
     captured = {}
 
     class _CapInfcmp:
+        _close_inference_inputs = staticmethod(infcmp._close_inference_inputs)
+
         def _build_inference_inputs(self, tile_path, device, img_size,
                                     aux_names, family="prithvi",
                                     num_frames=None):
@@ -289,3 +299,199 @@ def cache_dir_tmp(tmp_path):
     d = tmp_path / "pred_cache"
     d.mkdir()
     return d
+
+
+class FamilyContractModel(torch.nn.Module):
+    """Tiny model with each real family's forward signature enforced."""
+
+    def __init__(self, family, frames, fraction_head):
+        super().__init__()
+        from types import SimpleNamespace
+        self.fm_spec = SimpleNamespace(family=family)
+        self.num_frames = frames
+        self.frac_head = torch.nn.Identity() if fraction_head else None
+        self.batch_sizes = []
+        self.eval()
+
+    def forward(self, *args, aux=None, return_fractions=False, **kwargs):
+        family = self.fm_spec.family
+        coords_signal = None
+        if family == "clay":
+            assert not args
+            assert set(kwargs) == {"chips", "timestamps", "wavelengths"}
+            image = kwargs["chips"]
+            assert image.shape[1] == 10
+            assert kwargs["timestamps"].shape == (image.shape[0], 4)
+            assert kwargs["wavelengths"].shape == (image.shape[0], 10)
+            coords_signal = kwargs["timestamps"][:, 2:].sum(dim=1) * 0.01
+        elif family == "croma":
+            assert not args and set(kwargs) == {"sar", "optical"}
+            image = torch.cat([kwargs["optical"], kwargs["sar"]], dim=1)
+            assert image.shape[1] == 14
+        elif family == "terramind":
+            assert len(args) == 1 and not kwargs
+            assert set(args[0]) == {"S2L2A", "S1GRD"}
+            image = torch.cat([args[0]["S2L2A"], args[0]["S1GRD"]], dim=1)
+            assert image.shape[1] == 8
+        else:
+            assert len(args) == 1
+            assert set(kwargs) == {"temporal_coords", "location_coords"}
+            image = args[0]
+            if family == "prithvi":
+                assert image.shape[1:3] == (6, self.num_frames)
+                assert kwargs["temporal_coords"].shape == (
+                    image.shape[0], self.num_frames, 2)
+                coords_signal = (
+                    kwargs["location_coords"].sum(dim=1) * 0.01
+                    + kwargs["temporal_coords"].sum(dim=(1, 2)) * 0.0001
+                )
+                image = image.flatten(1, 2)
+            else:
+                assert image.shape[1] == EMB_DIM
+                assert kwargs["temporal_coords"] is None
+        self.batch_sizes.append(image.shape[0])
+        signal = image.mean(dim=1, keepdim=True) * 0.01
+        signal = signal + aux.mean(dim=1, keepdim=True) * 0.01
+        if coords_signal is not None:
+            signal = signal + coords_signal[:, None, None, None]
+        logits = torch.cat([signal * (c - 13) for c in range(NUM_CLASSES)], dim=1)
+        if return_fractions:
+            assert self.frac_head is not None
+            return logits, torch.cat([signal + c * 0.1 for c in range(4)], dim=1)
+        return logits
+
+
+def _write_multimodal_tile(path, seed):
+    from imint.training.s1_enrichment import S1_ENRICH_VERSION
+    rng = np.random.default_rng(seed)
+    h, w = TILE + 4, TILE + 8  # exercise a non-square source and centre crop
+    d = {
+        "spectral": rng.uniform(0.01, 0.4, (24, h, w)).astype(np.float32),
+        "tessera": rng.normal(size=(EMB_DIM, h, w)).astype(np.float32),
+        "b08": rng.uniform(0.01, 0.4, (4, h, w)).astype(np.float32),
+        "rededge": rng.uniform(0.01, 0.4, (12, h, w)).astype(np.float32),
+        "b01": rng.uniform(0.01, 0.4, (4, h, w)).astype(np.float32),
+        "b09": rng.uniform(0.01, 0.4, (4, h, w)).astype(np.float32),
+        "has_b01": np.bool_(True), "has_b09": np.bool_(True),
+        "s1_vv_vh": rng.uniform(0.01, 0.2, (2, h, w)).astype(np.float32),
+        "s1_enrich_v": np.int32(S1_ENRICH_VERSION),
+        "doy": np.array([260, 130, 190, 220], dtype=np.float32),
+        "year": np.int32(2022 + seed - 200),
+        "easting": np.float32(500000 + (seed - 200) * 10000),
+        "northing": np.float32(6500000 + (seed - 200) * 12000),
+    }
+    for name in AUX_CHANNEL_NAMES:
+        d[name] = rng.uniform(0, 1, (h, w)).astype(np.float32)
+    np.savez_compressed(path, **d)
+
+
+@pytest.mark.parametrize("family,frames", [
+    ("prithvi", 1), ("prithvi", 4), ("tessera", 1),
+    ("clay", 1), ("croma", 1), ("terramind", 1),
+])
+@pytest.mark.parametrize("fraction_head", [False, True])
+def test_all_family_cache_forwards_match_direct(
+    tmp_path, checkpoint, family, frames, fraction_head,
+):
+    """Real preprocessing/router + batched cache I/O, no external model weights."""
+    data = tmp_path / "multimodal"
+    data.mkdir()
+    for i in range(3):
+        _write_multimodal_tile(data / f"tile_{i}.npz", 200 + i)
+    model = FamilyContractModel(family, frames, fraction_head)
+    cache_dir = tmp_path / "family-cache"
+    sha, counts = _run_stage_a(model, data, cache_dir, checkpoint)
+    assert counts == (3, 0)
+    assert model.batch_sizes == [2, 1]  # test batching, not just one-tile routing
+    cached = cache_predict.make_cached_predict_fn(
+        cache_dir, sha, want_fracs=fraction_head)
+    for path in sorted(data.glob("*.npz")):
+        inp = infcmp._build_inference_inputs(
+            str(path), "cpu", TILE, None, family=family, num_frames=frames)
+        try:
+            with torch.no_grad():
+                out = infcmp._forward_from_inputs(
+                    model, inp, "cpu", return_fractions=fraction_head)
+                logits = out[0] if fraction_head else out
+                expected_probs = torch.softmax(logits, dim=1)[0].numpy()
+                expected_pred = logits.argmax(1)[0].numpy()
+                result = cached(path)
+                np.testing.assert_array_equal(result[0], expected_pred)
+                np.testing.assert_allclose(result[1], expected_probs, atol=1e-3)
+                assert np.isfinite(result[1]).all()
+                with np.load(cache_dir / sha / f"{path.stem}.npz") as z:
+                    assert ("fracs" in z.files) is fraction_head
+                if fraction_head:
+                    expected_fracs = torch.sigmoid(out[1])[0].numpy()
+                    np.testing.assert_allclose(result[2], expected_fracs, atol=1e-3)
+        finally:
+            infcmp._close_inference_inputs(inp)
+
+
+def test_dataset_closes_loaded_npz(monkeypatch, tiles):
+    opened = []
+    real_builder = infcmp._build_inference_inputs
+
+    def capture(*args, **kwargs):
+        inp = real_builder(*args, **kwargs)
+        opened.append(inp["data"])
+        return inp
+
+    shim = _FakeInfcmp(FakeDualHead())
+    shim._build_inference_inputs = capture
+    monkeypatch.setattr(infer_tiles, "_load_infcmp", lambda: shim)
+    ds = infer_tiles.TileInferenceDataset(sorted(tiles.glob("*.npz")), "tessera", TILE, None)
+    item = ds[0]
+    assert item["img5d"].shape == (EMB_DIM, TILE, TILE)
+    assert opened[0].zip is None
+
+
+def test_collate_refuses_partially_missing_coordinates(tiles):
+    ds = infer_tiles.TileInferenceDataset(sorted(tiles.glob("*.npz")), "tessera", TILE, None)
+    a, b = ds[0], ds[1]
+    b["location_coords"] = torch.zeros(2)
+    with pytest.raises(ValueError, match="inconsistent location_coords"):
+        infer_tiles._collate([a, b])
+
+
+def test_partial_resume_preserves_original_batch_membership(tmp_path, checkpoint):
+    data = tmp_path / "resume-inputs"
+    data.mkdir()
+    for i in range(3):
+        _write_multimodal_tile(data / f"tile_{i}.npz", 200 + i)
+    model = FamilyContractModel("tessera", 1, True)
+    cache_dir = tmp_path / "resume-cache"
+    key, _ = _run_stage_a(model, data, cache_dir, checkpoint)
+    assert model.batch_sizes == [2, 1]
+    directory = cache_dir / key
+    retained = (directory / "tile_1.npz").read_bytes()
+    retained_receipt = (directory / "tile_1.json").read_bytes()
+    (directory / "tile_0.npz").unlink()
+    (directory / "tile_0.json").unlink()
+    model.batch_sizes.clear()
+    resumed_key, counts = _run_stage_a(model, data, cache_dir, checkpoint)
+    assert resumed_key == key and counts == (1, 2)
+    assert model.batch_sizes == [2]  # original [tile0,tile1], not a compacted singleton
+    assert (directory / "tile_1.npz").read_bytes() == retained
+    assert (directory / "tile_1.json").read_bytes() == retained_receipt
+
+
+def test_nfi_scoring_entry_uses_authenticated_cache_metadata(tiles, cache_dir_tmp, checkpoint, tmp_path):
+    from types import SimpleNamespace
+    from scripts.score_against_truth import score_nfi
+    model = FakeDualHead()
+    key, _ = _run_stage_a(model, tiles, cache_dir_tmp, checkpoint)
+    index = _nfi_index(tiles)
+    path = tmp_path / "nfi-index.parquet"
+    index.to_parquet(path, index=False)
+    args = SimpleNamespace(
+        cache_dir=cache_dir_tmp, ckpt_sha=key, img_size=TILE,
+        num_classes=NUM_CLASSES, plot_index=path, use_fraction_head=False,
+        dominant_frac=0.7, forest_floor=0.1, dump_per_plot=None,
+    )
+    actual = score_nfi(args)
+    expected = van.score_against_nfi(
+        index, cache_predict.make_cached_predict_fn(cache_dir_tmp, key, want_fracs=False),
+        num_classes=NUM_CLASSES)
+    assert actual["n_plots"] == expected["n_plots"] == 3
+    assert actual["confusion_nfi_x_pred"] == expected["confusion_nfi_x_pred"]
