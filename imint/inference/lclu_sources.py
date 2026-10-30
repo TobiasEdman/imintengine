@@ -49,10 +49,24 @@ class RegionalSources:
         return self._source(grid, year).prepare(grid, year)
 
     def locations(self) -> list[dict]:
-        return [point for source in self.sources for point in source.locations()]
+        tx = Transformer.from_crs(3006, 4326, always_xy=True)
+        project = Transformer.from_crs(4326, 3006, always_xy=True).transform
+        points = [transform(project, shape(area['geometry'])).representative_point()
+                  for area in self.areas()]
+        return [dict(zip(('lon', 'lat'), tx.transform(p.x, p.y))) for p in points]
 
     def areas(self) -> list[dict]:
-        return [area for source in self.sources for area in source.areas()]
+        grouped = {}
+        for source in self.sources:
+            for area in source.areas():
+                key = json.dumps({'name': area['properties']['name'],
+                                  'geometry': area['geometry']}, sort_keys=True)
+                if key not in grouped:
+                    grouped[key] = area
+                else:
+                    grouped[key]['properties']['years'] = sorted(set(
+                        grouped[key]['properties']['years'] + area['properties']['years']))
+        return list(grouped.values())
 
 
 class RepositorySources:

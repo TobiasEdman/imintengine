@@ -8,3 +8,5 @@ main{max-width:1500px;margin:auto;padding:32px}.intro{max-width:830px;margin-bot
 .legend-section>p,.legend-details{font-size:13px;line-height:1.6;color:var(--forest)}
 .legend-section a{color:var(--forest);text-decoration:underline}
 .legend-details{margin-top:20px}.legend-details summary{cursor:pointer}.legend-details li{margin:8px 0}
+
+.header-nav{display:flex;flex-wrap:wrap;gap:8px}.header-nav a{text-decoration:none}.header{gap:16px;flex-wrap:wrap}

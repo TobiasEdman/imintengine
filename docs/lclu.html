@@ -5,16 +5,17 @@
   <title>Årskarta · IMINT / Digital Earth Sweden</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/lclu-assets/styles.css?v=2">
-  <link rel="stylesheet" href="/lclu-assets/leaflet.css">
-  <link rel="stylesheet" href="/lclu-assets/lclu.css">
-  <script defer src="/lclu-assets/leaflet.js"></script>
-  <script defer src="/lclu-assets/lclu.js"></script>
+  <link rel="stylesheet" href="css/styles.css?v=2">
+  <link rel="stylesheet" href="css/leaflet.css">
+  <link rel="stylesheet" href="css/lclu.css">
+  <script defer src="js/vendor/leaflet.min.js"></script>
+  <script defer src="js/lclu-config.js"></script>
+  <script defer src="js/lclu.js"></script>
 </head>
 <body>
 <header class="header">
   <div class="header-left"><div><h1><span>IMINT</span> / Årskarta</h1><p>Digital Earth Sweden</p></div></div>
-  <span class="theme-tab active">Marktäcke · TESSERA R4</span>
+  <nav class="header-nav" aria-label="Showcase"><a class="theme-tab" href="index.html">← Showcase</a><span class="theme-tab active">Årskarta · TESSERA R4</span></nav>
 </header>
 <main>
   <section class="intro"><p class="eyebrow" id="area-title">SVERIGE / HISTORISKA ÅR</p><h2>En plats. Ett år. En karta.</h2>
@@ -51,10 +52,10 @@
         <input id="opacity" type="range" min="0" max="100" value="100">
         <div class="downloads"><a id="download-tif" download>Hämta GeoTIFF ↓</a><a id="download-provenance" download>Datakällor och proveniens ↓</a></div>
       </section>
-      <p class="operator-note">Lokal operatörsprototyp · modellresultat för granskning.</p>
+      <p class="operator-note">Interaktiv demo · befintlig TESSERA R4-modell.</p>
     </aside>
   </div>
-  <section class="testimonial"><h3>Vad betyder året?</h3><p id="historical-note"></p>
+  <section class="testimonial"><h3>Vad betyder året?</h3><p id="historical-note">Året gäller TESSERA och HR-VPP. Trädhöjd, skogliga grunddata, markfukt och DEM är fasta stödlager som delas mellan åren.</p>
     <p>Genomskinliga pixlar saknar användbara indata. Svart är modellklassen bakgrund (0). Modellens klassning är en skattning.</p>
   </section>
   <section class="legend-section"><h3>Teckenförklaring</h3>

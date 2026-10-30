@@ -40,8 +40,12 @@ def test_official_swatches_exports_and_class_ids_agree(tmp_path):
 
 def test_aggregates_and_extensions_explain_their_limits():
     items = {item['id']: item for item in legend()}
-    assert 'barrblandskog' in items[3]['name']
-    for key in (3, 5, 7, 8, 9, 10, 24, 25, 26):
+    assert items[3]['name'] == 'Lövskog'
+    assert items[4]['name'] == 'Blandskog'
+    for key in (1, 2, 3, 4):
+        assert 'Barrblandskog redovisas inte separat' in items[key]['note']
+        assert 'motsvarar inte NMD exakt' in items[key]['note']
+    for key in (5, 7, 8, 9, 10, 24, 25, 26):
         assert 'sammanslag' in (items[key]['note'] + items[key]['name']).lower()
     for key in range(11, 23):
         assert 'ingen separat NMD-klass' in items[key]['note']

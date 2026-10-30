@@ -54,7 +54,7 @@ def test_no_config_and_geometry(api):
         assert client.get('/lclu-assets/secret.json').status_code == 404
 
 
-@pytest.mark.parametrize('changes', [{'year':2017},{'year':2026},{'year':2024.0},{'year':True},
+@pytest.mark.parametrize('changes', [{'year':2016},{'year':2026},{'year':2024.0},{'year':True},
                                      {'year':'2024'},{'date':'2024-07-01'},{'lon':'17.64'},
                                      {'lon':False},{'checkpoint':'private.pt'}])
 def test_strict_annual_request(api, changes):
@@ -166,3 +166,62 @@ def test_pixel_inspection_reads_native_classes_nodata_and_edges_without_inferenc
                 await api.server.lclu_pixel(submitted.job_id,REQUEST['lon'],REQUEST['lat'])
             assert missing.value.status_code==503 and service.model.calls==1
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('origin', ['*', 'http://showcase.example', 'https://site.example/path',
+                                    'https://user:pass@site.example', 'https://site.example?x=1'])
+def test_showcase_rejects_ambiguous_origins(origin):
+    from imint.api.v1.lclu_cors import validate_origins
+    with pytest.raises(ValueError):
+        validate_origins([origin])
+
+
+def test_showcase_cross_origin_submission_poll_and_download(api, monkeypatch):
+    from imint.api.v1.lclu_cors import LcluCORSMiddleware
+    origin='https://showcase.example'
+    app=LcluCORSMiddleware(api.server.app, origins=[origin])
+    headers={'Origin':origin}
+    with TestClient(app) as client:
+        install(api,monkeypatch)
+        preflight=client.options('/v1/lclu',headers={**headers,
+            'Access-Control-Request-Method':'POST', 'Access-Control-Request-Headers':'Content-Type'})
+        assert preflight.status_code==200
+        assert preflight.headers['access-control-allow-origin']==origin
+        submit=client.post('/v1/lclu',headers=headers,json=REQUEST)
+        assert submit.status_code==202 and submit.headers['access-control-allow-origin']==origin
+        poll=submit.json()['poll_url']
+        assert poll.startswith('/v1/lclu/jobs/')
+        # Synchronise with the actual executor; no arbitrary polling sleep.
+        async def finish():
+            await asyncio.gather(*tuple(api.server._pending_jobs))
+        client.portal.call(finish)
+        result=client.get(poll,headers=headers)
+        assert result.headers['access-control-allow-origin']==origin
+        assert result.json()['status']=='success'
+        for path in result.json()['result']['artifacts'].values():
+            artifact=client.get(path,headers=headers)
+            assert artifact.status_code==200
+            assert artifact.headers['access-control-allow-origin']==origin
+        assert client.post('/v1/lclu',headers=headers,json=REQUEST).json()['poll_url']==poll
+        assert client.get('/v1/lclu/jobs/missing',headers=headers).status_code==404
+        api.server._jobs['ordinary']={'kind':'analysis'}
+        assert client.get('/v1/lclu/jobs/ordinary',headers=headers).status_code==404
+        for path in ('/v1/jobs/missing','/v1/lclux','/health'):
+            assert 'access-control-allow-origin' not in client.get(path,headers=headers).headers
+        assert 'access-control-allow-origin' not in client.get('/v1/lclu',headers={'Origin':'https://untrusted.example'}).headers
+
+
+def test_showcase_assets_work_for_static_and_api_hosting(api):
+    import re
+    root=Path(__file__).resolve().parents[2]/'docs'
+    static=(root/'lclu.html').read_text()
+    assets=re.findall(r'(?:src|href)="((?:css|js)/[^"?]+)(?:\?[^" ]*)?"',static)
+    assert assets and all((root/name).is_file() for name in assets)
+    assert 'href="index.html"' in static
+    with TestClient(api.server.app) as client:
+        html=client.get('/lclu').text
+        served=re.findall(r'(?:src|href)="(/lclu-assets/[^"?]+)(?:\?[^" ]*)?"',html)
+        assert len(served)==len(assets)
+        for path in served:
+            assert client.get(path).status_code==200
+        assert client.get('/lclu-assets/../config/analyzers.yaml').status_code==404

@@ -31,7 +31,7 @@ from imint.inference.lclu_legend import MAP_COLORS, legend
 from imint.training.tile_config import TileConfig
 from scripts.cache_predict import atomic_write, contract_pin, file_identity
 
-YEARS = tuple(range(2018, 2026))
+YEARS = tuple(range(2017, 2026))
 SOURCE_SIZE, OUTPUT_SIZE, CROP, NODATA = 512, 504, 4, 255
 EMBEDDING = {"producer": "geotessera", "producer_version": "0.10.2",
              "dataset": "v1", "variant": "vultr"}

@@ -14,23 +14,33 @@ from scripts.cache_predict import file_identity
 def main(source: Path, work: Path, data: Path) -> None:
     root = work/'demo'
     root.mkdir(parents=True, exist_ok=True)
-    year = int(os.environ['LCLU_YEAR'])
-    manifests = []
-    for name in ('stockholm', 'kiruna_tatort'):
-        region = work/name
-        stage(source/f'config/lclu/{name}.json', year, data, region)
-        manifests.append(json.loads((region/'serving.json').read_text()))
-    if any(m['checkpoint'] != manifests[0]['checkpoint'] for m in manifests):
-        raise ValueError('Demo regions must use the same pinned R4 checkpoint')
-    write_json(root/'serving.json', {'version': 1, 'device': 'cpu',
-        'checkpoint': manifests[0]['checkpoint'],
-        'preparations': [m['preparation'] for m in manifests]})
+    if os.environ.get('LCLU_CAMPAIGN'):
+        from scripts.stage_lclu_campaign import stage_campaign
+        years = [int(value) for value in os.environ['LCLU_YEARS'].split(',')]
+        manifest = stage_campaign(source/'config/lclu/municipalities.json', years, data,
+                                  work/'campaign', int(os.environ['LCLU_MAX_ORIGINAL_BYTES']),
+                                  reuse_roots=(work/'stockholm', work/'kiruna_tatort'))
+        write_json(root/'serving.json', manifest)
+        run_args = {'years': years, 'campaign': manifest['campaign']}
+    else:
+        year = int(os.environ['LCLU_YEAR'])
+        manifests = []
+        for name in ('stockholm', 'kiruna_tatort'):
+            region = work/name
+            stage(source/f'config/lclu/{name}.json', year, data, region)
+            manifests.append(json.loads((region/'serving.json').read_text()))
+        if any(m['checkpoint'] != manifests[0]['checkpoint'] for m in manifests):
+            raise ValueError('Demo regions must use the same pinned R4 checkpoint')
+        write_json(root/'serving.json', {'version': 1, 'device': 'cpu',
+            'checkpoint': manifests[0]['checkpoint'],
+            'preparations': [m['preparation'] for m in manifests]})
+        run_args = {'year': year, 'areas': ['Stockholm', 'Kiruna tätort']}
     os.environ['IMINT_LCLU_MANIFEST'] = str(root/'serving.json')
     write_json(root/'MANIFEST.json', {
         'image': os.environ['LCLU_IMAGE'], 'image_digest': os.environ['LCLU_IMAGE'].split('@', 1)[1],
         'execution_mode': os.environ.get('LCLU_EXECUTION_MODE', 'built-image'),
         'source': json.loads((source/'SOURCE_MANIFEST.json').read_text()),
-        'run_args': {'year': year, 'areas': ['Stockholm', 'Kiruna tätort']},
+        'run_args': run_args,
         'input_data_hash': public_identity(file_identity(root/'serving.json')),
         'produced_at': datetime.now(timezone.utc).isoformat(),
     })

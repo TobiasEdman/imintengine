@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.exceptions import RequestValidationError
 
 from imint.api.v1.schemas import (
@@ -188,6 +188,11 @@ except ImportError:
 
     def record_chat_ms(*_, **__):  # type: ignore[misc]
         return None
+
+
+from imint.api.v1.lclu_cors import LcluCORSMiddleware
+app.add_middleware(LcluCORSMiddleware, origins=[
+    value.strip() for value in os.environ.get('IMINT_LCLU_ORIGINS', '').split(',') if value.strip()])
 
 
 @app.middleware("http")
@@ -629,13 +634,14 @@ async def lclu_info():
 
 @app.get('/v1/lclu/availability', tags=['lclu'])
 async def lclu_availability(lon: float, lat: float):
-    from imint.inference.lclu import Grid
+    from imint.inference.lclu import Grid, YEARS
     try:
         grid = Grid.from_lonlat(lon, lat)
     except ValueError:
         raise HTTPException(status_code=422, detail='Välj en plats inom Sveriges datatäckning.') from None
     years = _lclu_service.sources.years(grid) if _lclu_service else []
     return {'geometry': grid.describe(), 'years': years,
+            'unavailable_years': [year for year in YEARS if year not in years],
             'message': '' if years else 'Verifierade årsdata saknas för denna plats.'}
 
 
@@ -658,10 +664,10 @@ async def submit_lclu(req: LcluRequest):
     if previous and previous['status'] != JobStatus.FAILED:
         return AnalyzeResponse(job_id=previous['job_id'], status=previous['status'],
                                submitted_at=previous['submitted_at'],
-                               poll_url=f"/v1/jobs/{previous['job_id']}")
+                               poll_url=f"/v1/lclu/jobs/{previous['job_id']}")
     _check_capacity()
     response = AnalyzeResponse(poll_url='')
-    response.poll_url = f'/v1/jobs/{response.job_id}'
+    response.poll_url = f'/v1/lclu/jobs/{response.job_id}'
     b = grid.bounds(504)
     bbox = dict(zip(('west', 'south', 'east', 'north'), transform_bounds(
         'EPSG:3006', 'EPSG:4326', b['west'], b['south'], b['east'], b['north'])))
@@ -677,6 +683,14 @@ async def submit_lclu(req: LcluRequest):
     _pending_jobs.add(task)
     task.add_done_callback(lambda done: _finish_job_task(response.job_id, done))
     return response
+
+
+@app.get('/v1/lclu/jobs/{job_id}', response_model=JobStatusResponse, tags=['lclu'])
+async def get_lclu_job(job_id: str) -> JobStatusResponse:
+    job = await _get_job(job_id)
+    if not job or job.get('kind') != 'lclu':
+        raise HTTPException(status_code=404, detail='Annual map job not found')
+    return await get_job(job_id)
 
 
 async def _lclu_artifacts(job_id: str) -> tuple[dict, Path]:
@@ -741,15 +755,24 @@ async def lclu_pixel(job_id: str, lon: float, lat: float):
 _WEB_ROOT = Path(__file__).resolve().parents[3] / 'docs'
 
 
+_LCLU_ASSETS = {'lclu.js': 'js/lclu.js', 'lclu-config.js': 'js/lclu-config.js',
+                'lclu.css': 'css/lclu.css', 'styles.css': 'css/styles.css',
+                'leaflet.js': 'js/vendor/leaflet.min.js', 'leaflet.css': 'css/leaflet.css'}
+
+
 @app.get('/lclu', include_in_schema=False)
 async def lclu_page():
-    return FileResponse(_WEB_ROOT / 'lclu.html')
+    # The versioned page is also deployable directly in the static showcase.
+    page = (_WEB_ROOT / 'lclu.html').read_text()
+    for name, relative in _LCLU_ASSETS.items():
+        page = page.replace('src="'+relative+'"', 'src="/lclu-assets/'+name+'"')
+        page = page.replace('href="'+relative, 'href="/lclu-assets/'+name)
+    page = page.replace('href="index.html"', 'href="https://digitalearth.se/"')
+    return HTMLResponse(page)
 
 
 @app.get('/lclu-assets/{name}', include_in_schema=False)
 async def lclu_asset(name: str):
-    files = {'lclu.js': 'js/lclu.js', 'lclu.css': 'css/lclu.css', 'styles.css': 'css/styles.css',
-             'leaflet.js': 'js/vendor/leaflet.min.js', 'leaflet.css': 'css/leaflet.css'}
-    if name not in files:
+    if name not in _LCLU_ASSETS:
         raise HTTPException(status_code=404)
-    return FileResponse(_WEB_ROOT / files[name])
+    return FileResponse(_WEB_ROOT / _LCLU_ASSETS[name])

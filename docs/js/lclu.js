@@ -1,6 +1,8 @@
 /* Geographic annual map UI. No synthetic predictions or year substitution. */
 'use strict';
 const $ = id => document.getElementById(id);
+const apiBase = new URL((window.IMINT_LCLU_CONFIG?.apiBase || window.location.origin).replace(/\/?$/, '/'));
+const apiUrl = path => new URL(path.replace(/^\/+/, ''), apiBase).href;
 const map = L.map('map', {minZoom: 4, maxZoom: 18, zoomAnimation: false, fadeAnimation: false}).setView([62.1, 16.5], 5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -11,7 +13,10 @@ const phaseLabels = {queued:'I kö …', preparing:'Förbereder årsdata …', c
 function status(text, error=false) { $('status').textContent = text; $('status').classList.toggle('error', error); }
 function clearResult() { ++inspection; resultJob=null; map.closePopup(); if (overlay) { map.removeLayer(overlay); overlay = null; } $('result').hidden = true; }
 async function request(url, options) {
-  const response = await fetch(url, options);
+  const response = await fetch(apiUrl(url), options);
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    throw new Error('Årskartans tjänst är inte tillgänglig just nu. Försök igen senare.');
+  }
   const body = await response.json();
   if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `Begäran misslyckades (${response.status}).`);
   return body;
@@ -42,6 +47,10 @@ async function select(lat, lon) {
       data.years.slice().reverse().forEach(year => $('year').add(new Option(String(year), String(year))));
       status('Välj år och skapa din karta. Pixelernas datatäckning kontrolleras vid körning.');
     } else { $('year').add(new Option('Inga tillgängliga år','')); status(data.message); }
+    for (const year of (data.unavailable_years || []).slice().reverse()) {
+      const option = new Option(`${year} – ej verifierade årsdata`, String(year));
+      option.disabled = true; $('year').add(option);
+    }
   } catch (error) { if (current === generation) status(error.message,true); }
   if (current === generation) controls();
 }
@@ -88,10 +97,10 @@ $('create').addEventListener('click', async () => {
     if(job.status === 'failed') throw new Error(job.error || 'Årskartan kunde inte skapas.');
     const r=job.result;
     resultJob=submission.job_id;
-    overlay=L.imageOverlay(r.artifacts['overlay.png'],r.overlay_bounds,{opacity:Number($('opacity').value)/100,interactive:false,className:'lclu-classification'}).addTo(map);
+    overlay=L.imageOverlay(apiUrl(r.artifacts['overlay.png']),r.overlay_bounds,{opacity:Number($('opacity').value)/100,interactive:false,className:'lclu-classification'}).addTo(map);
     overlay.on('error',()=>status('Kartlagret kunde inte visas. GeoTIFF-filen kan fortfarande hämtas.',true));
-    $('download-tif').href=r.artifacts['classification.tif'];
-    $('download-provenance').href=r.artifacts['provenance.json'];
+    $('download-tif').href=apiUrl(r.artifacts['classification.tif']);
+    $('download-provenance').href=apiUrl(r.artifacts['provenance.json']);
     $('result-title').textContent=`Årskarta ${year}`;
     $('coverage').textContent=`${(100*r.valid_pixels/(504*504)).toFixed(1)} % giltiga pixlar · ${r.nodata_pixels.toLocaleString('sv-SE')} utan data. Stödlager kan ha luckor; se proveniens.`;
     $('timing').textContent=`Svarstid: ${((performance.now()-started)/1000).toFixed(1)} s`;
@@ -106,7 +115,7 @@ request('/v1/lclu').then(info=>{
     const areas=L.geoJSON(info.areas,{interactive:false,style:{color:'#245045',weight:2,dashArray:'5 5',fillOpacity:.02}}).addTo(map);
     const layers=areas.getLayers();
     map.fitBounds(layers[0].getBounds(),{padding:[25,25]});
-    $('area-title').textContent=info.areas.map(area=>area.properties.name).join(' / ')+' / DEMO';
+    $('area-title').textContent=(info.areas.length > 2 ? `${info.areas.length} demoområden` : info.areas.map(area=>area.properties.name).join(' / '))+' / DEMO';
     $('map-caption').textContent='Välj en punkt inom ett streckat demoområde. Årskartan är 5,04 × 5,04 km och kan sträcka sig utanför området.';
     info.areas.forEach((area,index)=>$('area').add(new Option(area.properties.name,String(index))));
     $('area-control').hidden=info.areas.length<2;
@@ -127,4 +136,4 @@ request('/v1/lclu').then(info=>{
   }
   for(const point of info.locations){ L.circleMarker([point.lat,point.lon],{radius:6,bubblingMouseEvents:false,color:'#1a4338',fillColor:'#cff8e4',fillOpacity:1}).addTo(map).on('click', event=>{L.DomEvent.stopPropagation(event);mapClick(event.latlng);}); }
   controls();
-}).catch(error=>status(`Tjänsten kunde inte nås: ${error.message}`,true));
+}).catch(()=>status('Årskartans tjänst är inte tillgänglig just nu. Försök igen senare.',true));

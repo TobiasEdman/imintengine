@@ -12,7 +12,8 @@ import tarfile
 
 def resources(image: str, year: int, recipe: Path | None = None, *,
               job_name: str = 'lclu-stockholm-0124', reuse_volume: bool = False,
-              deadline_seconds: int = 86400) -> dict:
+              deadline_seconds: int = 86400, campaign_years: tuple[int, ...] | None = None,
+              storage_gib: int = 20, max_original_bytes: int = 0) -> dict:
     if not re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}', image):
         raise ValueError('A published image digest is required, not a tag')
     if year not in (2024, 2025):
@@ -21,11 +22,22 @@ def resources(image: str, year: int, recipe: Path | None = None, *,
         raise ValueError('Job must belong to the Stockholm demo')
     if not 1 <= deadline_seconds <= 86400:
         raise ValueError('Deadline must remain within the approved 24 hours')
+    if type(storage_gib) is not int or not 20 <= storage_gib <= 1024:
+        raise ValueError('Explicit storage must be between20 and1024 GiB')
+    if campaign_years is not None:
+        if (not campaign_years or len(set(campaign_years)) != len(campaign_years)
+                or any(type(y) is not int or not 2017 <= y <= 2025 for y in campaign_years)
+                or type(max_original_bytes) is not int or max_original_bytes <= 0):
+            raise ValueError('Campaign requires exact inventoried years and a positive byte budget')
+        if storage_gib * 2**30 < max_original_bytes * 2.3 + 6 * 2**30:
+            raise ValueError('Storage insufficient for retained source budget and runtime')
+    elif storage_gib != 20 or max_original_bytes:
+        raise ValueError('Expanded storage requires an explicit campaign')
     metadata = {'namespace': 'prithvi-training-default', 'labels': {'app': 'lclu-stockholm', 'task': '0124'}}
     pvc = {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim',
            'metadata': {**metadata, 'name': 'lclu-stockholm-0124'},
            'spec': {'storageClassName': 'rook-ceph-fs', 'accessModes': ['ReadWriteMany'],
-                    'resources': {'requests': {'storage': '20Gi'}}}}
+                    'resources': {'requests': {'storage': f'{storage_gib}Gi'}}}}
     job = {'apiVersion': 'batch/v1', 'kind': 'Job',
            'metadata': {**metadata, 'name': job_name},
            'spec': {'activeDeadlineSeconds': deadline_seconds, 'ttlSecondsAfterFinished': 86400,
@@ -49,14 +61,19 @@ def resources(image: str, year: int, recipe: Path | None = None, *,
                    'volumes': [{'name': 'data', 'persistentVolumeClaim': {
                                    'claimName': 'training-data-cephfs', 'readOnly': True}},
                                {'name': 'work', 'persistentVolumeClaim': {'claimName': 'lclu-stockholm-0124'}}]}}}}
+    if campaign_years is not None:
+        job['spec']['template']['spec']['containers'][0]['env'] += [
+            {'name': 'LCLU_CAMPAIGN', 'value': 'municipalities'},
+            {'name': 'LCLU_YEARS', 'value': ','.join(str(y) for y in campaign_years)},
+            {'name': 'LCLU_MAX_ORIGINAL_BYTES', 'value': str(max_original_bytes)}]
     items = [job] if reuse_volume else [pvc, job]
     if recipe is not None:
         expected_base = 'python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f'
         if image != expected_base:
             raise ValueError('Recipe mode requires the Dockerfile\'s exact Python base')
         archive = recipe.read_bytes()
-        if len(archive) > 900_000:
-            raise ValueError('Source archive exceeds the bounded ConfigMap budget')
+        if len(archive) > 2_000_000:
+            raise ValueError('Source archive exceeds the bounded campaign budget')
         digest = hashlib.sha256(archive).hexdigest()
         with tarfile.open(fileobj=io.BytesIO(archive)) as source:
             bootstrap = source.extractfile('docker/lclu/bootstrap.py').read()
@@ -76,8 +93,21 @@ def resources(image: str, year: int, recipe: Path | None = None, *,
             'OMP_NUM_THREADS': '2', 'MKL_NUM_THREADS': '2', 'GDAL_CACHEMAX': '256',
             'VPP_SOURCE': 'wekeo', 'IMINT_API_MAX_PIXELS': '262144', 'IMINT_API_MAX_JOBS': '4'}.items()]
         container['volumeMounts'].append({'name': 'recipe', 'mountPath': '/recipe', 'readOnly': True})
-        spec['volumes'].append({'name': 'recipe', 'configMap': {'name': name}})
-        items.insert(0, configmap)
+        if len(archive) <= 900_000:
+            spec['volumes'].append({'name': 'recipe', 'configMap': {'name': name}})
+            items.insert(0, configmap)
+        else:
+            # Each ConfigMap remains below1MiB, including base64 and metadata.
+            maps = []
+            for i, offset in enumerate(range(0, len(archive), 600_000)):
+                part = {**configmap, 'metadata': {**metadata, 'name': f'{name}-{i}'},
+                        'data': {'bootstrap.py': bootstrap.decode()} if i == 0 else {},
+                        'binaryData': {f'source.tar.gz.part{i:03d}':
+                                       base64.b64encode(archive[offset:offset+600_000]).decode()}}
+                maps.append(part)
+            spec['volumes'].append({'name': 'recipe', 'projected': {'sources': [
+                {'configMap': {'name': part['metadata']['name']}} for part in maps]}})
+            items[0:0] = maps
     return {'apiVersion': 'v1', 'kind': 'List', 'items': items}
 
 
@@ -90,10 +120,15 @@ def main():
     parser.add_argument('--job-name', default='lclu-stockholm-0124')
     parser.add_argument('--reuse-volume', action='store_true')
     parser.add_argument('--deadline-seconds', type=int, default=86400)
+    parser.add_argument('--campaign-years', type=int, nargs='+')
+    parser.add_argument('--storage-gib', type=int, default=20)
+    parser.add_argument('--max-original-bytes', type=int, default=0)
     args = parser.parse_args()
     args.output.write_text(json.dumps(resources(args.image, args.year, args.recipe,
         job_name=args.job_name, reuse_volume=args.reuse_volume,
-        deadline_seconds=args.deadline_seconds), indent=2)+'\n')
+        deadline_seconds=args.deadline_seconds,
+        campaign_years=tuple(args.campaign_years) if args.campaign_years else None,
+        storage_gib=args.storage_gib, max_original_bytes=args.max_original_bytes), indent=2)+'\n')
 
 
 if __name__ == '__main__':

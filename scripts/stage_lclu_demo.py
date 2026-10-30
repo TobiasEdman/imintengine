@@ -73,17 +73,41 @@ def select_vpp(index: dict, year: int, bounds_4326: tuple) -> dict:
     return selected
 
 
-def stage(scope_path: Path, year: int, data: Path, root: Path) -> None:
+def cached_block(row: dict, roots: tuple[Path, ...], receipts: Path) -> dict | None:
+    """Return a verified reusable COG pair, binding it to the native inventory."""
+    name = f"{row['year']}_grid_{row['lon']:.2f}_{row['lat']:.2f}.json"
+    for root in roots:
+        path = root/'cogs'/name
+        if not path.is_file():
+            continue
+        record = json.loads(path.read_text())
+        if (record['year'], record['lon'], record['lat']) != (row['year'], row['lon'], row['lat']):
+            raise ValueError('COG receipt block identity mismatch')
+        if [v['size'] for v in record['original'][:2]] != [row['grid_size'], row['scales_size']]:
+            raise ValueError('COG receipt disagrees with registry source sizes')
+        for field in ('vectors', 'scales'):
+            verified = verify_source_file(record[field], root, receipts)
+            record[field] = {**record[field], 'path': str(verified.resolve())}
+        return record
+    return None
+
+
+def stage(scope_path: Path, year: int, data: Path, root: Path, *,
+          shared_root: Path | None = None, max_blocks: int = 32,
+          max_original_bytes: int = 3_000_000_000,
+          reuse_roots: tuple[Path, ...] = ()) -> None:
     start = time.perf_counter()
     scope_identity = file_identity(scope_path)
     scope = json.loads(scope_path.read_text())
     rows = [r for r in scope['blocks'] if r['year'] == year]
     budget = sum(r['grid_size'] + r['scales_size'] for r in rows)
-    if (scope['version'] != 1 or not rows or len(rows) > 32 or budget > 3_000_000_000
+    if (scope['version'] != 1 or not rows or len(rows) > max_blocks or budget > max_original_bytes
             or any(r['variant'] != 'vultr' or r['version'] != '1.0' for r in rows)):
         raise ValueError('Unsupported or oversized municipality inventory')
     root.mkdir(parents=True, exist_ok=True)
-    receipts = root / 'receipts'
+    shared = shared_root if shared_root is not None else root
+    receipts = shared / 'receipts'
+    (shared/'cogs').mkdir(parents=True, exist_ok=True)
     bounds = scope['bounds_3006']
     wgs = transform_bounds('EPSG:3006', 'EPSG:4326', *bounds, densify_pts=41)
     index_path = data / 'vpp_wekeo/index.json'
@@ -103,7 +127,10 @@ def stage(scope_path: Path, year: int, data: Path, root: Path) -> None:
         verify_source_file(record, root, receipts)
     config['dem_sources'] = []
     for url in _get_cog_urls(wgs[1], wgs[3], wgs[0], wgs[2]):
-        path = fetch(url, root/'dem'/url.rsplit('/', 1)[1], maximum=80_000_000)
+        filename = url.rsplit('/', 1)[1]
+        path = next((previous/'dem'/filename for previous in reuse_roots
+                     if (previous/'dem'/(filename+'.json')).is_file()), shared/'dem'/filename)
+        path = fetch(url, path, maximum=80_000_000)
         config['dem_sources'].append(file_identity(path))
     # All existing source rasters potentially read in the buffered region are
     # pinned and their identity receipts warmed before interactive requests.
@@ -117,22 +144,20 @@ def stage(scope_path: Path, year: int, data: Path, root: Path) -> None:
     records = []
     for row in rows:
         name = f"grid_{row['lon']:.2f}_{row['lat']:.2f}"
-        record_path = root/'cogs'/f'{year}_{name}.json'
-        if record_path.exists():
-            record = json.loads(record_path.read_text())
-            if (record['year'], record['lon'], record['lat']) != (year, row['lon'], row['lat']):
-                raise ValueError('COG receipt block identity mismatch')
-            for field in ('vectors', 'scales'):
-                verify_source_file(record[field], root, receipts)
+        record_path = shared/'cogs'/f'{year}_{name}.json'
+        record = cached_block(row, (shared, *reuse_roots), receipts)
+        if record is not None:
+            if not record_path.exists():
+                write_json(record_path, record)
         else:
             base = f'https://data.source.coop/tessera/tessera/npy/v1/{year}/{name}'
-            quantized = fetch(f'{base}/{name}.npy', root/'original'/str(year)/f'{name}.npy',
+            quantized = fetch(f'{base}/{name}.npy', shared/'original'/str(year)/f'{name}.npy',
                               maximum=row['grid_size'], expected=row['grid_size'])
-            scales = fetch(f'{base}/{name}_scales.npy', root/'original'/str(year)/f'{name}_scales.npy',
+            scales = fetch(f'{base}/{name}_scales.npy', shared/'original'/str(year)/f'{name}_scales.npy',
                            maximum=row['scales_size'], expected=row['scales_size'])
             reference = fetch(f'https://data.source.coop/tessera/tessera/landmasks/v1/{name}.tiff',
-                              root/'original'/f'{name}.tiff', maximum=1_000_000)
-            record = convert_block(quantized, scales, reference, root/'cogs', year, row['lon'], row['lat'])
+                              shared/'original'/f'{name}.tiff', maximum=1_000_000)
+            record = convert_block(quantized, scales, reference, shared/'cogs', year, row['lon'], row['lat'])
             write_json(record_path, record)
         records.append(record)
         print(f'Verified compact COG {len(records)}/{len(rows)} {name}', flush=True)
@@ -171,7 +196,7 @@ def stage(scope_path: Path, year: int, data: Path, root: Path) -> None:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scope', type=Path, required=True)
-    parser.add_argument('--year', type=int, choices=(2024, 2025), required=True)
+    parser.add_argument('--year', type=int, choices=range(2017, 2026), required=True)
     parser.add_argument('--data', type=Path, default=Path('/data'))
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()

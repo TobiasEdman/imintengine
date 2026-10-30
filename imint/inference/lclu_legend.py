@@ -23,7 +23,7 @@ MAP_COLORS.update({key: tuple(bytes.fromhex(color[1:]))
                    for key, (_, color) in NMD_SWATCHES.items()})
 MAP_NAMES = {**UNIFIED_CLASSES,
     1: 'Tallskog på fastmark', 2: 'Granskog på fastmark',
-    3: 'Lövskog / barrblandskog', 4: 'Lövblandad barrskog på fastmark',
+    3: 'Lövskog', 4: 'Blandskog',
     5: 'Skog på våtmark', 6: 'Temporärt ej skog på fastmark',
     7: 'Öppen våtmark', 8: 'Öppen mark (sammanslagen)',
     9: 'Exploaterad mark', 10: 'Sjö, vattendrag och hav',
@@ -31,8 +31,9 @@ MAP_NAMES = {**UNIFIED_CLASSES,
 }
 NOTES = {
     0: 'Modellens bakgrundsklass; skiljs från pixlar där data saknas.',
-    3: 'Sammanslagen modellklass. Aktuell klassmappning omfattar lövskog, '
-       'barrblandskog och låg fjällskog på fastmark. Färg från NMD triviallövskog.',
+    **{key: 'Skogstyperna är modellklasser som förfinats med fältdata och motsvarar inte NMD exakt. '
+       'Barrblandskog redovisas inte separat. Färgerna är hämtade från NMD.'
+       for key in (1, 2, 3, 4)},
     5: 'Sammanslagna skogstyper på våtmark, även temporärt ej skog och låg fjällskog. '
        'Färg från NMD tallskog på våtmark.',
     7: 'Våtmarkens underklasser är sammanslagna; färg från NMD öppen våtmark.',
