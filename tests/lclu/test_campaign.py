@@ -203,6 +203,9 @@ def test_campaign_launch_keeps_running_demo_manifest_and_api_lock(tmp_path, monk
     monkeypatch.setenv('LCLU_MAX_ORIGINAL_BYTES', '1')
     monkeypatch.setenv('LCLU_IMAGE', 'python@sha256:' + '0' * 64)
     monkeypatch.setenv('IMINT_API_OUTPUT_DIR', str(work / 'results'))  # as bootstrap sets it
+    # run.main writes IMINT_LCLU_MANIFEST into os.environ. setenv records the original
+    # (usually absent) value so teardown restores it; delenv on an absent name records nothing.
+    monkeypatch.setenv('IMINT_LCLU_MANIFEST', 'unset-by-test')
 
     class Served(Exception):
         pass
