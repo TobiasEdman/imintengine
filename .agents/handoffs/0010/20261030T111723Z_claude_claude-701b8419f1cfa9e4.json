@@ -1,0 +1,67 @@
+{
+  "active_goal": "FM campaign E00-E12 (task 0010): integrate Codex's consolidated E00/E01 work with current main and land the FractionLoss mask fix.",
+  "active_rules": [
+    "User decides cost-driving actions [task 0010]",
+    "Preserve historical versions and results; prospective fixes only [task 0010]",
+    "No training launch without approval"
+  ],
+  "blockers": [
+    "Cache design decision is Tobias's",
+    "Claim owned by te-codex"
+  ],
+  "changed_paths": [
+    "docs/evidence/crop-distill/README.md",
+    "docs/evidence/crop-distill/run-manifests.json",
+    "docs/experiments/fm_e00_checkpoint_audit.md",
+    "docs/experiments/fm_e01_cache.md",
+    "docs/experiments/fm_e01_fraction_gate.md",
+    "docs/experiments/fm_e01_fraction_lineage.md",
+    "docs/experiments/fm_e01_index_audit.md",
+    "docs/experiments/fm_e01_index_audit_result.md",
+    "docs/experiments/fm_e01_observation_roles.md",
+    "docs/experiments/fm_fraction_scoring_policy.json",
+    "imint/training/losses.py",
+    "k8s/infer-tiles-job.template.yaml",
+    "k8s/score-truth-job.template.yaml",
+    "scripts/audit_ladder_checkpoints.py",
+    "scripts/audit_observation_indices.py",
+    "scripts/cache_predict.py",
+    "scripts/capture_crop_distill_evidence.py",
+    "scripts/crop_holdout_guard.py",
+    "scripts/fraction_scoring_policy.py",
+    "scripts/infer_tiles.py",
+    "scripts/prediction_cache.py",
+    "scripts/prepare_checkpoint_audit_job.py",
+    "scripts/prepare_observation_index_audit.py",
+    "scripts/score_against_truth.py",
+    "tests/test_cached_validation_parity.py",
+    "tests/test_crop_distill_evidence_capture.py",
+    "tests/test_crop_holdout_guard.py",
+    "tests/test_fraction_loss_mask.py",
+    "tests/test_fraction_scoring_policy.py",
+    "tests/test_ladder_checkpoint_audit.py",
+    "tests/test_observation_index_audit.py",
+    "tests/test_prediction_cache.py"
+  ],
+  "commit": null,
+  "created_at": "2026-10-30T11:17:23Z",
+  "current_state": "Codex left 35 files uncommitted (snapshot 87f5f787). Claude committed them unchanged in seven per-step commits on agent/te/claude/study-fm-experiments (September base 96878b35) plus a guard fix (pyarrow read without threads; exit crash/hang at shutdown). 351 FM tests pass at the branch head; every step commit is test-green. Merge with current main conflicts in five files because main's 1361b618 (2026-10-12) independently binds per-entry caches to inputs and producer code, overlapping Codex's catalogue-level E01 Stage A cache (prediction_cache.py) in infer_tiles.py, cache_predict.py, score_against_truth.py, the score-truth template and the parity test. Not merged. The FractionLoss inverted-mask defect is still on main: tests/test_fraction_loss_mask.py fails 9/15 on main and passes 15/15 with the fix.",
+  "next_steps": [
+    "Land the FractionLoss mask fix (imint/training/losses.py + tests/test_fraction_loss_mask.py) on main; it applies cleanly",
+    "Decide the cache design: keep main's per-entry identity (imint/_cache_identity.py) and port or retire the E01 catalogue cache, then resolve the five conflicts",
+    "Land the self-contained steps (E00 audit, crop evidence manifests, crop-holdout guard, index audit, fraction gate policy) after that decision",
+    "Check whether PRs #47, #54 and #61 still need the narrative corrections Codex asked for on 2026-09-24"
+  ],
+  "off_limits": [
+    "Historical checkpoints, images and scores",
+    "Sealed NFI holdout and crop validator outcomes",
+    "Splits"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-701b8419f1cfa9e4",
+  "target": null,
+  "task_id": "0010",
+  "verification": "pytest of the eight FM test files: 351 passed at 16975925 (stdin /dev/null); per-commit runs green; test_fraction_loss_mask.py on main: 9 failed without fix, 15 passed with fix."
+}
