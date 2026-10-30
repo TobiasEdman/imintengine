@@ -260,7 +260,7 @@ def read_candidate_identities(guard, path, expected_sha256, *, source):
     import pyarrow.parquet as pq
     raw = read_pinned(path, expected_sha256)
     columns = ["tile_name"] + (["point_id"] if source == "lucas" else [])
-    rows = pq.read_table(io.BytesIO(raw), columns=columns).to_pylist()
+    rows = pq.read_table(io.BytesIO(raw), columns=columns, use_threads=False).to_pylist()
     return rows, columns
 
 
