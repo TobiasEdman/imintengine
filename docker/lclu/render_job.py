@@ -9,6 +9,9 @@ import hashlib
 import io
 import tarfile
 
+# Tobias 2026-10-30 extended the demo approval from 24 hours to one week.
+MAX_DEADLINE_SECONDS = 7 * 86400
+
 
 def resources(image: str, year: int, recipe: Path | None = None, *,
               job_name: str = 'lclu-stockholm-0124', reuse_volume: bool = False,
@@ -20,8 +23,8 @@ def resources(image: str, year: int, recipe: Path | None = None, *,
         raise ValueError('Only inventoried demo years are allowed')
     if not re.fullmatch(r'lclu-stockholm-0124(?:-r[0-9]+)?', job_name):
         raise ValueError('Job must belong to the Stockholm demo')
-    if not 1 <= deadline_seconds <= 86400:
-        raise ValueError('Deadline must remain within the approved 24 hours')
+    if not 1 <= deadline_seconds <= MAX_DEADLINE_SECONDS:
+        raise ValueError('Deadline must remain within the approved week')
     if type(storage_gib) is not int or not 20 <= storage_gib <= 1024:
         raise ValueError('Explicit storage must be between20 and1024 GiB')
     if campaign_years is not None:

@@ -75,10 +75,16 @@ Recovery reuses the installed virtual environment and existing cache volume.
 Use `create`, not client-side `apply`: the latter's last-applied annotation is
 too large for this bundled ConfigMap.
 
+On 2026-10-30 Tobias extended the approval to one week, so `render_job.py`
+accepts at most 604,800 s. Revision r7 serves the corrected forest legend
+(Lövskog/Blandskog with the field-refinement note) on the same areas, budget
+and cache, with `--deadline-seconds 604800`: about SEK 170 for the week at
+the rates below, excluding VAT.
+
 For a recovery, render a new immutable archive and use `--reuse-volume`,
 `--job-name lclu-stockholm-0124-r1` and `--deadline-seconds` equal to the remaining
 approved duration. For this run the original expiry is 2026-10-30 12:46:25 UTC;
-a retry must not reset the 24-hour budget. Keep the previous archive and Job
+a retry must not reset the approved budget. Keep the previous archive and Job
 manifest as evidence. The active UI revision uses
 `outputs/lclu-stockholm-20261029/demo-job-r6.json`. Revision r2 also preserves
 the venv executable symlink when launching preparation subprocesses; resolving

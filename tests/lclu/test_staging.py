@@ -84,8 +84,11 @@ def test_private_recipe_caps_resources_and_keeps_reference_data_read_only(tmp_pa
     assert [item['kind'] for item in resumed['items']] == ['ConfigMap', 'Job']
     assert resumed['items'][-1]['spec']['activeDeadlineSeconds'] == 80000
     assert resumed['items'][-1]['metadata']['name'] == 'lclu-stockholm-0124-r1'
-    with pytest.raises(ValueError, match='24 hours'):
-        module.resources(image, 2024, deadline_seconds=86401)
+    week = module.resources(image, 2024, archive, job_name='lclu-stockholm-0124-r7',
+                            reuse_volume=True, deadline_seconds=7 * 86400)
+    assert week['items'][-1]['spec']['activeDeadlineSeconds'] == 604800
+    with pytest.raises(ValueError, match='approved week'):
+        module.resources(image, 2024, deadline_seconds=7 * 86400 + 1)
     make_archive('0'*64)
     with pytest.raises(ValueError, match='bootstrap'):
         module.resources(image, 2024, archive)
