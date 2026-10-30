@@ -1992,3 +1992,314 @@ def test_offline_verify_rejects_boolean_success_exit_code(tmp_path: Path) -> Non
         evidence.EvidenceCaptureError, match="inconsistent"
     ):
         evidence.verify_bundle(bundle)
+
+
+def _manifested_crop_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    historical: bool,
+) -> tuple[Path, dict[str, object], dict[str, object]]:
+    """Capture a known fixture under its original, independently chosen pins."""
+    tmp_path.mkdir()
+    with monkeypatch.context() as original:
+        if historical:
+            pins = {
+                **evidence._git_authority(),
+                "source_git_sha": "8" * 40,
+                "image_ref": (
+                    "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:"
+                    + "9" * 64
+                ),
+            }
+            original.setattr(evidence, "_git_authority", lambda: pins)
+            original.setattr(
+                evidence, "_NONROOT_WORK_ENV",
+                {"HOME": "/work/home", "TMPDIR": "/work/tmp"},
+            )
+        record = _record()
+        if historical:
+            record["runtime"] = _runtime(
+                source_git_sha=pins["source_git_sha"],
+                image_ref=pins["image_ref"],
+                image_digest="9" * 64,
+            )
+        subject = evidence._validate_completion_record(
+            record, split_source_git_sha=SPLIT_SOURCE_GIT_SHA
+        )
+        log, _ = _marker(record)
+        args = evidence.build_parser().parse_args(
+            _capture_args(tmp_path, pod=_pod(subject=subject), log=log)
+        )
+        capture = evidence.capture_from_files(args)
+    manifest = {
+        "contract_commit": "a" * 40,
+        "authority": capture["authority"]["values"],
+        "pod_environment": "home-tmp-v1" if historical else "named-user-v1",
+        "runs": {
+            "croma": {
+                "pod_uid": POD_UID,
+                "completion_sha256": capture["workload_record"]["record_sha256"],
+                "raw_pod_sha256": capture["observed_pod"]["raw"]["sha256"],
+            }
+        },
+    }
+    return tmp_path / "bundle", manifest, capture
+
+
+def _pin_test_run_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifests: dict[str, object]
+) -> None:
+    registry = tmp_path / "trusted-run-manifests.json"
+    registry.write_text(json.dumps({
+        "schema": "imint-crop-run-manifests-v1", "manifests": manifests,
+    }))
+    monkeypatch.setattr(evidence, "_CROP_RUN_MANIFESTS_FILE", registry)
+
+
+def test_one_verifier_accepts_both_reviewed_crop_histories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    old, old_manifest, old_capture = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    new, new_manifest, new_capture = _manifested_crop_fixture(
+        tmp_path / "new", monkeypatch, historical=False
+    )
+    _pin_test_run_manifests(
+        tmp_path, monkeypatch, {"historical": old_manifest, "new": new_manifest}
+    )
+    with pytest.raises(evidence.EvidenceCaptureError, match="Git authority"):
+        evidence.verify_bundle(old)
+    assert evidence.verify_bundle(new) == new_capture
+    assert evidence.verify_bundle(old, run_manifest="historical") == old_capture
+    assert evidence.verify_bundle(new, run_manifest="new") == new_capture
+    with pytest.raises(evidence.EvidenceCaptureError, match="Git run manifest"):
+        evidence.verify_bundle(old, run_manifest="new")
+    with pytest.raises(evidence.EvidenceCaptureError, match="Git run manifest"):
+        evidence.verify_bundle(new, run_manifest="historical")
+    evidence.main(["verify", "--bundle-dir", str(old), "--run-manifest", "historical"])
+    assert json.loads(capsys.readouterr().out) == old_capture
+
+
+def test_archival_verification_is_independent_of_rotated_current_pins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle, manifest, capture = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+
+    def forbidden_current_authority():
+        raise AssertionError("archival validation must not use mutable current pins")
+
+    monkeypatch.setattr(evidence, "_git_authority", forbidden_current_authority)
+    assert evidence.verify_bundle(bundle, run_manifest="historical") == capture
+
+
+@pytest.mark.parametrize("manifest_id", ["unknown", "../../untrusted.json"])
+def test_archival_verify_rejects_unregistered_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manifest_id: str
+) -> None:
+    bundle, manifest, _ = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+    # A similarly named file in cwd is never an alternative authority.
+    (tmp_path / "run-manifests.json").write_text(json.dumps({manifest_id: manifest}))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(evidence.EvidenceCaptureError, match="manifest"):
+        evidence.verify_bundle(bundle, run_manifest=manifest_id)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source_git_sha", "0" * 40),
+        ("source_git_sha", "f" * 40),
+        ("image_ref", "ghcr.io/tobiasedman/imint-ladder-crop-distill:latest"),
+        ("image_ref", "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "0" * 64),
+        ("image_ref", "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:" + "b" * 64),
+        ("split_source_git_sha", "f" * 40),
+        ("split_manifest_sha256", "a" * 64),
+    ],
+)
+def test_archival_verify_checks_each_independent_runtime_anchor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str
+) -> None:
+    bundle, manifest, _ = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    manifest["authority"][field] = value
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+    with pytest.raises(evidence.EvidenceCaptureError):
+        evidence.verify_bundle(bundle, run_manifest="historical")
+
+
+@pytest.mark.parametrize("field", ["pod_uid", "completion_sha256", "raw_pod_sha256"])
+def test_archival_profile_is_bound_to_the_exact_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    bundle, manifest, _ = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    manifest["runs"]["croma"][field] = "other-pod" if field == "pod_uid" else "b" * 64
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+    with pytest.raises(evidence.EvidenceCaptureError, match="Git run manifest"):
+        evidence.verify_bundle(bundle, run_manifest="historical")
+
+
+@pytest.mark.parametrize("part", ["record", "pod"])
+def test_archival_verify_rejects_tampering_even_with_recomputed_local_checksums(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, part: str
+) -> None:
+    bundle, manifest, _ = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+    if part == "record":
+        record = json.loads((bundle / "completion.json").read_text())
+        record["artifacts"]["oof"]["sha256"] = "a" * 64
+        marker, payload = _generic_marker(evidence.TERMINAL_EVIDENCE_PREFIX, record)
+        (bundle / "completion.json").write_bytes(payload)
+        (bundle / "completion.sha256").write_text(hashlib.sha256(payload).hexdigest() + "\n")
+        (bundle / "marker.txt").write_bytes(marker)
+    else:
+        pod = json.loads((bundle / "pod.json").read_text())
+        pod["metadata"]["uid"] = "another-pod"
+        payload = json.dumps(pod).encode()
+        (bundle / "pod.json").write_bytes(payload)
+        (bundle / "pod.sha256").write_text(hashlib.sha256(payload).hexdigest() + "\n")
+    with pytest.raises(evidence.EvidenceCaptureError, match="Git run manifest"):
+        evidence.verify_bundle(bundle, run_manifest="historical")
+
+
+@pytest.mark.parametrize("mutation", ["extra-env", "missing-env", "writable-root", "capabilities"])
+def test_archival_profile_preserves_strict_pod_controls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    bundle, manifest, _ = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    pod = json.loads((bundle / "pod.json").read_text())
+    container = pod["spec"]["containers"][0]
+    if mutation == "extra-env":
+        container["env"].append({"name": "LD_PRELOAD", "value": "/tmp/untrusted.so"})
+    elif mutation == "missing-env":
+        container["env"] = [e for e in container["env"] if e["name"] != "TMPDIR"]
+    elif mutation == "writable-root":
+        container["securityContext"]["readOnlyRootFilesystem"] = False
+    else:
+        container["securityContext"]["capabilities"]["add"] = ["SYS_ADMIN"]
+    payload = json.dumps(pod).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    (bundle / "pod.json").write_bytes(payload)
+    (bundle / "pod.sha256").write_text(digest + "\n")
+    # Even a Git-pinned Pod must pass current semantic/security checks.
+    manifest["runs"]["croma"]["raw_pod_sha256"] = digest
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+    with pytest.raises(
+        evidence.EvidenceCaptureError,
+        match="environment|root-filesystem|capabilities",
+    ):
+        evidence.verify_bundle(bundle, run_manifest="historical")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["schema", "extra-field", "extra-authority", "environment", "wrong-environment",
+     "empty-runs", "unknown-model", "duplicate-pod", "invalid-contract", "missing-pin"],
+)
+def test_archival_manifest_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    bundle, manifest, _ = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    if mutation == "extra-field":
+        manifest["allow_unknown_images"] = True
+    elif mutation == "extra-authority":
+        manifest["authority"]["allow_unknown_images"] = True
+    elif mutation == "environment":
+        manifest["pod_environment"] = "relaxed"
+    elif mutation == "wrong-environment":
+        manifest["pod_environment"] = "named-user-v1"
+    elif mutation == "empty-runs":
+        manifest["runs"] = {}
+    elif mutation == "unknown-model":
+        manifest["runs"]["unknown"] = manifest["runs"].pop("croma")
+    elif mutation == "duplicate-pod":
+        manifest["runs"]["clay"] = deepcopy(manifest["runs"]["croma"])
+    elif mutation == "invalid-contract":
+        manifest["contract_commit"] = "not-a-commit"
+    elif mutation == "missing-pin":
+        del manifest["runs"]["croma"]["raw_pod_sha256"]
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+    if mutation == "schema":
+        p = evidence._CROP_RUN_MANIFESTS_FILE
+        document = json.loads(p.read_text())
+        document["schema"] = "unreviewed-v2"
+        p.write_text(json.dumps(document))
+    with pytest.raises(evidence.EvidenceCaptureError):
+        evidence.verify_bundle(bundle, run_manifest="historical")
+
+
+def test_archival_manifest_cannot_relax_capture_or_other_evidence_kinds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle, manifest, _ = _manifested_crop_fixture(
+        tmp_path / "old", monkeypatch, historical=True
+    )
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"historical": manifest})
+    with pytest.raises(evidence.EvidenceCaptureError, match="strict offline crop"):
+        evidence.verify_bundle(
+            bundle, run_manifest="historical", require_current_git_output_anchor=False
+        )
+    with pytest.raises(SystemExit):
+        evidence.build_parser().parse_args(
+            _capture_args(tmp_path) + ["--run-manifest", "historical"]
+        )
+    evidence.capture_from_files(
+        evidence.build_parser().parse_args(_capture_args(tmp_path, kind="split"))
+    )
+    with pytest.raises(evidence.EvidenceCaptureError, match="strict offline crop"):
+        evidence.verify_bundle(tmp_path / "bundle", run_manifest="historical")
+
+
+def test_reviewed_registry_preserves_the_committed_six_run_receipt() -> None:
+    receipt_path = (
+        Path(__file__).resolve().parents[1]
+        / "docs/evidence/crop-distill/2026-09-07-consumer-rollout-receipt.json"
+    )
+    receipt = json.loads(receipt_path.read_text())
+    legacy = evidence._read_crop_run_manifest("consumers-2026-09-07")
+    latest = evidence._read_crop_run_manifest("prithvi300m4f-7d935b9a")
+    assert legacy["contract_commit"] == receipt["consumer_authorization_commit"]
+    assert legacy["authority"] == {
+        "source_git_sha": receipt["runtime"]["source_git_sha"],
+        "image_ref": receipt["runtime"]["image_ref"],
+        "split_source_git_sha": receipt["split"]["source_git_sha"],
+        "split_manifest_sha256": receipt["split"]["manifest_sha256"],
+    }
+    assert legacy["runs"] == {
+        model: {key: values[key] for key in ("pod_uid", "completion_sha256", "raw_pod_sha256")}
+        for model, values in receipt["models"].items()
+    }
+    assert set(legacy["runs"]) | set(latest["runs"]) == set(evidence.MODEL_KEYS)
+    assert not set(legacy["runs"]) & set(latest["runs"])
+
+
+def test_archival_named_profile_survives_current_environment_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle, manifest, capture = _manifested_crop_fixture(
+        tmp_path / "new", monkeypatch, historical=False
+    )
+    _pin_test_run_manifests(tmp_path, monkeypatch, {"new": manifest})
+    monkeypatch.setattr(
+        evidence, "_NONROOT_WORK_ENV",
+        {**evidence._NONROOT_WORK_ENV, "FUTURE_RUNTIME_SETTING": "required"},
+    )
+    with pytest.raises(evidence.EvidenceCaptureError, match="environment"):
+        evidence.verify_bundle(bundle)
+    assert evidence.verify_bundle(bundle, run_manifest="new") == capture

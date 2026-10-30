@@ -235,16 +235,27 @@ _SOURCE_ACCESS_IMAGE_ENV = "CROP_SOURCE_ACCESS_IMAGE"
 _SPLIT_SOURCE_ENV = "CROP_DISTILL_SPLIT_SOURCE_GIT_SHA"
 _FREEZE_LEASE_ENV = "CROP_SOURCE_FREEZE_LEASE_PATH"
 _POD_UID_ENV = "POD_UID"
-_NONROOT_WORK_ENV = {
-    "HOME": "/work/home",
-    "LOGNAME": "crop-distill",
-    "TMPDIR": "/work/tmp",
-    "TORCHINDUCTOR_CACHE_DIR": "/work/torch-inductor",
-    "USER": "crop-distill",
+# Archive profiles are versioned contracts; future live defaults must select
+# a new profile rather than editing the values of an existing one.
+_CROP_ENVIRONMENTS = {
+    "home-tmp-v1": {"HOME": "/work/home", "TMPDIR": "/work/tmp"},
+    "named-user-v1": {
+        "HOME": "/work/home",
+        "LOGNAME": "crop-distill",
+        "TMPDIR": "/work/tmp",
+        "TORCHINDUCTOR_CACHE_DIR": "/work/torch-inductor",
+        "USER": "crop-distill",
+    },
 }
+_NONROOT_WORK_ENV = _CROP_ENVIRONMENTS["named-user-v1"]
 _MAX_POD_JSON_BYTES = 8 * 1024 * 1024
 _MAX_POD_LOG_BYTES = 64 * 1024 * 1024
 _MAX_BUNDLE_FILE_BYTES = 16 * 1024 * 1024
+_CROP_RUN_MANIFESTS_FILE = (
+    Path(__file__).resolve().parents[1]
+    / "docs/evidence/crop-distill/run-manifests.json"
+)
+_CROP_RUN_MANIFESTS_SCHEMA = "imint-crop-run-manifests-v1"
 
 
 class EvidenceCaptureError(ValueError):
@@ -353,6 +364,72 @@ def _validated_git_authority(
         )
         _require_safe_id(authority.get(uid_name), f"Git-pinned {uid_name}")
     return authority
+
+
+def _read_crop_run_manifest(manifest_id: str) -> dict[str, Any]:
+    """Read an explicitly selected, repository-owned archival authority.
+
+    Neither a bundle-supplied manifest nor a caller-supplied path is trusted.
+    Run pins restrict the historical Pod profile to exact, reviewed evidence.
+    """
+    _require_safe_id(manifest_id, "crop run manifest ID")
+    payload = _read_regular_file(
+        _CROP_RUN_MANIFESTS_FILE, "Git crop run manifests", limit=64 * 1024
+    )
+    document = _require_exact_keys(
+        _load_json_bytes(payload, "Git crop run manifests"),
+        {"schema", "manifests"},
+        "Git crop run manifests",
+    )
+    if document["schema"] != _CROP_RUN_MANIFESTS_SCHEMA:
+        raise EvidenceCaptureError("unsupported Git crop run manifest schema")
+    manifests = _require_object(document["manifests"], "Git crop run manifests")
+    if manifest_id not in manifests:
+        raise EvidenceCaptureError(f"unknown Git crop run manifest: {manifest_id}")
+    manifest = _require_exact_keys(
+        manifests[manifest_id],
+        {"contract_commit", "authority", "pod_environment", "runs"},
+        "Git crop run manifest",
+    )
+    _require_hex40(
+        manifest["contract_commit"], "crop contract commit", nonzero=True
+    )
+    authority = _require_exact_keys(
+        manifest["authority"],
+        {"source_git_sha", "image_ref", "split_source_git_sha", "split_manifest_sha256"},
+        "crop run authority",
+    )
+    for key in ("source_git_sha", "split_source_git_sha"):
+        _require_hex40(authority[key], f"crop run {key}", nonzero=True)
+    _require_hex64(
+        authority["split_manifest_sha256"], "crop run split SHA256", nonzero=True
+    )
+    image_ref = _require_string(authority["image_ref"], "crop run image")
+    match = _CROP_IMAGE_REF.fullmatch(image_ref)
+    if match is None or match.group(1) == "0" * 64:
+        raise EvidenceCaptureError(
+            "crop run image must be one nonzero immutable digest"
+        )
+    environment = _require_string(manifest["pod_environment"], "crop Pod environment")
+    if environment not in _CROP_ENVIRONMENTS:
+        raise EvidenceCaptureError("unsupported crop Pod environment profile")
+    runs = _require_object(manifest["runs"], "crop run pins")
+    if not runs or not set(runs).issubset(MODEL_KEYS):
+        raise EvidenceCaptureError("crop run pins must name known crop models")
+    seen_uids: set[str] = set()
+    for model, value in runs.items():
+        pin = _require_exact_keys(
+            value,
+            {"pod_uid", "completion_sha256", "raw_pod_sha256"},
+            f"crop run pin {model}",
+        )
+        uid = _require_safe_id(pin["pod_uid"], f"crop run {model} Pod UID")
+        if uid in seen_uids:
+            raise EvidenceCaptureError("crop run pins contain duplicate Pod UIDs")
+        seen_uids.add(uid)
+        for key in ("completion_sha256", "raw_pod_sha256"):
+            _require_hex64(pin[key], f"crop run {model} {key}", nonzero=True)
+    return manifest
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -1310,16 +1387,29 @@ def _freeze_lease_volume() -> dict[str, Any]:
     }
 
 
-def _workload_contract(subject: Mapping[str, Any]) -> dict[str, Any]:
+def _workload_contract(
+    subject: Mapping[str, Any],
+    *,
+    authority: Mapping[str, str] | None = None,
+    crop_environment: str | None = None,
+) -> dict[str, Any]:
     kind = str(subject["kind"])
     source = str(subject["source_git_sha"])
     image = str(subject["image_ref"])
     pod_uid = str(subject["pod_uid"])
     literal_env: dict[str, str] = {_SOURCE_ENV: source, _IMAGE_ENV: image}
-    authority = _validated_git_authority(kind, require_current_output_anchor=False)
+    if authority is None:
+        authority = _validated_git_authority(kind, require_current_output_anchor=False)
+    if crop_environment is not None:
+        if crop_environment not in _CROP_ENVIRONMENTS:
+            raise EvidenceCaptureError("unsupported crop Pod environment profile")
+        if kind != "crop":
+            raise EvidenceCaptureError("archival environment is restricted to crop evidence")
     volumes = [_pvc_volume()]
     node_selector: dict[str, str] = {}
-    if kind in {"crop", "split"}:
+    if crop_environment is not None:
+        literal_env.update(_CROP_ENVIRONMENTS[crop_environment])
+    elif kind in {"crop", "split"}:
         literal_env.update(_NONROOT_WORK_ENV)
     if kind == "crop":
         model = str(subject["model"])
@@ -2148,9 +2238,16 @@ def verify_bundle(
     bundle_dir: Path,
     *,
     require_current_git_output_anchor: bool = True,
+    run_manifest: str | None = None,
 ) -> dict[str, Any]:
-    """Re-derive every record, marker, raw Pod, normalized Pod, and Git pin."""
+    """Re-derive evidence against current pins or an exact archived crop run."""
     _, capture, kind = _read_capture_document(bundle_dir)
+    if run_manifest is not None and (
+        kind != "crop" or not require_current_git_output_anchor
+    ):
+        raise EvidenceCaptureError(
+            "run manifests are restricted to strict offline crop verification"
+        )
     try:
         entries = {entry.name for entry in bundle_dir.iterdir()}
     except OSError as exc:
@@ -2180,10 +2277,25 @@ def verify_bundle(
         raise EvidenceCaptureError("pod.sha256 does not match raw pod.json bytes")
     pod = _load_json_bytes(pod_payload, "archived raw Pod")
 
-    authority = _validated_git_authority(
-        kind,
-        require_current_output_anchor=require_current_git_output_anchor,
-    )
+    crop_environment = None
+    if run_manifest is None:
+        authority = _validated_git_authority(
+            kind,
+            require_current_output_anchor=require_current_git_output_anchor,
+        )
+    else:
+        manifest = _read_crop_run_manifest(run_manifest)
+        model = _require_safe_id(record.get("model"), "archived crop model")
+        expected_run = manifest["runs"].get(model)
+        observed_run = {
+            "pod_uid": record.get("pod_uid"),
+            "completion_sha256": record_sha256,
+            "raw_pod_sha256": pod_sha256,
+        }
+        if expected_run != observed_run:
+            raise EvidenceCaptureError("archived crop run differs from Git run manifest")
+        authority = manifest["authority"]
+        crop_environment = manifest["pod_environment"]
     subject = _validate_workload_record(
         record_path,
         record,
@@ -2191,7 +2303,9 @@ def verify_bundle(
         authority=authority,
         require_current_output_anchor=require_current_git_output_anchor,
     )
-    contract = _workload_contract(subject)
+    contract = _workload_contract(
+        subject, authority=authority, crop_environment=crop_environment
+    )
     archived_observation = _require_exact_keys(
         capture.get("observed_pod"), {"normalized", "normalized_sha256", "raw"}, "capture observed_pod"
     )
@@ -2265,7 +2379,7 @@ def capture_from_files(args: argparse.Namespace) -> dict[str, Any]:
         raise EvidenceCaptureError("CLI container/job selection differs from record authority")
     if args.expected_namespace != "prithvi-training-default":
         raise EvidenceCaptureError("capture namespace differs from the reviewed namespace")
-    contract = _workload_contract(subject)
+    contract = _workload_contract(subject, authority=authority)
     normalized = normalize_observed_pod(
         pod,
         contract=contract,
@@ -2313,13 +2427,21 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--out-dir", type=Path, required=True)
     verify = subparsers.add_parser("verify", help="verify one archived evidence bundle offline")
     verify.add_argument("--bundle-dir", type=Path, required=True)
+    verify.add_argument(
+        "--run-manifest",
+        help="reviewed crop run ID from docs/evidence/crop-distill/run-manifests.json",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     try:
-        result = capture_from_files(args) if args.command == "capture" else verify_bundle(args.bundle_dir)
+        result = (
+            capture_from_files(args)
+            if args.command == "capture"
+            else verify_bundle(args.bundle_dir, run_manifest=args.run_manifest)
+        )
     except EvidenceCaptureError as exc:
         raise SystemExit(f"crop-distill evidence capture refused: {exc}") from exc
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

@@ -1,5 +1,16 @@
 # Crop-distill evidence archive
 
+## Methodological finding — 2026-09-18
+
+The frozen split contains **404 unique LUCAS point IDs shared between distill
+and crop holdout**, although their tile names and exact `(tile_name, point_id)`
+keys are disjoint. Eight distill IDs also occur in the older protected test
+selection. This was verified against the pinned split metadata without reading
+validator outcomes. The historical operational receipts below remain unchanged;
+they do not establish independence of observations. E01/E04 are not cleared.
+See [the observation-role audit](../../experiments/fm_e01_observation_roles.md)
+for identities, verification and limits. No split or model result was changed.
+
 This directory is the status index and runbook for the LUCAS crop-distill
 rollout. It is not evidence that a live Job succeeded. Successful storage-prep
 and source-access PLAN/APPLY bundles have been captured for the reviewed image
@@ -120,9 +131,10 @@ cohort. Its terminal record must then contain exactly this immutable object:
 }
 ```
 
-Capture metadata never authorizes an alternate anchor. Offline verification
-re-derives expectations from the current Git constants and the immutable
-workload record.
+Capture metadata never authorizes an alternate anchor. Default offline
+verification re-derives expectations from the current Git constants and the
+immutable workload record. The explicit archival crop mode described below uses
+a repository-pinned run manifest while retaining the same semantic checks.
 
 ## Live capture procedure
 
@@ -256,3 +268,49 @@ Git constants, cluster admission, the shared cooperating-producer lock, the
 external watchdog lease, and restricted evidence custody remain separate
 parts of the authorization boundary. Any missing bundle, pin, or verification
 mismatch blocks rollout acceptance.
+
+## One verifier for archived crop runs
+
+Offline verification can use an explicit manifest ID from the repository-owned
+[run-manifests.json](run-manifests.json). Both historical profiles use the
+current verifier; no historical Python code is executed.
+
+| Manifest ID | Recorded runs | Pod environment profile |
+|---|---|---|
+| `consumers-2026-09-07` | Six models in the existing rollout receipt | `home-tmp-v1` |
+| `prithvi300m4f-7d935b9a` | Seventh model, Prithvi-300M-4f | `named-user-v1` |
+
+```bash
+python scripts/capture_crop_distill_evidence.py verify \
+  --bundle-dir "$BUNDLE_ROOT/$POD_UID" \
+  --run-manifest consumers-2026-09-07
+```
+
+For the seventh column, select `--run-manifest prithvi300m4f-7d935b9a`.
+Without the option, verification still requires the current generator pins.
+Live capture and all other evidence kinds retain their current authority rules;
+the archival option cannot authorize new workloads or relax PLAN/APPLY gates.
+
+Each manifest pins the source commit, immutable image, frozen split source/hash,
+model-to-Pod UID mapping, completion-record hash and raw Pod hash. The older
+profile expects only HOME/TMPDIR in addition to the protocol environment. The
+newer profile also requires LOGNAME, USER and TORCHINDUCTOR_CACHE_DIR. All other
+Pod, runtime, marker, checkpoint and capture checks are shared and remain strict.
+
+The selected ID is a lookup in a fixed repository file, never a path or a manifest
+supplied by the bundle. Unknown IDs, unlisted runs, mixed identities and modified
+records/Pods are rejected even if the bundle's local checksums are recomputed.
+A manifest's `contract_commit` documents the reviewed contract source; it does
+not fetch/execute that commit or substitute for review of the registry change.
+The checkout and registry are part of the trust boundary, just like generator
+pins. Review changes to them before treating a new manifest as accepted authority.
+
+The six older run pins come from the existing committed rollout receipt. The
+seventh run was verified against current main's pins and strict Pod contract
+before its identities were registered. Full bundles stay in restricted custody;
+this file contains only the same non-secret identity fields used in receipts.
+
+Verification is read-only and returns the original capture document. Record the
+manifest ID, registry hash and verifier revision alongside an audit result.
+Passing this check proves the evidence binding; it does not read the referenced
+feature/OOF files, prove numerical comparability, or open the protected holdout.
