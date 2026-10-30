@@ -104,6 +104,25 @@ cache in `/work/kiruna_tatort`; Stockholm remains in `/work/stockholm`. The
 launcher qualifies both before publishing `/work/demo/serving.json`. A single
 resident R4 model routes each request to its exact region and year.
 
+## Municipality campaign (IM-024)
+
+`render_job.py --campaign-years 2017 … 2025 --max-original-bytes B
+--storage-gib N` renders the ten municipalities plus Kiruna tätort from
+`config/lclu/municipalities.json`. `B` is the campaign preflight's
+`source_ready_original_bytes`; only `source_ready` area-years are staged and
+each is qualified with one real R4 prediction before serving, so a year
+without HR-VPP is absent rather than substituted. The volume must hold the
+retained originals plus COGs (the renderer requires `N` GiB ≥ 2.3·B + 6 GiB);
+expand the existing PVC before creating the Job.
+
+Staging takes hours, so the campaign runs beside the two-area demo on the same
+volume (Tobias 2026-10-30: no downtime). It keeps its own manifest, process
+`MANIFEST.json` and API output directory under `/work/campaign`, because the
+API holds a single-worker flock in its output directory; the running demo's
+`/work/demo` and `/work/results` stay untouched. Move the port-forward and stop
+the old Job once the campaign Job is Ready. Its deadline is the remainder of
+the approved week, not a new week.
+
 ## Start, access and stop
 
 Actual creation requires the operator's explicit approval for the demo scope.

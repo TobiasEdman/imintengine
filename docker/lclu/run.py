@@ -11,9 +11,21 @@ from imint.inference.lclu import write_json, public_identity
 from scripts.cache_predict import file_identity
 
 
+def deployment_root(work: Path) -> Path:
+    """A campaign stages beside the running two-area demo on the same volume.
+
+    Its manifest, process MANIFEST and API output directory (which holds the
+    single-worker flock) must not be the running demo's, or it would overwrite
+    that demo's provenance and fail to start while the demo holds the lock.
+    """
+    return work/'campaign' if os.environ.get('LCLU_CAMPAIGN') else work
+
+
 def main(source: Path, work: Path, data: Path) -> None:
-    root = work/'demo'
+    base = deployment_root(work)
+    root = base/'demo'
     root.mkdir(parents=True, exist_ok=True)
+    os.environ['IMINT_API_OUTPUT_DIR'] = str(base/'results')
     if os.environ.get('LCLU_CAMPAIGN'):
         from scripts.stage_lclu_campaign import stage_campaign
         years = [int(value) for value in os.environ['LCLU_YEARS'].split(',')]

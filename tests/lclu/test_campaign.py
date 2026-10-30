@@ -181,3 +181,42 @@ def test_resume_requires_space_only_for_missing_blocks(tmp_path, monkeypatch):
     assert report['required_free_bytes']==612*2**20
     prediction=tmp_path/'work/regions/a/2024/qualification-2024/prediction.npy'
     np.testing.assert_array_equal(np.load(prediction),np.ones((504,504),np.uint8))
+
+
+def test_campaign_launch_keeps_running_demo_manifest_and_api_lock(tmp_path, monkeypatch):
+    import os
+    import scripts.stage_lclu_campaign as campaign_module
+    spec = importlib.util.spec_from_file_location(
+        'lclu_run', Path(__file__).resolve().parents[2] / 'docker/lclu/run.py')
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+    source, work = tmp_path / 'source', tmp_path / 'work'
+    source.mkdir()
+    (source / 'SOURCE_MANIFEST.json').write_text('{"files": {}}')
+    running = work / 'demo' / 'serving.json'
+    running.parent.mkdir(parents=True)
+    running.write_text('{"running": "r7"}')
+    monkeypatch.setattr(campaign_module, 'stage_campaign',
+                        lambda *a, **k: {'campaign': {'sha256': 'c' * 64}, 'preparations': []})
+    monkeypatch.setenv('LCLU_CAMPAIGN', 'municipalities')
+    monkeypatch.setenv('LCLU_YEARS', '2017,2024')
+    monkeypatch.setenv('LCLU_MAX_ORIGINAL_BYTES', '1')
+    monkeypatch.setenv('LCLU_IMAGE', 'python@sha256:' + '0' * 64)
+    monkeypatch.setenv('IMINT_API_OUTPUT_DIR', str(work / 'results'))  # as bootstrap sets it
+
+    class Served(Exception):
+        pass
+
+    def fake_execv(*_):
+        raise Served
+    monkeypatch.setattr(run.os, 'execv', fake_execv)
+    with pytest.raises(Served):
+        run.main(source, work, tmp_path / 'data')
+    assert running.read_text() == '{"running": "r7"}'
+    assert not (work / 'demo' / 'MANIFEST.json').exists()
+    assert json.loads((work / 'campaign/demo/serving.json').read_text())['campaign']['sha256'] == 'c' * 64
+    assert json.loads((work / 'campaign/demo/MANIFEST.json').read_text())['run_args']['years'] == [2017, 2024]
+    assert os.environ['IMINT_API_OUTPUT_DIR'] == str(work / 'campaign/results')
+    assert os.environ['IMINT_LCLU_MANIFEST'] == str(work / 'campaign/demo/serving.json')
+    monkeypatch.delenv('LCLU_CAMPAIGN')
+    assert run.deployment_root(work) == work
