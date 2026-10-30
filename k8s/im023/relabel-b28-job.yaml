@@ -1,0 +1,139 @@
+# IM-023 step 1: class 28 labels for the TESSERA retrain.
+# Plan: docs/experiments/class-separability/retrain_barrblandskog.md
+#
+# 1. sample  12 distilled tiles with NMD 113 and 3 without (sha256 order).
+# 2. the canonical chain on the sample, as the R4 labels were made:
+#    build_labels.py with the args of k8s/build-labels-nmd2023-job.yaml, and
+#    distill_forest_labels.py with the args of step 4 in
+#    k8s/ladder/distill-tessera-job.yaml, once from the stored NMD sidecars
+#    and once from the rebuilt ones.
+# 3. verify  bit-for-bit gates; any difference stops the job before step 4.
+# 4. run     /cephfs/nmd2023_labels_b28 and /cephfs/distill/tessera_r2_b28,
+#            new directories only, resumable; relabel_manifest.json is written
+#            last and is what the training jobs check.
+# Evidence: /cephfs/im023/relabel_verify/<UTC time>/ (sample, canonical
+# sidecars, report.json). Same GPU type as the R4 distillation, so the report
+# can also say whether a fresh distillation reproduces the stored sidecars.
+#
+#   kubectl create --dry-run=server -f k8s/im023/relabel-b28-job.yaml
+#   kubectl create -f k8s/im023/relabel-b28-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-relabel-b28
+  namespace: prithvi-training-default
+  labels: { app: ops, purpose: im023-relabel-b28 }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600   # 6 h cap: 15 sample tiles + ~8k CPU relabels
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: ops, purpose: im023-relabel-b28 }
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: relabel
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              SHA=b9433d576f11d3a39eb44f300b397ee28b0fb115
+              echo "=== IM-023 relabel b28 — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj geopandas shapely pyyaml
+
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+
+              NMD_IN=/cephfs/nmd2023_labels
+              R2=/cephfs/distill/tessera_r2
+              CKPT=/cephfs/checkpoints/ladder/tessera_r2/best_model.pt
+              HEAD_NPZ=/cephfs/distill/heads/tessera_r2_head.npz
+              RASTER=/cephfs/nmd2023/NMD2023bas_v2_1.tif
+              for f in "$CKPT" "$HEAD_NPZ" "$RASTER" "$R2/_GATE_OK"; do
+                test -f "$f" || { echo "FATAL: missing $f"; exit 1; }
+              done
+              W=/cephfs/im023/relabel_verify/$(date -u +%Y%m%dT%H%M%SZ)
+              mkdir -p "$W/tiles"
+              echo "evidence: $W"
+
+              echo "=== 1/4 sample ==="
+              python3 scripts/relabel_barrblandskog.py sample \
+                --nmd-in "$NMD_IN" --distill-in "$R2" > "$W/sample_ids.txt"
+              read -r -a IDS < "$W/sample_ids.txt"
+              echo "${#IDS[@]} tiles: ${IDS[*]}"
+              for id in "${IDS[@]}"; do
+                ln -s "/cephfs/unified_v2_512/$id.npz" "$W/tiles/$id.npz"
+              done
+
+              echo "=== 2/4 canonical chain on the sample ==="
+              python3 scripts/build_labels.py \
+                --data-dir      /cephfs/unified_v2_512 \
+                --nmd-raster    "$RASTER" \
+                --nmd-version   2023 \
+                --lpis-dir      /cephfs/lpis \
+                --sks-dir       /cephfs/sks \
+                --label-out-dir "$W/canon_nmd" \
+                --tile-ids      "${IDS[@]}" \
+                --workers 4
+              python3 scripts/distill_forest_labels.py \
+                --checkpoint "$CKPT" --head "$HEAD_NPZ" \
+                --data-dir "$W/tiles" --label-dir "$NMD_IN" --out-dir "$W/canon_old" \
+                --img-size 504 --backbone-name tessera_v1 --enable-markfukt \
+                --require-npz-key tessera --device cuda
+              python3 scripts/distill_forest_labels.py \
+                --checkpoint "$CKPT" --head "$HEAD_NPZ" \
+                --data-dir "$W/tiles" --label-dir "$W/canon_nmd" --out-dir "$W/canon_new" \
+                --img-size 504 --backbone-name tessera_v1 --enable-markfukt \
+                --require-npz-key tessera --device cuda
+
+              echo "=== 3/4 verify, bit for bit ==="
+              python3 scripts/relabel_barrblandskog.py verify \
+                --nmd-in "$NMD_IN" --distill-in "$R2" \
+                --canon-nmd "$W/canon_nmd" \
+                --canon-distill-old "$W/canon_old" \
+                --canon-distill-new "$W/canon_new" \
+                --report "$W/report.json"
+
+              echo "=== 4/4 relabel ==="
+              python3 scripts/relabel_barrblandskog.py run \
+                --nmd-in "$NMD_IN" --distill-in "$R2" \
+                --nmd-out /cephfs/nmd2023_labels_b28 \
+                --distill-out /cephfs/distill/tessera_r2_b28
+              n_r2=$(find "$R2" -maxdepth 1 -name '*.npz' | wc -l)
+              n_b28=$(find /cephfs/distill/tessera_r2_b28 -maxdepth 1 -name '*.npz' | wc -l)
+              echo "distilled sidecars: R4 $n_r2, b28 $n_b28"
+              test "$n_r2" -eq "$n_b28" || { echo "FATAL: cohort differs"; exit 1; }
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - { name: cephfs, mountPath: /cephfs }
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: { claimName: training-data-cephfs }

@@ -1,0 +1,89 @@
+# IM-023 step 2a: one-epoch smoke of both TESSERA variants, in sequence.
+# Recipe: scripts/im023_retrain.py (R4's flags + variant switch).
+# Plan: docs/experiments/class-separability/retrain_barrblandskog.md
+# Prereq: k8s/im023/relabel-b28-job.yaml done. The full runs refuse until this passed.
+#
+#   kubectl create --dry-run=server -f k8s/im023/train-tessera-smoke-job.yaml
+#   kubectl create -f k8s/im023/train-tessera-smoke-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-tessera-smoke
+  namespace: prithvi-training-default
+  labels: { app: unified-training, purpose: im023-retrain, variant: smoke }
+spec:
+  backoffLimit: 0
+  # As R4: no Job-level deadline (it would count queue time); the run cap is
+  # on the pod below and starts when the pod starts.
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: im023-retrain, variant: smoke }
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 10800   # 3 h cap for two epochs + setup
+      nodeSelector:
+        accelerator: nvidia-h100
+      # As R4: srv02's GPU admission was desynced (2026-08-09).
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: [p02r08srv02]
+      containers:
+        - name: trainer
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              SHA=b9433d576f11d3a39eb44f300b397ee28b0fb115
+              echo "=== im023-tessera-smoke — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+              pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
+              RETRAIN=/workspace/imintengine/scripts/im023_retrain.py
+              cd /cephfs
+              # --- run ---
+              python3 "$RETRAIN" --variant main --epochs 1 --checkpoint-dir /cephfs/checkpoints/im023/smoke_main
+              python3 "$RETRAIN" --variant control --epochs 1 --checkpoint-dir /cephfs/checkpoints/im023/smoke_control
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "16"
+              memory: "80Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: "80Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Gi

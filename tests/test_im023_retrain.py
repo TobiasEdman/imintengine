@@ -6,6 +6,9 @@ one epoch per variant, and checks the classifier width of each checkpoint.
 """
 from pathlib import Path
 import json
+import re
+import shlex
+import subprocess
 import sys
 
 import numpy as np
@@ -149,3 +152,100 @@ def test_class_weight_source_names_class_28(tmp_path):
     assert "class 28 absent" in retrain.class_weight_source(str(tmp_path))
     (tmp_path / "class_stats.json").write_text(json.dumps({"pixel_counts": {"barrblandskog": 5}}))
     assert "class 28 counted" in retrain.class_weight_source(str(tmp_path))
+
+
+# ── manifests ────────────────────────────────────────────────────────────────
+
+MANIFESTS = ROOT / "k8s" / "im023"
+RUNS = {
+    "train-tessera-smoke-job.yaml": [("main", "1", "smoke_main"), ("control", "1", "smoke_control")],
+    "train-tessera-b28-job.yaml": [("main", "30", "tessera_b28")],
+    "train-tessera-control-job.yaml": [("control", "30", "tessera_control")],
+}
+
+
+def load(path: Path) -> dict:
+    return yaml.safe_load(path.read_text())
+
+
+def body(doc: dict) -> str:
+    return doc["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+
+
+def invocations(text: str, script: str) -> list[dict[str, str | None]]:
+    """Flags of every call to ``script``, with ``NAME=value`` assignments resolved."""
+    for name, value in re.findall(r"^\s*([A-Z_0-9]+)=(\S+)$", text, re.M):
+        text = text.replace(f'"${name}"', value).replace(f"${name}", value)
+    joined = re.sub(r"\\\n\s*", " ", text)
+    call = re.compile(rf"\bpython3?\s+{re.escape(script)}(.*)")
+    return [flags(shlex.split(m[1])) for m in map(call.search, joined.splitlines()) if m]
+
+
+def test_manifests_pin_one_source_and_image():
+    docs = [load(p) for p in sorted(MANIFESTS.glob("*.yaml"))]
+    assert len(docs) == 4
+    shas = {m for d in docs for m in re.findall(r"^\s*SHA=([0-9a-f]{40})$", body(d), re.M)}
+    images = {d["spec"]["template"]["spec"]["containers"][0]["image"] for d in docs}
+    assert len(shas) == 1 and len(images) == 1 and "@sha256:" in next(iter(images))
+    assert all('test "$(git rev-parse HEAD)" = "$SHA"' in body(d) for d in docs)
+
+
+def test_pinned_source_carries_the_im023_scripts():
+    sha = re.search(r"SHA=([0-9a-f]{40})", (MANIFESTS / "relabel-b28-job.yaml").read_text())[1]
+    git = ["git", "-C", str(ROOT)]
+    if subprocess.run([*git, "cat-file", "-e", sha], capture_output=True).returncode:
+        pytest.skip(f"{sha} not in this clone")
+    assert subprocess.run([*git, "merge-base", "--is-ancestor", sha, "HEAD"]).returncode == 0
+    changed = subprocess.run([*git, "diff", "--name-only", sha, "HEAD", "--",
+                              "scripts/im023_retrain.py", "scripts/relabel_barrblandskog.py"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert changed == [], f"pinned SHA predates changes to {changed}: bump SHA in k8s/im023/"
+
+
+def test_training_jobs_call_the_recipe_on_r4_hardware():
+    r4 = load(R4)["spec"]["template"]["spec"]
+    pods, setups = [], set()
+    for name, expected in RUNS.items():
+        doc = load(MANIFESTS / name)
+        setup, run = body(doc).split("# --- run ---")
+        setups.add(setup.replace(doc["metadata"]["name"], "NAME"))
+        calls = [shlex.split(ln) for ln in run.splitlines() if '"$RETRAIN"' in ln]
+        assert calls == [["python3", "$RETRAIN", "--variant", v, "--epochs", e,
+                          "--checkpoint-dir", f"/cephfs/checkpoints/im023/{d}"] for v, e, d in expected]
+        assert ("smoke_$v/best_model.pt" in run) == (name != "train-tessera-smoke-job.yaml")
+        pod = doc["spec"]["template"]["spec"]
+        container = pod["containers"][0]
+        assert container["resources"] == r4["containers"][0]["resources"]
+        assert container["volumeMounts"] == r4["containers"][0]["volumeMounts"]
+        assert {k: pod[k] for k in ("nodeSelector", "affinity", "volumes")} == \
+               {k: r4[k] for k in ("nodeSelector", "affinity", "volumes")}
+    assert len(setups) == 1
+
+
+def test_relabel_job_runs_the_chain_that_made_the_r4_labels():
+    text = body(load(MANIFESTS / "relabel-b28-job.yaml"))
+    ladder = body(load(ROOT / "k8s" / "ladder" / "distill-tessera-job.yaml"))
+    original = body(load(ROOT / "k8s" / "build-labels-nmd2023-job.yaml"))
+
+    (built,) = invocations(text, "scripts/build_labels.py")
+    (made,) = invocations(original.replace("/data/", "/cephfs/"), "scripts/build_labels.py")
+    per_run = {"--label-out-dir", "--workers", "--tile-ids"}
+    assert {k: v for k, v in built.items() if k not in per_run} == \
+           {k: v for k, v in made.items() if k not in per_run}
+
+    *_, r4_dense = invocations(ladder, "scripts/distill_forest_labels.py")
+    old, new = invocations(text, "scripts/distill_forest_labels.py")
+    per_run = {"--data-dir", "--label-dir", "--out-dir"}
+    for fresh in (old, new):
+        assert {k: v for k, v in fresh.items() if k not in per_run} == \
+               {k: v for k, v in r4_dense.items() if k not in per_run}
+    assert old["--label-dir"] == r4_dense["--label-dir"] == "/cephfs/nmd2023_labels"
+    assert new["--label-dir"] == built["--label-out-dir"]
+
+    (verified,) = invocations(text, "scripts/relabel_barrblandskog.py verify")
+    (ran,) = invocations(text, "scripts/relabel_barrblandskog.py run")
+    assert verified["--canon-distill-old"] == old["--out-dir"]
+    assert verified["--canon-distill-new"] == new["--out-dir"]
+    assert ran["--distill-out"] == retrain.PATHS["b28_label_dir"]
+    assert ran["--distill-in"] == retrain.PATHS["r2_label_dir"] == r4_dense["--out-dir"]
+    assert text.index("relabel_barrblandskog.py verify") < text.index("relabel_barrblandskog.py run")
