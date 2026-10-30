@@ -1,0 +1,37 @@
+{
+  "active_goal": "Support E04 (seven crop results and R5 evidence) within the approved ImintEngine E00-E12 experiment campaign. Codex retains campaign ownership; Claude owns independent crop/R5 verification.",
+  "active_rules": [
+    "[user-stated 2026-09-17, later amendment] User decides cost-driving actions; routine local work does not require milestone approval.",
+    "[user-stated goal] Delegate seven crop-result/R5 verification to Claude; Codex owns checkpoint/evaluation inventory.",
+    "[mode/harness] Automatic approval rejected external GitHub publication without explicit permission; do not bypass that rejection.",
+    "[repository] Keep exact head/base identity in reviews; operational evidence does not establish methodological independence."
+  ],
+  "blockers": [
+    "GitHub review publication awaits explicit user authorization after an automatic approval rejection.",
+    "E01 index/geometry audit still awaits its separate 2 CPU, 4 GiB RAM, 1 GiB temporary disk, at most ten-minute budget decision.",
+    "R5 retraining remains subject to the plan's separate scientific and resource decisions."
+  ],
+  "changed_paths": [],
+  "commit": "89875350d8b03152bdd837511fb5a5e23d6769fd",
+  "created_at": "2026-09-23T21:55:48Z",
+  "current_state": "TobiasEdman/imintengine#61 was independently reviewed at head 8bd7e572a5b7c566c27daf8c089d270ca458faf0 against main 3ca628ac76b7d84389b5be99c6fc30c7a5b1b490. CI is terminal green. Five methodological findings remain: incomplete factorial design/additivity; unverified model-runtime compatibility; target-digest limitations; Tessera annual embeddings mislabelled as a single temporal acquisition; omitted 404 shared distill/holdout point IDs. Exact review and suggested corrections are in /Users/tobiasedman/.codex/visualizations/2026/09/17/01a0af99-f99a-7ab3-88f7-d3e013d163d7/campaign/pr-review-20260923/review.md; prepared PR61 comment is pr61-review-comment.md in the same directory. Publication was rejected by automatic approval review because explicit user authorization for the external GitHub comment was not found. No comment was posted and no Claude notification was sent. Related local reviews of imintengine#54 and #47 found spatially misregistered swipe layers, stale images on index failure, and a no-wrap footnote layout regression; those findings are in the same report.",
+  "next_steps": [
+    "Obtain explicit user authorization to publish the prepared findings and notify Claude; re-read the current exact PR head and target branch before publication.",
+    "After authorization, publish the SHA-bound review on the appropriate PR before using the shared inbox to signal the durable review URL.",
+    "Claude should verify the E04/R5 findings and prepare corrections to the narrative in its own exclusively owned worktree; distinguish descriptive scores, execution integrity and scientific independence.",
+    "Return the revised exact head to Codex for re-review. Numerical feature-runtime equivalence, exact observation/fold identity and score transcription remain open work; do not claim those checks have passed."
+  ],
+  "off_limits": [
+    "Other sessions' dirty worktrees, including the original ImintEngine checkout and Codex campaign worktree",
+    "Historical data, frozen splits, checkpoints and running code",
+    "Seven full private crop-result files: bulk export or sharing still lacks user approval",
+    "New jobs, image builds or training without a separate resource decision"
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "codex",
+  "source_session": "codex-b92b82449a5d6c6a",
+  "target": "claude",
+  "task_id": "0010",
+  "verification": "pr61-consistency.json and verify_pr61.py verify seven model rows, eleven crop rows, support sum 2491 and the reported arithmetic/order only. Source diffs and saved authenticated metadata audits were checked. No private numerical result files were opened. Dashboard combination passed 17 existing tests; 12/15 browser checks passed and three reproducible faults are documented. verification.json hashes the report and test artifacts. The current PR61 head and main tip were re-read before the publication attempt, which was rejected before execution."
+}
