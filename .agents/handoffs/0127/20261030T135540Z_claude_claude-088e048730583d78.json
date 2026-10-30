@@ -1,0 +1,47 @@
+{
+  "active_goal": "IM-023: retrain TESSERA with NMD 113 barrblandskog as unified class 28, plus a 28-class control run, so the effect of class 28 and of the FractionLoss fix can be told apart.",
+  "active_rules": [
+    "Barrblandskog = class 28, TESSERA first, control run, primary NFI rule collapses 28 to tall/gran via the fraction head [Tobias 2026-10-30]",
+    "Every cluster step needs Tobias' approval and kubectl create --dry-run=server first [plan + CLAUDE.md]",
+    "Never restart jobs that discard finished work without asking [CLAUDE.md]",
+    "No change to sealed NFI truth, R4 checkpoint or the R4 label directories [plan]"
+  ],
+  "blockers": [
+    "Cluster steps need icekube access from Tobias' machine",
+    "Evaluation jobs not written: ladder_holdout_eval.py is pinned to 28 classes"
+  ],
+  "changed_paths": [
+    "scripts/build_labels.py",
+    "scripts/relabel_barrblandskog.py",
+    "scripts/im023_retrain.py",
+    "k8s/im023/relabel-b28-job.yaml",
+    "k8s/im023/train-tessera-smoke-job.yaml",
+    "k8s/im023/train-tessera-b28-job.yaml",
+    "k8s/im023/train-tessera-control-job.yaml",
+    "tests/test_build_labels_rebuild.py",
+    "tests/test_relabel_barrblandskog.py",
+    "tests/test_im023_retrain.py",
+    "docs/experiments/class-separability/retrain_barrblandskog.md"
+  ],
+  "commit": "2b6c19d8b7de541615c0a502acaa8143e7569a21",
+  "created_at": "2026-10-30T13:55:40Z",
+  "current_state": "Branch agent/te/claude/im023-barrblandskog: schema with class 28, FractionLoss fix cherry-picked (dde7b037), build_labels range fix (81e93b47), label shortcut with bit-for-bit canonical check (6933605b), retrain recipe script (b9433d57, pinned by the jobs), four k8s jobs (757dea5e), plan updated (2b6c19d8). Nothing has run in the cluster.",
+  "next_steps": [
+    "kubectl create --dry-run=server, then create k8s/im023/relabel-b28-job.yaml; read /cephfs/im023/relabel_verify/<UTC>/report.json (identical must be true; stored_reproduced is informative)",
+    "Run k8s/im023/train-tessera-smoke-job.yaml; check both smoke checkpoints and the printed class-weight source",
+    "Run train-tessera-b28-job.yaml and train-tessera-control-job.yaml in parallel",
+    "Write the 29-class evaluation path (holdout, forest5, NFI collapse via fraction head, LUCAS) before looking at results"
+  ],
+  "off_limits": [
+    "R4 checkpoint and /cephfs/distill/tessera_r2, /cephfs/nmd2023_labels",
+    "Sealed NFI holdout",
+    "Serving contract of the demo (pinned to R4's 28 classes)"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-088e048730583d78",
+  "target": null,
+  "task_id": "0127",
+  "verification": "At 2b6c19d8: tests/test_relabel_barrblandskog.py 10 passed, tests/test_im023_retrain.py 11 passed (R4 flag parity, CPU smoke of relabel -> recipe -> train_unified for both variants, manifest pins), build_labels class 28 regression 2 passed. Full suite 4098 passed / 55 failed; with matplotlib, scikit-image and fiona installed the 55 drop to 4, identical on base b7e0c2ab: Prithvi weights 403 behind the proxy (2), storage-prep owner check under uid 0, and the known package-boundary test. No kubectl dry-run: no cluster access from this session."
+}
