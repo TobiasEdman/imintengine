@@ -66,9 +66,10 @@ lr 1e-4, focal_dice, patch 504, gated aux, fraktionshuvud) med två ändringar:
 `--num-classes 29` och `--label-dir /cephfs/distill/tessera_r2_b28`, plus den
 rättade fraktionsförlusten i koden. Ny checkpointkatalog; R4 rörs inte.
 
-Två saker ändras samtidigt (klass 28 och fraktionsrättelsen). Vill vi kunna
-skilja effekterna åt behövs en kontrollkörning med 28 klasser och bara
-fraktionsrättelsen — ytterligare ≤ 12 h H100. **Beslut behövs.**
+Två saker ändras samtidigt (klass 28 och fraktionsrättelsen). **Beslut
+(Tobias 2026-10-30):** en kontrollkörning görs också — R4-receptet med 28
+klasser, dagens `tessera_r2`-etiketter och bara fraktionsrättelsen, ≤ 12 h
+H100, parallellt med huvudkörningen — så att effekterna går att skilja åt.
 
 Först en 1-epoks rökkörning (repots regel för träningspipelinen), sedan full
 körning.
@@ -81,11 +82,11 @@ körning.
 2. **forest5-provet** med den nya checkpointen: andelen NMD 113 som modellen
    ger klass 28, och att lövskog fortsatt är ≈ 0 %.
 3. **NFI-holdout (förseglad, sanning v1):** NFI-regeln saknar barrblandskog.
-   Förslag att förregistrera: primärt slås 28 ihop till tall eller gran efter
-   modellens fraktionshuvud (tall- mot granandel), samma dominansregel som
-   `collapse_fractions_to_nfi_class`, så att jämförelsen med R4 är rättvis;
-   sekundärt redovisas 28 som egen kolumn i förväxlingsmatrisen. Sanningen
-   ändras inte.
+   **Beslut (Tobias 2026-10-30):** primärt slås 28 ihop till tall eller gran
+   efter modellens fraktionshuvud (tall- mot granandel), samma dominansregel
+   som `collapse_fractions_to_nfi_class`, så att jämförelsen med R4 är
+   rättvis; sekundärt redovisas 28 som egen kolumn i förväxlingsmatrisen.
+   Sanningen ändras inte. Kontrollkörningen och R4 poängsätts med samma regel.
 4. **LUCAS** på samma sätt, med 28 räknad som barrskog.
 
 ### 4. Demon (efter godkänd utvärdering)
@@ -104,10 +105,10 @@ omträning efter denna, så att effekten av varje schemaändring går att avgör
 Ett alternativ att väga in då: trädslag för all skog plus våtmark som separat
 attribut (markfukt finns redan som aux), i stället för fem nya klasser.
 
-## Öppna beslut
+## Beslut och vad som återstår
 
-1. Kontrollkörning med bara fraktionsrättelsen (≤ 12 h H100)?
-2. Primär NFI-regel för klass 28 (förslaget ovan) — förregistreras före
-   utvärdering.
-3. Godkännande per klustersteg: etikettomvandling (CPU), rökkörning,
-   full träning, utvärderingsjobb.
+Beslutat 2026-10-30: egen klass 28, TESSERA först, kontrollkörning, primär
+NFI-regel via fraktionshuvudet, schemagrenen pushas separat från demogrenen.
+
+Återstår att godkänna per klustersteg: etikettomvandlingen (CPU),
+rökkörningarna, de två fulla träningarna och utvärderingsjobben.
