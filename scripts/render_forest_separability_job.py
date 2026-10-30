@@ -11,10 +11,11 @@ import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probe_forest_separability import CLASS_SCHEMES
+sys.path.insert(0, str(ROOT))
+from scripts.forest_separability_schemes import CLASS_SCHEMES  # stdlib only, no numpy here
 IMAGE = 'ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d'
 SCRIPTS = ('extract_forest_separability.py', 'probe_forest_separability.py',
+           'forest_separability_schemes.py',
            'inference_comparison.py', 'cache_predict.py', 'extract_plot_features.py',
            'build_pinned_plot_set.py', 'validate_against_nfi.py', 'infer_tiles.py')
 

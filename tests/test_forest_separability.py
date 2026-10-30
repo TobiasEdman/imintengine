@@ -243,6 +243,18 @@ def test_rendered_job_pins_scheme_year_and_source(tmp_path):
     assert manifest['scheme'] == 'forest5' and manifest['feature_year'] == 2023
     assert isinstance(manifest['uncommitted_source'], bool)
     assert 'scripts/probe_forest_separability.py' in manifest['files']
+    assert 'scripts/forest_separability_schemes.py' in manifest['files']
     for bad in ({'scheme': 'forest4', 'feature_year': 2022}, {'scheme': 'binary', 'feature_year': 2024}):
         with pytest.raises(ValueError, match='pre-registered'):
             render(tmp_path / 'bad', **bad)
+
+
+def test_renderer_runs_without_numpy_on_the_operator_machine():
+    import subprocess, sys
+    renderer = Path(__file__).resolve().parents[1] / 'scripts/render_forest_separability_job.py'
+    blocked = ("import sys, runpy; sys.modules['numpy'] = None; sys.argv = ['render', '--help']; "
+               f"runpy.run_path({str(renderer)!r}, run_name='__main__')")
+    result = subprocess.run([sys.executable, '-I', '-c', blocked], capture_output=True, text=True,
+                            stdin=subprocess.DEVNULL, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert '--scheme' in result.stdout

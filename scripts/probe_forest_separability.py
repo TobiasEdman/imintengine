@@ -21,13 +21,9 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from scripts.forest_separability_schemes import CLASS_SCHEMES  # noqa: E402
+
 ROLE = "historical_training_development_diagnostic"
-# Ordered (name, raw NMD2023 codes) per class; the index is the probe label.
-CLASS_SCHEMES = {
-    "binary": (("barrblandskog", (113,)), ("lövskog (115–117)", (115, 116, 117))),
-    "forest5": (("tallskog", (111,)), ("granskog", (112,)), ("barrblandskog", (113,)),
-                ("lövblandad barrskog", (114,)), ("lövskog (115–117)", (115, 116, 117))),
-}
 
 
 def digest(path: Path) -> str:
