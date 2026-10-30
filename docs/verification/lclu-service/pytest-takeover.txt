@@ -1,0 +1,10 @@
+commit: f5def517a1c95cbc3ef1a32fdadc65301b0a62bb
+date: 2026-10-30T10:09:35Z
+env: python 3.13.17, docker/lclu/requirements.in pins (torch 2.15.0 from PyPI; download.pytorch.org unreachable), scikit-learn 1.9.0 (ladder-crop-distill lock), prometheus-client, pytest, httpx
+
+$ pytest tests/lclu tests/api_services tests/test_forest_separability.py -q
+187 passed, 20 warnings in 56.42s
+$ pytest tests/test_repo_hygiene.py tests/test_schema.py -q
+46 passed, 1 skipped in 7.43s
+$ node --check docs/js/lclu.js docs/js/lclu-config.js docs/js/app.js
+ok
