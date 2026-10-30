@@ -1,0 +1,39 @@
+{
+  "active_goal": "Execute approved E00-E12 foundation-model campaign; Codex owns checkpoint/evaluation audit, Claude owns independent seven-crop/R5 verification. E05/R5 and E13 retain separate decisions.",
+  "active_rules": [
+    "[user-stated 2026-09-17, later amendment] User decides cost-driving actions; ordinary local work does not require milestone approval.",
+    "[user-stated 2026-09-24] Approval covers publication of the three prepared reviews, notification to Claude and one audit within 2 CPU / 4 GiB RAM / 1 GiB temporary / 600 seconds, no GPU or retries. These actions are now executed; do not treat the budget as reusable.",
+    "[repository] Keep exact head/base binding and preserve frozen historical data and results."
+  ],
+  "blockers": [
+    "Missing geometry reference for two NFI tiles; this does not prove the underlying rows are wrong.",
+    "Historical fold assignments, actual training membership, private numerical result transcription and model-runtime equivalence remain unverified.",
+    "R5 and new resource-consuming actions retain separate decisions."
+  ],
+  "changed_paths": [
+    "docs/experiments/fm_e01_index_audit_result.md",
+    "docs/experiments/fm_e01_index_audit.md",
+    "docs/experiments/fm_e01_observation_roles.md"
+  ],
+  "commit": "89875350d8b03152bdd837511fb5a5e23d6769fd",
+  "created_at": "2026-09-24T14:51:36Z",
+  "current_state": "User approved publication/notification and the bounded CPU audit on 2026-09-24. BLOCK findings published and read back verbatim on https://github.com/TobiasEdman/imintengine/pull/61#issuecomment-5816370316 https://github.com/TobiasEdman/imintengine/pull/54#issuecomment-5816371073 https://github.com/TobiasEdman/imintengine/pull/47#issuecomment-5816371821 Shared inbox message 1790261143398-1e0187af was written; wake attempted 0, delivered 0, so Claude acknowledgement is not established. The one-off CPU audit finished with exit 2 / incomplete_geometry, not an infrastructure crash: 404 shared distill/crop-holdout IDs, 386 present in both roles in the same year, 18 only across years, 960 distill rows and 616 holdout rows affected. Nine of 982 NFI rows on two tiles lack geometry in the pinned LUCAS tile manifest. No scoring clearance, resplit or retry. This immutable handoff supersedes the pending-publication/budget state in the 20260923T215548Z handoff.",
+  "next_steps": [
+    "Claude: read the exact-head BLOCK comments, correct the PR narratives/UI in exclusively owned worktrees and return revised head SHAs to Codex.",
+    "Codex: re-review changed heads; preserve distinctions between operational integrity, same-year observation overlap, actual historical fold/training exposure and measured score bias.",
+    "Prepare the bounded geometry-provenance supplement for the two NFI tiles and historical fold/training identity work; no outcome access or split change is implied."
+  ],
+  "off_limits": [
+    "Other sessions dirty worktrees; Codex campaign changes remain uncommitted.",
+    "Historical data, frozen splits, checkpoints and running code.",
+    "Seven full private crop result files remain unapproved for bulk sharing.",
+    "No new jobs, retraining, image builds or audit retries without the next applicable resource decision."
+  ],
+  "repository_key": "ImintEngine--f4ea50ce3600",
+  "schema_version": "1",
+  "source_runtime": "codex",
+  "source_session": "codex-b92b82449a5d6c6a",
+  "target": "claude",
+  "task_id": "0010",
+  "verification": "Three published GitHub bodies match their pinned draft hashes. PR heads and main were rechecked before publication. Audit Job UID 05b862f5-bf4d-4c50-acef-5006068547dd, Pod UID 8255b20d-4103-4741-852d-9a166282630a; runtime image, source/input hashes and budget verified. Result SHA-256 3af1b39871fe38a0dc3eafb27aec0747556858450412738848ac4ccb134b951f, archived at /Users/tobiasedman/.codex/visualizations/2026/09/17/01a0af99-f99a-7ab3-88f7-d3e013d163d7/campaign/e01-index-audit-run-20260924/result.json. Elapsed 0.737 s, CPU 0.98 s, max RSS 107122688 bytes. Job/Pod/logs/ConfigMap and verification archived; ConfigMap and shared code lock removed after terminal verification. No automatic retry."
+}

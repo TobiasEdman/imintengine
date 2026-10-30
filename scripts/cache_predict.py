@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
+from scripts import prediction_cache as cache
 
 
 def cache_path_for(cache_dir: str | Path, ckpt_sha: str, tile_path: str | Path) -> Path:
@@ -45,7 +45,8 @@ def make_cached_predict_fn(
 
     Args:
         cache_dir: root of the prediction cache (``infer_tiles.py --cache-dir``).
-        ckpt_sha: the 16-hex checkpoint digest naming the per-checkpoint subdir.
+        ckpt_sha: the full prediction-contract digest returned by infer_all.
+            Legacy checkpoint-only caches are rejected.
         want_fracs: if True, return the LUCAS-fraction 3-tuple
             ``(class_map, probs, fracs)``; else the NFI/LUCAS-hard 2-tuple
             ``(class_map, probs)``.
@@ -56,23 +57,22 @@ def make_cached_predict_fn(
         never silently skips (a missing tile would otherwise corrupt the score).
     """
     cache_dir = Path(cache_dir)
+    manifest = cache.load_manifest(cache_dir, ckpt_sha)
+    contract = manifest["contract"]
+    if want_fracs and not contract["model"]["fraction_head"]:
+        raise cache.CacheError("cache has no fraction head")
 
     def predict_fn(tile_path):
-        cpath = cache_path_for(cache_dir, ckpt_sha, tile_path)
-        if not cpath.exists():
-            raise FileNotFoundError(
-                f"prediction cache miss for tile '{Path(str(tile_path)).stem}' "
-                f"at {cpath} — run infer_tiles.py for checkpoint sha {ckpt_sha} "
-                f"over this tile set first (never silently skipped)."
-            )
-        with np.load(cpath) as z:
-            # argmax class map: stored uint8, widened to int64 to match
-            # probs.argmax(0).astype(np.int64) from the direct path.
-            class_map = z["pred"].astype(np.int64)
-            probs = z["probs"].astype(np.float32)
-            if want_fracs:
-                fracs = z["fracs"].astype(np.float32)
-                return class_map, probs, fracs
-            return class_map, probs
+        path = Path(tile_path)
+        stem = path.stem
+        if stem not in contract["tiles"]:
+            raise cache.CacheError(f"tile {stem} is outside the cache inventory")
+        if cache.file_identity(path) != contract["tiles"][stem]["input"]:
+            raise cache.CacheError(f"input tile identity changed: {path}")
+        arrays = cache.read_prediction(cache_dir / ckpt_sha, contract, stem)
+        class_map, probs = arrays["pred"].astype("int64"), arrays["probs"].astype("float32")
+        if want_fracs:
+            return class_map, probs, arrays["fracs"].astype("float32")
+        return class_map, probs
 
     return predict_fn

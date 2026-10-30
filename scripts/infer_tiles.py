@@ -18,14 +18,17 @@ bit-identical modulo float16 storage (asserted in
 
 Speedups over the fused validators: a ``DataLoader`` (``num_workers`` parallel
 ``np.load`` + pinned prefetch), ``batch_size`` tiles per GPU forward, and a
-SINGLE dual-head forward (``return_fractions=True``) that yields both the class
-logits and the fraction logits — no second pass.
+SINGLE family-routed forward (``return_fractions=True``) that yields both outputs when
+a fraction head exists, or class logits alone otherwise — no second pass.
+A present fraction head does not establish supervision; campaign scoring must
+check training provenance separately before using fraction predictions.
 
-Cache layout: ``<cache-dir>/<ckpt_sha>/<tile_stem>.npz`` with
+Cache layout: ``<cache-dir>/<contract_sha256>/<tile_stem>.npz`` with
 ``pred`` (uint8, H×W), ``probs`` (float16, C×H×W), ``fracs`` (float16, 4×H×W),
-plus a ``<cache-dir>/<ckpt_sha>/MANIFEST.json`` provenance sidecar. Idempotent:
-a tile already cached for this checkpoint is skipped (like ``_valid_existing_tile``
-in the fetchers).
+with ``fracs`` omitted when the model has no fraction head,
+plus an immutable MANIFEST.json containing the full recipe/input inventory.
+Each output has a hash-bound JSON receipt. Cache hits require valid receipts,
+content and shapes; changed inputs/code/options select a new cache directory.
 
     python scripts/infer_tiles.py \
         --checkpoint /data/checkpoints/tessera_gated/best_model.pt \
@@ -51,6 +54,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.tile_fetch import is_tile_tmp  # noqa: E402
+from scripts import prediction_cache as cache  # noqa: E402
 
 
 def _load_infcmp():
@@ -78,7 +82,7 @@ def ckpt_sha256(checkpoint: str) -> str:
 def _git_sha() -> str:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "rev-parse", "HEAD"],
             cwd=str(Path(__file__).resolve().parents[1]),
             stderr=subprocess.DEVNULL,
         ).decode().strip()
@@ -144,7 +148,7 @@ class TileInferenceDataset:
     """
 
     def __init__(self, tile_paths, device_family, img_size, aux_channel_names,
-                 num_frames=None):
+                 num_frames=None, tile_identities=None):
         import torch  # noqa: F401  (import guarded to keep module import light)
         self._torch = __import__("torch")
         self.tile_paths = [str(p) for p in tile_paths]
@@ -158,6 +162,7 @@ class TileInferenceDataset:
         # single-frame temporal_encoding cannot add (15376 vs 3844) — the
         # first ladder-eval wave died exactly so.
         self.num_frames = num_frames
+        self.tile_identities = tile_identities or {}
         self._infcmp = _load_infcmp()
 
     def __len__(self):
@@ -167,57 +172,73 @@ class TileInferenceDataset:
         tile_path = self.tile_paths[i]
         # Build on CPU (device="cpu") — the DataLoader worker has no GPU;
         # tensors are moved to the GPU in the main loop after collation.
+        identity = self.tile_identities.get(Path(tile_path).stem)
+        auth = ({
+            "expected_tile_sha256": identity["sha256"],
+            "expected_tile_size": identity["size_bytes"],
+        } if identity else {})
         inp = self._infcmp._build_inference_inputs(
             tile_path, self._torch.device("cpu"), self.img_size,
             self.aux_channel_names, family=self.family,
-            num_frames=self.num_frames)
-        item = {
-            "img5d": inp["img5d"].squeeze(0),   # drop the (1, …) batch dim
-            "aux": inp["aux"].squeeze(0),
-            "stem": Path(tile_path).stem,
-            "crop_sz": int(inp["crop_sz"]),
-        }
-        tc = inp["temporal_coords"]
-        lc = inp["location_coords"]
-        # Coords are per-tile and only present for Prithvi; carry them so the
-        # collate can rebuild a batch tensor (all tiles in a batch share family).
-        item["temporal_coords"] = tc.squeeze(0) if tc is not None else None
-        item["location_coords"] = lc.squeeze(0) if lc is not None else None
-        return item
+            num_frames=self.num_frames, **auth)
+        try:
+            def unbatch(value):
+                return value.squeeze(0) if value is not None else None
+
+            routed_batch = inp.get("batch")
+            return {
+                "img5d": unbatch(inp["img5d"]),
+                "batch": (
+                    {key: unbatch(value) for key, value in routed_batch.items()}
+                    if routed_batch is not None else None
+                ),
+                "family": self.family,
+                "aux": unbatch(inp["aux"]),
+                "temporal_coords": unbatch(inp["temporal_coords"]),
+                "location_coords": unbatch(inp["location_coords"]),
+                "stem": Path(tile_path).stem,
+                "crop_sz": int(inp["crop_sz"]),
+            }
+        finally:
+            self._infcmp._close_inference_inputs(inp)
 
 
 def _collate(batch):
-    """Stack same-size items into batch tensors; None coords stay None."""
+    """Stack one family's tensors, preserving routed inputs and absent coords."""
     import torch
-    out = {
-        "img5d": torch.stack([b["img5d"] for b in batch], dim=0),
-        "aux": torch.stack([b["aux"] for b in batch], dim=0),
-        "stems": [b["stem"] for b in batch],
-        "crop_sz": [b["crop_sz"] for b in batch],
-    }
-    tcs = [b["temporal_coords"] for b in batch]
-    lcs = [b["location_coords"] for b in batch]
-    out["temporal_coords"] = (
-        torch.stack(tcs, dim=0) if all(t is not None for t in tcs) else None)
-    out["location_coords"] = (
-        torch.stack(lcs, dim=0) if all(t is not None for t in lcs) else None)
-    return out
 
+    def stack_optional(values, label):
+        if all(value is None for value in values):
+            return None
+        if any(value is None for value in values):
+            raise ValueError(f"inconsistent {label} within inference batch")
+        return torch.stack(values, dim=0)
 
-def _write_manifest(sha_dir: Path, *, checkpoint, ckpt_sha, backbone_name,
-                    num_classes, img_size, n_tiles, git_sha, produced_at):
-    """Provenance sidecar mirroring the repo's Docker-artifact MANIFEST rule."""
-    manifest = {
-        "checkpoint": str(checkpoint),
-        "ckpt_sha": ckpt_sha,
-        "backbone_name": backbone_name,
-        "num_classes": int(num_classes),
-        "img_size": int(img_size),
-        "n_tiles": int(n_tiles),
-        "git_sha": git_sha,
-        "produced_at": produced_at,
+    families = {item["family"] for item in batch}
+    if len(families) != 1:
+        raise ValueError("cannot collate different model families")
+    routed = [item["batch"] for item in batch]
+    model_batch = None
+    if any(value is not None for value in routed):
+        if any(value is None for value in routed):
+            raise ValueError("inconsistent routed inputs within inference batch")
+        keys = set(routed[0])
+        if any(set(value) != keys for value in routed):
+            raise ValueError("inconsistent routed keys within inference batch")
+        model_batch = {
+            key: torch.stack([value[key] for value in routed], dim=0)
+            for key in sorted(keys)
+        }
+    return {
+        **{
+            key: stack_optional([item[key] for item in batch], key)
+            for key in ("img5d", "aux", "temporal_coords", "location_coords")
+        },
+        "batch": model_batch,
+        "family": next(iter(families)),
+        "stems": [item["stem"] for item in batch],
+        "crop_sz": [item["crop_sz"] for item in batch],
     }
-    (sha_dir / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
 
 
 def infer_all(
@@ -227,30 +248,33 @@ def infer_all(
 ):
     """Load the model ONCE, batch-infer the tile set, write the cache.
 
-    Returns the checkpoint sha and (n_written, n_skipped).
+    Returns the full prediction-contract key and (n_written, n_skipped).
     """
     import torch
-    from torch.utils.data import DataLoader, Subset
+    from torch.utils.data import DataLoader
 
     infcmp = _load_infcmp()
     dev = torch.device(device)
 
-    sha = ckpt_sha256(checkpoint)
-    sha_dir = Path(cache_dir) / sha
-    sha_dir.mkdir(parents=True, exist_ok=True)
-
-    tiles = resolve_tile_list(data_dir, tile_list, allow_missing=allow_missing)
+    checkpoint_identity = cache.file_identity(checkpoint)
+    all_tiles = resolve_tile_list(data_dir, tile_list, allow_missing=allow_missing)
+    if not all_tiles:
+        raise ValueError("empty inference tile inventory")
+    tiles = all_tiles
     if shard is not None:
         i, k = shard
-        tiles = tiles[i::k]
+        if not 0 <= i < k:
+            raise ValueError("invalid shard")
+        tiles = all_tiles[i::k]
         print(f"shard {i}/{k}: {len(tiles)} tiles")
 
-    print(f"[infer_tiles] checkpoint sha={sha} cache={sha_dir}")
     # Thread runtime img_size so clay/croma (no pos_embed, minimal config)
     # build their head at the exact resolution inference feeds — see
     # inference_comparison.load_model docstring.
     model, epoch, miou, native = infcmp.load_model(
-        checkpoint, dev, backbone_name=backbone_name, img_size=img_size)
+        checkpoint, dev, backbone_name=backbone_name, img_size=img_size,
+        expected_checkpoint_sha256=checkpoint_identity["sha256"],
+        expected_checkpoint_size=checkpoint_identity["size_bytes"])
     family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
     print(f"  loaded epoch={epoch} ckpt_mIoU={miou} native_img={native} "
           f"family={family}")
@@ -285,15 +309,46 @@ def infer_all(
     # branch and a 1-frame model's temporal_encoding rejects the 4x token
     # grid (15376 vs 3844), which killed the first ladder-eval wave.
     model_num_frames = getattr(model, "num_frames", None)
-    ds = TileInferenceDataset(tiles, family, img_size, aux_names,
-                              num_frames=model_num_frames)
-
-    # Group tiles by crop size so a batch collates cleanly. Odd-sized tiles are
-    # inferred at batch=1 rather than being mis-cropped or padded.
+    has_fraction_head = infcmp.model_has_frac_head(model)
+    inventory = {}
+    for path in all_tiles:
+        identity = cache.file_identity(path)
+        metadata = cache.tile_metadata(path, identity, family=family)
+        inventory[path.stem] = {
+            "input": identity,
+            "crop_size": min(img_size, metadata["height"], metadata["width"]),
+        }
+    if len(inventory) != len(all_tiles):
+        raise ValueError("duplicate tile stems in cache inventory")
+    contract = {
+        "schema": cache.SCHEMA, "checkpoint": checkpoint_identity,
+        "source": cache.source_identity(Path(__file__).resolve().parents[1], _git_sha()),
+        "runtime": cache.runtime_identity(torch, dev),
+        "options": {
+            "backbone_name": backbone_name, "img_size": img_size,
+            "num_classes": num_classes, "batch_size": batch_size,
+            "storage": "uint8-pred-float16-probs-fracs",
+            "tile_order": [p.stem for p in all_tiles],
+            "num_shards": shard[1] if shard is not None else 1,
+            "allow_missing": allow_missing,
+        },
+        "model": {
+            "family": family, "num_frames": model_num_frames,
+            "aux_names": aux_names, "n_aux_channels": n_aux,
+            # Capability only: supervision eligibility is a separate scoring gate.
+            "fraction_head": has_fraction_head,
+        },
+        "tiles": inventory,
+    }
+    sha_dir = cache.initialize(cache_dir, contract)
+    sha = sha_dir.name
+    print(f"[infer_tiles] cache key={sha} cache={sha_dir}")
+    ds = TileInferenceDataset(
+        tiles, family, img_size, aux_names, num_frames=model_num_frames,
+        tile_identities={stem: entry["input"] for stem, entry in inventory.items()})
     size_of = {}
-    for i, p in enumerate(tiles):
-        cs = min(img_size, *_tile_hw(p))
-        size_of.setdefault(cs, []).append(i)
+    for i, path in enumerate(tiles):
+        size_of.setdefault(inventory[path.stem]["crop_size"], []).append(i)
 
     n_written = n_skipped = 0
     t0 = time.time()
@@ -301,44 +356,59 @@ def infer_all(
     total = len(tiles)
 
     for cs, idxs in sorted(size_of.items()):
-        # Skip tiles already cached (idempotent) BEFORE building the loader,
-        # so a resumed run only re-infers the missing slice.
-        pending = [
+        # Plan immutable batch membership BEFORE filtering hits. Recompute
+        # a whole partial batch, publishing only its missing members, so resume
+        # preserves the original numerical batch context.
+        hits = {
             i for i in idxs
-            if not (sha_dir / f"{Path(ds.tile_paths[i]).stem}.npz").exists()
-        ]
-        n_skipped += len(idxs) - len(pending)
-        done += len(idxs) - len(pending)
-        if not pending:
+            if cache.has_prediction(sha_dir, contract, Path(ds.tile_paths[i]).stem)
+        }
+        hit_stems = {Path(ds.tile_paths[i]).stem for i in hits}
+        planned = [idxs[j:j + batch_size] for j in range(0, len(idxs), batch_size)]
+        pending_batches = [indices for indices in planned if not set(indices) <= hits]
+        n_skipped += len(hits)
+        done = n_written + n_skipped
+        if not pending_batches:
             continue
-        # All tiles in this group share crop size `cs`, so they collate cleanly
-        # at the full batch size; distinct sizes are separate groups (batch=1
-        # only when a size class has a single tile).
         loader = DataLoader(
-            Subset(ds, pending), batch_size=batch_size, num_workers=num_workers,
-            pin_memory=(dev.type == "cuda"), collate_fn=_collate, shuffle=False)
+            ds, batch_sampler=pending_batches, num_workers=num_workers,
+            pin_memory=(dev.type == "cuda"), collate_fn=_collate)
         for batch in loader:
-            img5d = batch["img5d"].to(dev, non_blocking=True)
-            aux = batch["aux"].to(dev, non_blocking=True)
-            tc = batch["temporal_coords"]
-            lc = batch["location_coords"]
-            tc = tc.to(dev, non_blocking=True) if tc is not None else None
-            lc = lc.to(dev, non_blocking=True) if lc is not None else None
+            inputs = {
+                key: (
+                    batch[key].to(dev, non_blocking=True)
+                    if batch[key] is not None else None
+                )
+                for key in ("img5d", "aux", "temporal_coords", "location_coords")
+            }
+            # family_forward owns device transfer and normalization of the
+            # routed stacks, exactly as in direct inference and training.
+            inputs.update(batch=batch["batch"], family=batch["family"])
             with torch.no_grad():
-                logits, frac_logits = model(
-                    img5d, aux=aux, temporal_coords=tc, location_coords=lc,
-                    return_fractions=True)
+                output = infcmp._forward_from_inputs(
+                    model, inputs, dev, return_fractions=has_fraction_head)
+                if has_fraction_head:
+                    logits, frac_logits = output
+                    if frac_logits is None:
+                        raise ValueError("fraction head returned no fraction logits")
+                    fracs = torch.sigmoid(frac_logits).to(
+                        torch.float16).cpu().numpy()
+                else:
+                    logits, fracs = output, None
                 pred = logits.argmax(1).to(torch.uint8).cpu().numpy()
                 probs = torch.softmax(logits, dim=1).to(
                     torch.float16).cpu().numpy()
-                fracs = torch.sigmoid(frac_logits).to(
-                    torch.float16).cpu().numpy()
             for j, stem in enumerate(batch["stems"]):
-                cpath = sha_dir / f"{stem}.npz"
-                np.savez_compressed(
-                    cpath, pred=pred[j], probs=probs[j], fracs=fracs[j])
-                n_written += 1
-            done += len(batch["stems"])
+                if stem in hit_stems:
+                    continue
+                arrays = {"pred": pred[j], "probs": probs[j]}
+                if fracs is not None:
+                    arrays["fracs"] = fracs[j]
+                if cache.publish_prediction(sha_dir, contract, stem, arrays, produced_at):
+                    n_written += 1
+                else:
+                    n_skipped += 1
+            done = n_written + n_skipped
             if log_every and (n_written % log_every < len(batch["stems"])):
                 elapsed = time.time() - t0
                 rate = n_written / elapsed if elapsed else 0.0
@@ -347,17 +417,16 @@ def infer_all(
                 print(f"  [{done}/{total}] {rate:.1f} tiles/s "
                       f"ETA {eta/60:.1f} min", flush=True)
 
-    _write_manifest(
-        sha_dir, checkpoint=checkpoint, ckpt_sha=sha, backbone_name=backbone_name,
-        num_classes=num_classes, img_size=img_size, n_tiles=total,
-        git_sha=_git_sha(), produced_at=produced_at)
+    for path in tiles:
+        if not cache.has_prediction(sha_dir, contract, path.stem):
+            raise cache.CacheError(f"missing prediction after inference: {path.stem}")
     dt = time.time() - t0
     print(f"[infer_tiles] wrote {n_written}, skipped {n_skipped} (already "
           f"cached) in {dt/60:.1f} min → {sha_dir}")
     return sha, (n_written, n_skipped)
 
 
-def _tile_hw(path) -> tuple[int, int]:
+def _tile_hw(path, *, family=None) -> tuple[int, int]:
     """(H, W) of a tile's raster, read from the .npz member HEADER only.
 
     ``np.load(path)[key].shape`` inflates the whole array (e.g. a
@@ -371,7 +440,10 @@ def _tile_hw(path) -> tuple[int, int]:
     from numpy.lib import format as npformat
     with zipfile.ZipFile(path) as zf:
         members = set(zf.namelist())
-        for key in ("tessera.npy", "spectral.npy", "image.npy"):
+        keys = (("tessera.npy",) if family == "tessera" else
+                ("spectral.npy", "image.npy") if family is not None else
+                ("tessera.npy", "spectral.npy", "image.npy"))
+        for key in keys:
             if key in members:
                 with zf.open(key) as f:
                     version = npformat.read_magic(f)
@@ -407,6 +479,7 @@ def main() -> None:
     ap.add_argument("--img-size", type=int, default=504)
     ap.add_argument("--num-classes", type=int, default=28)
     ap.add_argument("--cache-dir", default="/cephfs/pred_cache")
+    ap.add_argument("--cache-key-out", help="write the full prediction-contract key here")
     # Defaults sized for large 128-ch tessera embeddings (~130 MB/tile): the
     # DataLoader buffers batch×workers×prefetch tiles, so batch16/workers8 OOMs
     # a 24Gi pod. Raise these only for small-channel tiles with memory headroom.
@@ -425,7 +498,7 @@ def main() -> None:
                          "no wall-clock read in library code)")
     args = ap.parse_args()
 
-    infer_all(
+    key, _counts = infer_all(
         checkpoint=args.checkpoint, backbone_name=args.backbone_name,
         data_dir=args.data_dir, tile_list=args.tile_list, img_size=args.img_size,
         num_classes=args.num_classes, cache_dir=args.cache_dir,
@@ -433,6 +506,8 @@ def main() -> None:
         device=args.device, shard=_parse_shard(args.shard),
         log_every=args.log_every, produced_at=args.produced_at,
         allow_missing=args.allow_missing)
+    if args.cache_key_out:
+        Path(args.cache_key_out).write_text(key + "\n")
 
 
 if __name__ == "__main__":

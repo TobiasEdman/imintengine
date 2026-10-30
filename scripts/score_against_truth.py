@@ -19,11 +19,13 @@ is paid once, not once per truth.
         --plot-index /data/nfi/nfi_index_unified_v2_512.parquet \
         --num-classes 28 --out /data/nfi_eval/nfi_validation_tessera.json
 
-    # LUCAS (fraction member)
+    # LUCAS (fractions allowed only by a reviewed, pinned policy)
     python scripts/score_against_truth.py --truth lucas \
         --cache-dir /cephfs/pred_cache --ckpt-sha <sha> \
         --lucas-index /data/lucas/lucas_tile_index.parquet \
         --data-dir /data/unified_v2_512 --num-classes 28 --auto-fraction \
+        --fraction-policy /data/audits/fraction-policy.json \
+        --fraction-policy-sha256 <reviewed-policy-sha256> \
         --out /data/nfi_eval/lucas-validation-tessera.json
 """
 from __future__ import annotations
@@ -40,7 +42,9 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cache_predict import make_cached_predict_fn  # noqa: E402
+from scripts.cache_predict import make_cached_predict_fn  # noqa: E402
+from scripts import prediction_cache as cache  # noqa: E402
+from scripts.fraction_scoring_policy import select_fraction_mode  # noqa: E402
 
 
 def _load_script(name):
@@ -51,52 +55,79 @@ def _load_script(name):
     return m
 
 
-def _cache_has_fracs(cache_dir, ckpt_sha) -> bool:
-    """True if the cache stores a real (non-degenerate) fraction head.
+def _fraction_decision(args, manifest):
+    decision = select_fraction_mode(
+        manifest["contract"],
+        requested=getattr(args, "use_fraction_head", False),
+        automatic=getattr(args, "auto_fraction", False),
+        policy_path=getattr(args, "fraction_policy", None),
+        policy_sha256=getattr(args, "fraction_policy_sha256", None))
+    print(f"fraction scoring: {decision['decision']} "
+          f"(enabled={decision['enabled']}) — {decision['reason']}")
+    return decision
 
-    A checkpoint with no fraction head still gets a ``fracs`` array written by
-    ``infer_tiles.py`` (the model forward always returns a frac_logits tensor);
-    for auto-detection we treat presence of the key as the frac signal, matching
-    ``--auto-fraction`` on the validators. The MANIFEST is authoritative for the
-    checkpoint identity; the per-tile key presence is the runtime signal.
-    """
-    sha_dir = Path(cache_dir) / ckpt_sha
-    sample = next(sha_dir.glob("*.npz"), None)
-    if sample is None:
-        return False
-    with np.load(sample) as z:
-        return "fracs" in z.files
+
+def _validate_cache_options(args):
+    manifest = cache.load_manifest(args.cache_dir, args.ckpt_sha)
+    for field in ("img_size", "num_classes"):
+        if getattr(args, field) != manifest["contract"]["options"][field]:
+            raise cache.CacheError(f"scoring {field} disagrees with prediction cache")
+    return manifest
+
+
+
+def _prepare_cache_index(index_df, manifest, *, include_year=False):
+    """Authenticate metadata and map each tile's own rectangular crop."""
+    if index_df.empty:
+        raise cache.CacheError("empty scoring population")
+    contract = manifest["contract"]
+    rows = index_df["row"].to_numpy(dtype=float).copy()
+    cols = index_df["col"].to_numpy(dtype=float).copy()
+    keep = np.zeros(len(index_df), dtype=bool)
+    years = {}
+    if index_df[["tile_name", "tile_path"]].isna().any().any():
+        raise cache.CacheError("missing tile identity in scoring index")
+    for (name, path), positions in index_df.groupby(
+            ["tile_name", "tile_path"], sort=False).indices.items():
+        stem = Path(path).stem
+        if Path(str(name)).stem != stem or stem not in contract["tiles"]:
+            raise cache.CacheError(f"scoring tile is outside the cache inventory: {name}")
+        entry = contract["tiles"][stem]
+        metadata = cache.tile_metadata(
+            path, entry["input"], family=contract["model"]["family"],
+            include_year=include_year)
+        height, width = metadata["height"], metadata["width"]
+        crop = min(contract["options"]["img_size"], height, width)
+        if crop != entry["crop_size"]:
+            raise cache.CacheError(f"cached crop disagrees with authenticated tile: {name}")
+        rows[positions] -= (height - crop) // 2
+        cols[positions] -= (width - crop) // 2
+        keep[positions] = (
+            (rows[positions] >= 0) & (rows[positions] < crop)
+            & (cols[positions] >= 0) & (cols[positions] < crop))
+        if include_year:
+            years[name] = metadata["year"]
+    result = index_df.copy()
+    result["row"], result["col"] = rows, cols
+    result = result.iloc[np.flatnonzero(keep)].copy()
+    if result.empty:
+        raise cache.CacheError("no scoring observations within cached support")
+    print(f"authenticated crop: kept {len(result)}/{len(index_df)} observations")
+    return result, years
 
 
 def score_nfi(args) -> dict:
+    manifest = _validate_cache_options(args)
+    fraction = _fraction_decision(args, manifest)
     van = _load_script("validate_against_nfi")
     index_df = pd.read_parquet(args.plot_index)
     print(f"plot index: {len(index_df):,} plots on "
           f"{index_df['tile_name'].nunique()} tiles")
 
-    exists = index_df["tile_path"].map(os.path.exists)
-    if not exists.all():
-        gone = int((~exists).sum())
-        print(f"dropping {gone} plots on tiles no longer in the dataset")
-        index_df = index_df[exists].copy()
-
-    # Same centre-crop remap the fused validator applies (run_inference crops to
-    # img_size; the cache is stored in crop coords, so plot (row,col) must be
-    # shifted into crop space and border plots dropped).
-    sample_path = index_df["tile_path"].iloc[0]
-    tile_h = int(np.load(sample_path, allow_pickle=True)["spectral"].shape[-1])
-    off = van.crop_offset(tile_h, args.img_size)
-    cs = min(args.img_size, tile_h)
     before = len(index_df)
-    index_df = index_df[
-        (index_df["row"] >= off) & (index_df["row"] < off + cs)
-        & (index_df["col"] >= off) & (index_df["col"] < off + cs)
-    ].copy()
-    index_df["row"] -= off
-    index_df["col"] -= off
-    print(f"crop offset={off} (tile {tile_h}→{cs}); kept {len(index_df)}/{before}")
+    index_df, _years = _prepare_cache_index(index_df, manifest)
 
-    if args.use_fraction_head:
+    if fraction["enabled"]:
         # Fraction-collapse mode: identical rule to the fused validator via
         # the SHARED van.fracs_to_class_and_probs (parity by construction).
         base = make_cached_predict_fn(
@@ -119,7 +150,7 @@ def score_nfi(args) -> dict:
     results["_meta"] = {
         "cache_dir": str(args.cache_dir), "ckpt_sha": args.ckpt_sha,
         "img_size": args.img_size, "plots_in_crop": len(index_df),
-        "plots_total": before,
+        "plots_total": before, "fraction_scoring": fraction,
     }
     if args.dump_per_plot:
         _dump_parquet(per_plot, args.dump_per_plot, "plots")
@@ -127,6 +158,8 @@ def score_nfi(args) -> dict:
 
 
 def score_lucas(args) -> dict:
+    manifest = _validate_cache_options(args)
+    fraction = _fraction_decision(args, manifest)
     val = _load_script("validate_against_lucas")
     index_df = pd.read_parquet(args.lucas_index)
     index_df["tile_path"] = index_df["tile_name"].map(
@@ -134,25 +167,12 @@ def score_lucas(args) -> dict:
     print(f"LUCAS index: {len(index_df):,} points on "
           f"{index_df['tile_name'].nunique()} tiles")
 
-    exists = index_df["tile_path"].map(os.path.exists)
-    if not exists.all():
-        gone = int((~exists).sum())
-        print(f"dropping {gone} points on tiles not in {args.data_dir}")
-        index_df = index_df[exists].copy()
-    if index_df.empty:
-        raise SystemExit(f"no LUCAS tiles found under {args.data_dir}")
+    index_df, tile_years = _prepare_cache_index(index_df, manifest, include_year=True)
 
-    index_df = val._apply_crop_offset(index_df, args.img_size)
-
-    is_fraction = args.use_fraction_head
-    if args.auto_fraction and not is_fraction:
-        is_fraction = _cache_has_fracs(args.cache_dir, args.ckpt_sha)
-        print(f"  auto-fraction: cached fracs "
-              f"{'present → L2a on' if is_fraction else 'absent → L2b only'}")
+    is_fraction = fraction["enabled"]
 
     predict_fn = make_cached_predict_fn(
         args.cache_dir, args.ckpt_sha, want_fracs=is_fraction)
-    tile_years = val.build_tile_years(index_df)
 
     per_point = [] if args.dump_per_point else None
     results = val.score_against_lucas(
@@ -163,6 +183,7 @@ def score_lucas(args) -> dict:
         "cache_dir": str(args.cache_dir), "ckpt_sha": args.ckpt_sha,
         "img_size": args.img_size, "num_classes": args.num_classes,
         "min_support": args.min_support, "is_fraction_member": is_fraction,
+        "fraction_scoring": fraction,
         "points_scored": len(index_df),
         "n_tiles": int(index_df["tile_name"].nunique()),
     }
@@ -183,7 +204,7 @@ def main() -> None:
     ap.add_argument("--truth", required=True, choices=["nfi", "lucas"])
     ap.add_argument("--cache-dir", required=True)
     ap.add_argument("--ckpt-sha", required=True,
-                    help="checkpoint sha subdir name (from infer_tiles.py)")
+                    help="full prediction-contract key returned by infer_tiles.py")
     ap.add_argument("--img-size", type=int, default=504,
                     help="must match the crop infer_tiles.py used")
     ap.add_argument("--num-classes", type=int, default=28)
@@ -200,10 +221,15 @@ def main() -> None:
     ap.add_argument("--data-dir", default=None,
                     help="(lucas) tile root for tile_path + tile_year")
     ap.add_argument("--min-support", type=int, default=20)
-    ap.add_argument("--use-fraction-head", action="store_true",
-                    help="(lucas) force L2a fraction metrics on")
-    ap.add_argument("--auto-fraction", action="store_true",
-                    help="(lucas) enable L2a if the cache carries fractions")
+    modes = ap.add_mutually_exclusive_group()
+    modes.add_argument("--use-fraction-head", action="store_true",
+                       help="require eligible fractions (NFI collapse or LUCAS L2a)")
+    modes.add_argument("--auto-fraction", action="store_true",
+                       help="use fractions only for eligible entries in the pinned policy")
+    ap.add_argument("--fraction-policy",
+                    help="reviewed fraction-supervision policy JSON")
+    ap.add_argument("--fraction-policy-sha256",
+                    help="expected full policy SHA-256 from the reviewed run specification")
     ap.add_argument("--dump-per-point", default=None)
     args = ap.parse_args()
 
