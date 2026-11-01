@@ -1,5 +1,6 @@
 """TESSERA Zarr source: parity with the tile path, zone seams, gaps, cache, layout."""
 import dataclasses
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -190,3 +191,56 @@ def test_tiles_go_to_the_zone_of_their_centre():
     assert lclu_zarr.tile_zones(20.1, 67.8, 20.3, 67.9) == [34]
     with pytest.raises(ValueError, match="northern"):
         lclu_zarr.tile_zones(18.0, -1.0, 18.1, 1.0)
+
+
+# ── scripts/compare_tessera_zarr.py against cohort-style tiles ──────────────
+
+def cohort_tile(tmp_path, grid, name, block, source="geotessera-0.10.2"):
+    """A tile whose tessera comes from the enrichment code on one NPY-style block."""
+    from scripts.enrich_tiles_tessera import _fetch_tessera_for_tile
+
+    arr, crs, tx = block
+    gt = SimpleNamespace(
+        registry=SimpleNamespace(load_blocks_for_region=lambda **kw: [(2025, 16.45, 59.3)]),
+        fetch_embeddings=lambda blocks: iter([(2025, 16.45, 59.3, arr, crs, tx)]))
+    tessera, n = _fetch_tessera_for_tile(gt, grid.bounds(), 2025, 512)
+    assert n == 1
+    np.savez(tmp_path / "tiles" / f"{name}.npz", tessera=tessera, tessera_year=np.int32(2025),
+             has_tessera=np.int32(1), tessera_source=np.array(source),
+             easting=np.int32(grid.east), northing=np.int32(grid.north))
+
+
+@pytest.mark.parametrize("offset_m, identical", [(0.0, True), (3.0, False)])
+def test_comparison_finds_identity_on_the_lattice_and_the_rounding_shift_off_it(
+        tmp_path, offset_m, identical):
+    from scripts import compare_tessera_zarr as compare
+
+    grid = Grid.from_lonlat(16.5, 59.3)
+    x0, y0, rows, cols = lattice_block(grid, 33)
+    q, scales, water = synthetic(rows, cols)
+    (tmp_path / "tiles").mkdir()
+    # The NPY tile keeps its own origin; the store builder rounds it to the lattice.
+    block = (q.astype(np.float32) * scales[:, :, None], "EPSG:32633",
+             from_origin(x0 + offset_m, y0, 10, 10))
+    cohort_tile(tmp_path, grid, "a_tile", block)
+    cohort_tile(tmp_path, grid, "other_source", block, source="geotessera-0.7.5")
+    store = write_store(tmp_path / "v1.zarr", {33: (x0, y0, *zarr_zone(q, scales, water))})
+    report = tmp_path / "out" / "report.json"
+    assert compare.main(["--data-dir", str(tmp_path / "tiles"), "--n", "5", "--store", store,
+                         "--cache-dir", str(tmp_path / "cache"), "--report", str(report)]) == 0
+    result = json.loads(report.read_text())
+    assert [t["tile"] for t in result["tiles"]] == ["a_tile"]   # other sources are excluded
+    summary = result["summary"]
+    assert summary["ok"] == 1 and summary["valid_agreement"] > .99
+    if identical:
+        assert summary["identical_fraction"] == 1.0 and summary["max_abs_diff"] == 0.0
+    else:
+        assert summary["identical_fraction"] < .01 and summary["max_abs_diff"] > 0
+
+
+def test_comparison_refuses_a_directory_without_cohort_tiles(tmp_path):
+    from scripts import compare_tessera_zarr as compare
+
+    (tmp_path / "tiles").mkdir()
+    assert compare.main(["--data-dir", str(tmp_path / "tiles"), "--cache-dir", str(tmp_path),
+                         "--report", str(tmp_path / "r.json")]) == 1
