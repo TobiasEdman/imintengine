@@ -174,6 +174,99 @@ def assemble_embedding(gt, grid: Grid, year: int, *, max_blocks: int, max_bytes:
                             'uncached_source_bytes': missing_bytes, 'blocks': len(blocks)}
 
 
+BAND_ROWS = 256  # remote tiles are read and cached in fixed row bands
+
+
+def _remote_band(url: str, k: int, shape: tuple, dtype, cache: Path) -> np.ndarray:
+    """Rows [k·BAND_ROWS, …) of a remote (H, W[, 128]) NPY tile, kept on disk."""
+    from geotessera.remote import read_npy_window
+    path = cache / f'{Path(url).stem}_b{k}.npy'
+    rows = min(BAND_ROWS, shape[0] - k * BAND_ROWS)
+    if path.is_file():
+        band = np.load(path, allow_pickle=False)
+    else:
+        band = np.ascontiguousarray(read_npy_window(url, k * BAND_ROWS, k * BAND_ROWS + rows,
+                                                    0, shape[1]))
+        cache.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, lambda stream: np.save(stream, band))
+    if band.shape != (rows, *shape[1:]) or band.dtype != dtype:
+        raise ValueError('Remote tile band does not match the pinned tile shape')
+    return band
+
+
+def assemble_remote_embedding(gt, grid: Grid, year: int, *, root: str, cache: Path,
+                              max_blocks: int):
+    """The tile path's embedding, reading only the rows each remote tile contributes.
+
+    Same blocks, landmask georeferencing, dequantization, resampling and merge
+    as assemble_embedding and the compact COG path. Each tile is read in fixed
+    BAND_ROWS bands by HTTP range (one request per band) and the bands are kept
+    on disk; a tile is only fetched after its remote size matches the pinned
+    registry.
+    """
+    import math
+    import rasterio
+    from rasterio.warp import transform_bounds, reproject, Resampling
+    from rasterio.windows import Window, from_bounds, transform as window_transform
+    from geotessera.registry import tile_to_embedding_paths
+    from geotessera.remote import get_fs
+    from scripts.enrich_tiles_tessera import _reproject_tessera_to_tile
+
+    b = grid.bounds()
+    bounds = tuple(b[k] for k in ('west', 'south', 'east', 'north'))
+    blocks = gt.registry.load_blocks_for_region(
+        bounds=transform_bounds('EPSG:3006', 'EPSG:4326', *bounds), year=year)
+    if not blocks or len(blocks) > max_blocks or any(y != year for y, _, _ in blocks):
+        raise InputUnavailable('Missing exact-year blocks or block budget exceeded')
+    merged = np.zeros((128, 512, 512), np.float16)
+    valid = np.zeros((512, 512), bool)
+    files, bands = [], {'fetched': 0, 'cached': 0}
+    for _, lon, lat in blocks:
+        with rasterio.open(gt.registry.fetch_landmask(lon=lon, lat=lat)) as reference:
+            crs, transform, (height, width) = reference.crs, reference.transform, reference.shape
+        raw = from_bounds(*transform_bounds('EPSG:3006', crs, *bounds, densify_pts=41),
+                          transform=transform)
+        left, top = max(0, math.floor(raw.col_off) - 2), max(0, math.floor(raw.row_off) - 2)
+        right = min(width, math.ceil(raw.col_off + raw.width) + 2)
+        bottom = min(height, math.ceil(raw.row_off + raw.height) + 2)
+        if right <= left or bottom <= top:
+            continue
+        sizes = (gt.registry.get_tile_file_size(year, lon, lat),
+                 gt.registry.get_scales_file_size(year, lon, lat))
+        parts = []
+        for relative, size, (dtype, shape) in zip(
+                tile_to_embedding_paths(lon, lat, year), sizes,
+                [(np.int8, (height, width, 128)), (np.float32, (height, width))]):
+            url = f"{root.rstrip('/')}/{relative.as_posix()}"
+            ks = range(top // BAND_ROWS, (bottom - 1) // BAND_ROWS + 1)
+            here = cache / str(year)
+            missing = [k for k in ks if not (here / f'{Path(url).stem}_b{k}.npy').is_file()]
+            if missing and get_fs(url).size(url) != size:
+                raise ValueError('Remote tile size disagrees with the pinned registry')
+            band = np.concatenate([_remote_band(url, k, shape, dtype, here) for k in ks])
+            offset = ks[0] * BAND_ROWS
+            parts.append(band[top - offset:bottom - offset, left:right])
+            bands['fetched'] += len(missing)
+            bands['cached'] += len(ks) - len(missing)
+            files.append({'file': Path(url).name, 'size': size})
+        q, scales = parts
+        arr = q.astype(np.float32) * scales[..., np.newaxis]
+        if not np.isfinite(arr).all():
+            raise ValueError('Nonfinite dequantized remote data')
+        window = window_transform(Window(left, top, right - left, bottom - top), transform)
+        weights = np.zeros((512, 512), np.float32)
+        reproject(np.any(arr != 0, axis=2).astype(np.float32), weights,
+                  src_transform=window, src_crs=crs,
+                  dst_transform=grid.transform(), dst_crs='EPSG:3006',
+                  resampling=Resampling.bilinear)
+        chunk = _reproject_tessera_to_tile(arr, window, crs, b, 512)
+        take = (weights >= 1 - 1e-6) & np.any(chunk != 0, axis=0)
+        merged[:, take] = chunk[:, take]
+        valid |= take
+    return merged, valid, {'files': files, 'blocks': len(blocks), 'bands': bands,
+                           'storage': 'remote-npy-range', 'root': root}
+
+
 def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
     from imint.data.wekeo_vpp import (fetch_vpp_tiles_local, _bounds_overlap,
                                      _VPP_PRODUCT_TYPES)
@@ -253,16 +346,13 @@ def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
     return aux, provenance
 
 
-def prepare(config_path: Path, grid: Grid, year: int, output: Path):
-    if year not in YEARS:
-        raise InputUnavailable('Unsupported exact year')
-    config_identity = file_identity(config_path)
-    config = json.loads(config_path.read_text())
-    if config['version'] != 1 or config['embedding'] != EMBEDDING:
-        raise ValueError('Embedding source must be pinned to GeoTessera 0.10.2 v1/vultr')
-    base = config_path.parent
-    # Fail unavailable local auxiliaries before downloading any embedding data.
-    aux, provenance = prepare_aux(config, base, grid, year)
+def prepare_embedding(config: dict, base: Path, grid: Grid, year: int):
+    """(embedding, validity, provenance) from the configured TESSERA source.
+
+    ``cog_index``: the staged compact COGs. ``remote_tiles``: range reads of the
+    published v1/vultr tiles. Otherwise whole-tile downloads into the pinned
+    cache. All three read the same registry's tiles, so they share EMBEDDING.
+    """
     if 'cog_index' in config:
         from imint.inference.lclu_cog import assemble_cog_embedding
         index_path = verify_file(config['cog_index'], base)
@@ -278,21 +368,48 @@ def prepare(config_path: Path, grid: Grid, year: int, output: Path):
         landmasks = verify_file(config['landmasks'], base)
         if registry.name != 'manifest.parquet' or landmasks.name != 'landmasks.parquet' or registry.parent != landmasks.parent:
             raise ValueError('Pinned registry directory must contain both canonical parquet files')
-        max_blocks, max_bytes = config['max_blocks'], config['max_download_bytes']
-        if type(max_blocks) is not int or not 1 <= max_blocks <= 4 or type(max_bytes) is not int or max_bytes <= 0:
-            raise ValueError('Explicit positive bounded download budget is required (at most four blocks)')
+        max_blocks = config['max_blocks']
+        if type(max_blocks) is not int or not 1 <= max_blocks <= 4:
+            raise ValueError('Explicit block budget of at most four blocks is required')
         from geotessera import GeoTessera
         cache = (base / config['embedding_cache']).resolve() / 'geotessera-0.10.2-v1-vultr'
         validate_embedding_cache(cache)
         gt = GeoTessera(dataset_version='v1', dataset_variant='vultr', registry_dir=str(registry.parent),
                        cache_dir=str(cache / 'registry'), embeddings_dir=str(cache))
-        embedding, valid, emb_provenance = assemble_embedding(
-            gt, grid, year, max_blocks=max_blocks, max_bytes=max_bytes)
+        if 'remote_tiles' in config:
+            # Range reads of the same v1/vultr tiles; bands live beside the
+            # full-tile cache, never inside geotessera's own layout.
+            from geotessera.registry import TESSERA_NPY_MIRROR_URL
+            if config['remote_tiles'] != f'{TESSERA_NPY_MIRROR_URL}/v1':
+                raise ValueError('remote_tiles must be the published v1/vultr tile root')
+            embedding, valid, emb_provenance = assemble_remote_embedding(
+                gt, grid, year, root=config['remote_tiles'], max_blocks=max_blocks,
+                cache=cache.parent / 'geotessera-0.10.2-v1-vultr-bands')
+        else:
+            max_bytes = config['max_download_bytes']
+            if type(max_bytes) is not int or max_bytes <= 0:
+                raise ValueError('Explicit positive download budget is required')
+            embedding, valid, emb_provenance = assemble_embedding(
+                gt, grid, year, max_blocks=max_blocks, max_bytes=max_bytes)
         validate_embedding_cache(cache)
         verify_file(config['registry'], base)
         verify_file(config['landmasks'], base)
         emb_provenance.update(registry=public_identity(config['registry']),
                               landmasks=public_identity(config['landmasks']))
+    return embedding, valid, emb_provenance
+
+
+def prepare(config_path: Path, grid: Grid, year: int, output: Path):
+    if year not in YEARS:
+        raise InputUnavailable('Unsupported exact year')
+    config_identity = file_identity(config_path)
+    config = json.loads(config_path.read_text())
+    if config['version'] != 1 or config['embedding'] != EMBEDDING:
+        raise ValueError('Embedding source must be pinned to GeoTessera 0.10.2 v1/vultr')
+    base = config_path.parent
+    # Fail unavailable local auxiliaries before downloading any embedding data.
+    aux, provenance = prepare_aux(config, base, grid, year)
+    embedding, valid, emb_provenance = prepare_embedding(config, base, grid, year)
     # The county mask limits a cross-border window to Sweden; it does not infer
     # a class or turn missing data into model class zero.
     from imint.training import skg_open
