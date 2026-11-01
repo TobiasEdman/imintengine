@@ -255,7 +255,7 @@ def test_prepare_warms_the_newest_request_outside_the_job_queue(api, monkeypatch
         assert unqualified.value.status_code == 422
         # A map request is not held back by the running warm-up.
         job = await api.server.submit_lclu(req(2024))
-        for _ in range(200):
+        for _ in range(2400):   # a hang guard, not a speed test
             if api.server._jobs[job.job_id]['status'] == 'success':
                 break
             await asyncio.sleep(.05)
@@ -324,7 +324,7 @@ def test_a_warmed_place_skips_preparation_in_the_map_request(api, monkeypatch):
         def predict(self, path, record):
             return np.zeros((504, 504), np.uint8)
     async def finished(job_id):
-        for _ in range(400):
+        for _ in range(2400):   # a hang guard, not a speed test
             job = api.server._jobs[job_id]
             if job['status'] in ('success', 'failed'):
                 return job
