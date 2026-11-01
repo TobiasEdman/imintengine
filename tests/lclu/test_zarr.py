@@ -244,3 +244,28 @@ def test_comparison_refuses_a_directory_without_cohort_tiles(tmp_path):
     (tmp_path / "tiles").mkdir()
     assert compare.main(["--data-dir", str(tmp_path / "tiles"), "--cache-dir", str(tmp_path),
                          "--report", str(tmp_path / "r.json")]) == 1
+
+
+def test_compare_job_pins_the_code_it_runs():
+    import re
+    import subprocess
+    from pathlib import Path
+
+    yaml = pytest.importorskip("yaml")
+    root = Path(__file__).resolve().parents[2]
+    job = yaml.safe_load((root / "k8s/tessera-zarr-compare-job.yaml").read_text())
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    script = container["command"][-1]
+    assert "@sha256:" in container["image"]
+    assert 'test "$(git rev-parse HEAD)" = "$SHA"' in script
+    assert "python3 scripts/compare_tessera_zarr.py" in script
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+    sha = re.search(r"SHA=([0-9a-f]{40})", script)[1]
+    git = ["git", "-C", str(root)]
+    if subprocess.run([*git, "cat-file", "-e", sha], capture_output=True).returncode:
+        pytest.skip(f"{sha} not in this clone")
+    assert subprocess.run([*git, "merge-base", "--is-ancestor", sha, "HEAD"]).returncode == 0
+    changed = subprocess.run([*git, "diff", "--name-only", sha, "HEAD", "--",
+                              "scripts/compare_tessera_zarr.py", "imint/inference/lclu_zarr.py"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert changed == [], f"bump SHA in k8s/tessera-zarr-compare-job.yaml; changed: {changed}"
