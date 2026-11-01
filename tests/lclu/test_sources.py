@@ -267,3 +267,44 @@ def test_concurrent_preparations_of_one_key_run_once(tmp_path, monkeypatch):
     assert errors == [] and len(runs) == 1
     assert results[0][0] == results[1][0] and results[0][0].is_file()
     assert not list(source.cache.glob('.preparing-*'))
+
+
+def test_prefetch_clips_to_the_year_s_regions_and_skips_staged_sources(tmp_path, monkeypatch):
+    from imint.inference.lclu_sources import RegionalSources
+    grid = Grid.from_lonlat(17.64, 59.86)
+    b = grid.bounds()
+    region = [b[k] for k in ('west', 'south', 'east', 'north')]
+    configs = {}
+    for name, remote in (('staged', False), ('remote', True)):
+        path = tmp_path/f'{name}.json'
+        body = {'version': 1, 'embedding': EMBEDDING, 'qualified_regions': [
+            {'country': 'SE', 'verification': 'unit-test', 'years': [2024], 'bounds_3006': region}]}
+        if remote:
+            body['remote_tiles'] = 'https://data.source.coop/tessera/tessera/npy/v1'
+        write_json(path, body)
+        configs[name] = {'config': file_identity(path), 'python': 'python3.12', 'timeout_seconds': 9}
+    staged = RepositorySources(configs['staged'], tmp_path, tmp_path/'cache')
+    remote = RepositorySources(configs['remote'], tmp_path, tmp_path/'cache')
+    calls = []
+    def child(command, **kwargs):
+        calls.append(command)
+        assert kwargs['timeout'] == 9
+        return subprocess.CompletedProcess(command, 0, stdout='{"state": "prefetched", "fetched_bands": 3}\n', stderr='')
+    monkeypatch.setattr(subprocess, 'run', child)
+    view = (region[0] - 5000, region[1] + 100, region[2] - 100, region[3] + 5000)
+    assert staged.prefetch(view, 2024) == {'state': 'not-needed'} and calls == []
+    report = remote.prefetch(view, 2024)
+    assert report == {'state': 'prefetched', 'boxes': [{'state': 'prefetched', 'fetched_bands': 3}]}
+    bounds = calls[0][calls[0].index('--bounds') + 1:calls[0].index('--year')]
+    assert [float(v) for v in bounds] == [region[0], region[1] + 100, region[2] - 100, region[3]]
+    with pytest.raises(InputUnavailable):
+        remote.prefetch(view, 2023)
+    both = RegionalSources([configs['staged'], configs['remote']], tmp_path, tmp_path/'cache')
+    assert both.prefetch(view, 2024)['state'] == 'prefetched'
+    assert both.prefetch(view, 2023) == {'state': 'not-needed', 'sources': []}
+    def failed(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout='', stderr='private upstream detail')
+    monkeypatch.setattr(subprocess, 'run', failed)
+    with pytest.raises(RuntimeError, match='operator log'):
+        remote.prefetch(view, 2024)
+    assert len(list((remote.cache/'failures').glob('prefetch-*.log'))) == 1

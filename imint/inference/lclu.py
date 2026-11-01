@@ -231,6 +231,10 @@ class BundleCatalog:
     def years(self, grid: Grid) -> list[int]:
         return [y for y in YEARS if (grid.east, grid.north, y) in self.entries]
 
+    def prefetch(self, bounds: tuple, year: int) -> dict:
+        """A fixed catalogue is fully prepared; there is nothing to fetch."""
+        return {'state': 'not-needed'}
+
     def entry(self, grid: Grid, year: int) -> dict:
         try:
             return self.entries[(grid.east, grid.north, year)]

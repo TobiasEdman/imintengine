@@ -34,6 +34,20 @@ function warm() {
   if (!selection || !year || $('year').selectedOptions[0]?.disabled) return;
   request('/v1/lclu/prepare', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...selection,year})}).catch(() => {});
 }
+// Warm remote TESSERA for a box (a municipality or the view). Also best
+// effort: staged areas have nothing to fetch, and the server bounds the box.
+function prefetch(bounds, year) {
+  if (!year) return;
+  const box = {west:bounds.getWest(), south:bounds.getSouth(), east:bounds.getEast(), north:bounds.getNorth()};
+  request('/v1/lclu/prefetch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...box,year})}).catch(() => {});
+}
+let prefetchTimer;
+map.on('moveend', () => {
+  clearTimeout(prefetchTimer);
+  if (map.getZoom() < 12) return;
+  prefetchTimer = setTimeout(() => prefetch(map.getBounds(), Number($('year').value) || latestYear), 600);
+});
+let latestYear = 0;
 async function select(lat, lon) {
   if (busy) return;
   const current = ++generation;
@@ -127,9 +141,11 @@ request('/v1/lclu').then(info=>{
     $('map-caption').textContent='Välj en punkt inom ett streckat demoområde. Årskartan är 5,04 × 5,04 km och kan sträcka sig utanför området.';
     info.areas.forEach((area,index)=>$('area').add(new Option(area.properties.name,String(index))));
     $('area-control').hidden=info.areas.length<2;
+    latestYear=Math.max(0,...info.areas.flatMap(area=>area.properties.years||[]));
     $('area').addEventListener('change',()=>{
       const index=Number($('area').value), point=info.locations[index];
       map.fitBounds(layers[index].getBounds(),{padding:[25,25],maxZoom:13});
+      prefetch(layers[index].getBounds(), Math.max(0,...(info.areas[index].properties.years||[])));
       if(point) select(point.lat,point.lon);
     });
     if(info.locations.length){ $('lat').value=info.locations[0].lat.toFixed(5); $('lon').value=info.locations[0].lon.toFixed(5); }

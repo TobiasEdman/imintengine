@@ -124,6 +124,7 @@ timeout (1–900 seconds); failures retain a private operator log.
 | `registry`, `landmasks` | Pinned `manifest.parquet` and `landmasks.parquet` in one directory |
 | `max_blocks` | Integer 1–4 |
 | `max_download_bytes` | Positive cap on missing embedding/scales/landmask bytes (whole-tile downloads) |
+| `band_cache_max_bytes`, `prefetch_max_bytes` | With `remote_tiles`: the band cache budget (200 GB decided 2026-11-01) and the most one prefetch may add |
 | `remote_tiles` | Optional, exactly `https://data.source.coop/tessera/tessera/npy/v1`: read only the needed rows of each tile by HTTP range, in 256-row bands (8 requests in parallel) kept beside the cache, instead of downloading whole tiles; replaces `max_download_bytes`. A tile is fetched only after its remote size matches the pinned registry. Same values as the other sources (bit for bit in `tests/lclu/test_remote_tiles.py`) |
 | `embedding_cache` | Dedicated writable cache; metadata must match v1/vultr |
 | `identity_cache` | Private writable directory for local-source verification receipts |
@@ -193,6 +194,7 @@ input and applies the canonical Swedish county mask to cross-border pixels.
 | `GET /v1/lclu/availability?lon=17.64&lat=59.86` | Snapped geometry and qualified years |
 | `POST /v1/lclu` | Submit `{"lon":17.64,"lat":59.86,"year":2024}`; receive 202 and `poll_url` |
 | `POST /v1/lclu/prepare` | Same body; start preparing that place and year in the background, 202 |
+| `POST /v1/lclu/prefetch` | `{"west","south","east","north","year"}` in degrees, at most about one municipality (10 000 km²); warm remote TESSERA for that box, 202 |
 | `GET /v1/jobs/{id}` | Shared lifecycle, phase and annual result |
 | `GET /v1/lclu/jobs/{id}/files/{name}` | Completed TIFF, PNG overlay, legend or provenance only |
 
@@ -208,6 +210,15 @@ outside the execution slot; a newer request replaces one that has not started,
 and shutdown finishes a running warm-up but drops a waiting one. A map request
 for the same place and year waits for the warm-up's input instead of
 preparing again (one preparation per key).
+
+The viewer also calls `POST /v1/lclu/prefetch` for a chosen municipality and
+for the view when the map stops moving at zoom 12 or more. Only sources with
+`remote_tiles` fetch anything: the box is clipped to the qualified regions
+offering the year, bands are fetched nearest the box centre first within
+`prefetch_max_bytes`, and the band cache is then trimmed to
+`band_cache_max_bytes`, least recently used first (a band used in the last
+ten minutes is never removed). Area prefetch has its own worker, so it never
+delays the warm-up of a clicked place.
 Shutdown stops admission and drains accepted work before releasing the lock.
 
 Prepared inputs persist in `lclu-inputs/`; outputs in `lclu/<cache-key>/`.

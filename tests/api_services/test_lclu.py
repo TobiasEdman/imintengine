@@ -262,7 +262,7 @@ def test_prepare_warms_the_newest_request_outside_the_job_queue(api, monkeypatch
         assert api.server._jobs[job.job_id]['status'] == 'success'
         assert calls == [2023, 2024]                 # the warm-up, then the job's own
         gates[0][1].set()
-        await api.server._lclu_warm_task
+        await api.server._lclu_warm_tasks["place"]
         assert calls == [2023, 2024, 2023]           # the replaced 2024 warm-up never ran
         # Shutdown waits for a running warm-up's writes and drops a waiting one.
         await api.server.prepare_lclu(req(2024))
@@ -339,7 +339,7 @@ def test_a_warmed_place_skips_preparation_in_the_map_request(api, monkeypatch):
             req = lambda year: api.server.LcluRequest(**{**REQUEST, 'year': year})
             cold = await finished((await api.server.submit_lclu(req(2023))).job_id)
             await api.server.prepare_lclu(req(2024))
-            await api.server._lclu_warm_task
+            await api.server._lclu_warm_tasks["place"]
             warm = await finished((await api.server.submit_lclu(req(2024))).job_id)
             return cold, warm
     cold, warm = asyncio.run(run())
@@ -347,3 +347,49 @@ def test_a_warmed_place_skips_preparation_in_the_map_request(api, monkeypatch):
     assert runs == [2023, 2024]          # the map request started no second preparation
     assert cold['result']['timing_ms']['preparation'] >= 1000
     assert warm['result']['timing_ms']['preparation'] < 500
+
+
+def test_area_prefetch_runs_beside_a_blocked_place_warm_up(api, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    box = {'west': 17.55, 'south': 59.82, 'east': 17.72, 'north': 59.9, 'year': 2024}
+    async def run():
+        async with api.server.lifespan(api.server.app):
+            service = install(api, monkeypatch)
+            prefetched = []
+            def blocked(grid, year):
+                started.set()
+                assert release.wait(10)
+            monkeypatch.setattr(service.sources, 'prepare', blocked)
+            monkeypatch.setattr(service.sources, 'prefetch',
+                                lambda bounds, year: prefetched.append((bounds, year)))
+            await api.server.prepare_lclu(api.server.LcluRequest(**REQUEST))
+            assert await asyncio.to_thread(started.wait, 2)
+            assert await api.server.prefetch_lclu(api.server.LcluPrefetchRequest(**box)) == {'state': 'queued'}
+            await api.server._lclu_warm_tasks['area']        # finishes while 'place' is blocked
+            assert len(prefetched) == 1 and prefetched[0][1] == 2024
+            west, south, east, north = prefetched[0][0]
+            assert west < east and south < north and 6_600_000 < south < 6_700_000  # EPSG:3006
+            assert not api.server._lclu_warm_tasks['place'].done()
+            release.set()
+    try:
+        asyncio.run(run())
+    finally:
+        release.set()
+
+
+def test_prefetch_endpoint_bounds_the_box(api, monkeypatch):
+    box = {'west': 17.55, 'south': 59.82, 'east': 17.72, 'north': 59.9, 'year': 2024}
+    with TestClient(api.server.app) as client:
+        assert client.post('/v1/lclu/prefetch', json=box).status_code == 503   # no service
+        for changes in ({'year': 2026}, {'west': 9.0}, {'west': '17.5'}, {'path': '/x'}):
+            assert client.post('/v1/lclu/prefetch', json={**box, **changes}).status_code == 422
+    async def run():
+        async with api.server.lifespan(api.server.app):
+            install(api, monkeypatch)
+            for changes in ({'east': 17.5}, {'east': 20.0, 'north': 61.0}):   # empty, too large
+                with pytest.raises(api.server.HTTPException) as refused:
+                    await api.server.prefetch_lclu(api.server.LcluPrefetchRequest(**{**box, **changes}))
+                assert refused.value.status_code == 422
+            assert (await api.server.prefetch_lclu(api.server.LcluPrefetchRequest(**box))) == {'state': 'queued'}
+            await api.server._lclu_warm_tasks['area']      # the catalogue has nothing to fetch
+    asyncio.run(run())

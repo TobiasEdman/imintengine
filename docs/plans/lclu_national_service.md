@@ -86,7 +86,8 @@ must also cover the whole country, and HR-VPP does not yet.
      backed by the remote tiles.
    - The viewer and provenance get the source label (D6).
    - The embedding identity is unchanged.
-7. **View and municipality prefetch.**
+7. **View and municipality prefetch — built**, active once package 6
+   gives the service a `remote_tiles` region.
    - The 256-row bands are the unit.
    - Prefetch the view on pan/zoom, and the municipality on area choice
      from the view outward.

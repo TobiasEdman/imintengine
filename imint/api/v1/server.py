@@ -49,6 +49,7 @@ from imint.api.v1.schemas import (
     HealthResponse,
     JobStatus,
     JobStatusResponse,
+    LcluPrefetchRequest,
     LcluRequest,
 )
 from imint.api.v1.telemetry import (
@@ -100,16 +101,19 @@ _max_pixels: int | None = None
 _max_jobs = 4
 _lclu_service = None
 _lclu_requests: dict[str, str] = {}
-# The newest grid and year to prepare ahead of a map request, and its worker.
-_lclu_warm: dict = {}
-_lclu_warm_task: asyncio.Task | None = None
+# Background warm-up, one worker per kind, each holding only the newest request:
+# 'place' prepares a chosen grid and year; 'area' prefetches a view or
+# municipality box. Separate workers, so a long area prefetch never delays the
+# place the user just clicked.
+_lclu_warm: dict[str, tuple] = {}
+_lclu_warm_tasks: dict[str, asyncio.Task] = {}
+_PREFETCH_MAX_KM2 = 10_000   # about the largest demo municipality's bounding box
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Hold local ownership until all accepted blocking jobs finish."""
     global _accepting_jobs, _jobs_lock, _analysis_slot, _max_pixels, _max_jobs, _lclu_service
-    global _lclu_warm_task
     max_pixels = _configured_max_pixels()
     root = _output_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -131,7 +135,7 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("IMINT_API_MAX_JOBS must be between 1 and 64")
         _lclu_requests.clear()
         _lclu_warm.clear()
-        _lclu_warm_task = None
+        _lclu_warm_tasks.clear()
         _lclu_service = None
         if manifest := os.environ.get("IMINT_LCLU_MANIFEST"):
             from imint.inference.lclu import LcluService
@@ -701,7 +705,6 @@ async def prepare_lclu(req: LcluRequest):
     replaces one that has not started. A map request for the same place and
     year waits for the warm-up's result instead of preparing again.
     """
-    global _lclu_warm_task
     from imint.inference.lclu import Grid, InputUnavailable
     if not _accepting_jobs or _lclu_service is None:
         raise HTTPException(status_code=503, detail='Annual LCLU inputs/model are not configured')
@@ -710,25 +713,54 @@ async def prepare_lclu(req: LcluRequest):
         _lclu_service.key(grid, req.year)   # exact year and qualified source, as for a map
     except InputUnavailable as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    # No await from here on: setting the request and checking the worker are
-    # atomic on this event loop, so a worker about to finish cannot miss it.
-    _lclu_warm['next'] = (grid, req.year)
-    if _lclu_warm_task is None or _lclu_warm_task.done():
-        _lclu_warm_task = asyncio.create_task(_warm_lclu())
-        _pending_jobs.add(_lclu_warm_task)
-        _lclu_warm_task.add_done_callback(_pending_jobs.discard)
+    _queue_warm('place', grid, req.year)
     return {'state': 'queued'}
 
 
-async def _warm_lclu() -> None:
-    """Prepare requested places one at a time until no newer request is waiting."""
+@app.post('/v1/lclu/prefetch', status_code=202, tags=['lclu'])
+async def prefetch_lclu(req: LcluPrefetchRequest):
+    """Warm remote TESSERA for a view or municipality box; the newest request wins.
+
+    The viewer calls this when a municipality is chosen and when the map stops
+    moving at detail zoom. Sources with a staged copy have nothing to fetch.
+    The box is at most about one municipality and is clipped to the qualified
+    regions offering the year.
+    """
+    from rasterio.warp import transform_bounds
+    if not _accepting_jobs or _lclu_service is None:
+        raise HTTPException(status_code=503, detail='Annual LCLU inputs/model are not configured')
+    if not (req.west < req.east and req.south < req.north):
+        raise HTTPException(status_code=422, detail='Prefetch box must be non-empty')
+    bounds = transform_bounds('EPSG:4326', 'EPSG:3006', req.west, req.south, req.east,
+                              req.north, densify_pts=21)
+    if (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]) / 1e6 > _PREFETCH_MAX_KM2:
+        raise HTTPException(status_code=422, detail='Prefetch box is larger than a municipality')
+    _queue_warm('area', tuple(bounds), req.year)
+    return {'state': 'queued'}
+
+
+def _queue_warm(kind: str, *request) -> None:
+    """Hold only the newest request of a kind and make sure its worker runs.
+
+    No await: setting the request and checking the worker are atomic on this
+    event loop, so a worker about to finish cannot miss the request.
+    """
+    _lclu_warm[kind] = request
+    task = _lclu_warm_tasks.get(kind)
+    if task is None or task.done():
+        task = _lclu_warm_tasks[kind] = asyncio.create_task(_warm_lclu(kind))
+        _pending_jobs.add(task)
+        task.add_done_callback(_pending_jobs.discard)
+
+
+async def _warm_lclu(kind: str) -> None:
+    """Run one kind's requests one at a time until no newer one is waiting."""
     from imint.inference.lclu import InputUnavailable
     loop = asyncio.get_running_loop()
     cancelled = False
-    while _accepting_jobs and (item := _lclu_warm.pop('next', None)) is not None:
-        grid, year = item
-        work = loop.run_in_executor(None, copy_context().run, _lclu_service.sources.prepare,
-                                    grid, year)
+    while _accepting_jobs and (request := _lclu_warm.pop(kind, None)) is not None:
+        call = _lclu_service.sources.prepare if kind == 'place' else _lclu_service.sources.prefetch
+        work = loop.run_in_executor(None, copy_context().run, call, *request)
         while not work.done():
             try:
                 await asyncio.shield(work)
@@ -740,9 +772,9 @@ async def _warm_lclu() -> None:
                 pass
         error = work.exception()
         if isinstance(error, InputUnavailable):
-            logger.info('annual warm-up: no input for %s %s', grid, year)
+            logger.info('annual %s warm-up: no input for %s', kind, request)
         elif error is not None:
-            logger.warning('annual warm-up failed for %s %s', grid, year, exc_info=error)
+            logger.warning('annual %s warm-up failed for %s', kind, request, exc_info=error)
     if cancelled:
         raise asyncio.CancelledError
 

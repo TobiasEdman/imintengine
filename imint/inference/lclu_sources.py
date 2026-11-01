@@ -50,6 +50,18 @@ class RegionalSources:
     def prepare(self, grid: Grid, year: int) -> tuple[Path, dict]:
         return self._source(grid, year).prepare(grid, year)
 
+    def prefetch(self, bounds: tuple, year: int) -> dict:
+        """Warm every inventory that reads remote tiles for this box and year."""
+        done = []
+        for source in self.sources:
+            try:
+                report = source.prefetch(bounds, year)
+            except InputUnavailable:
+                continue
+            if report['state'] == 'prefetched':
+                done.append(report)
+        return {'state': 'prefetched' if done else 'not-needed', 'sources': done}
+
     def locations(self) -> list[dict]:
         tx = Transformer.from_crs(3006, 4326, always_xy=True)
         project = Transformer.from_crs(4326, 3006, always_xy=True).transform
@@ -133,6 +145,41 @@ class RepositorySources:
         return [{'type': 'Feature', 'geometry': mapping(shape(r['geometry'])),
                  'properties': {'name': str(r.get('name', 'Demo')), 'years': r['years']}}
                 for r in self.regions if 'geometry' in r]
+
+    def prefetch(self, bounds: tuple, year: int) -> dict:
+        """Warm the remote-tile band cache for a view or municipality box (EPSG:3006).
+
+        Staged sources have nothing to fetch. The box is clipped to the
+        qualified regions offering the year, so a request never reaches beyond
+        what the service would serve.
+        """
+        if 'remote_tiles' not in self.config:
+            return {'state': 'not-needed'}
+        west, south, east, north = bounds
+        boxes = {(max(west, r['bounds_3006'][0]), max(south, r['bounds_3006'][1]),
+                  min(east, r['bounds_3006'][2]), min(north, r['bounds_3006'][3]))
+                 for r in self.regions if year in r['years']}
+        boxes = sorted(b for b in boxes if b[0] < b[2] and b[1] < b[3])
+        if not boxes:
+            raise InputUnavailable('Verifierad källtäckning saknas för området och året.')
+        if public_identity(file_identity(self.config_path)) != public_identity(self.settings['config']):
+            raise ValueError('Preparation configuration changed; restart with a new manifest')
+        reports = []
+        for box in boxes:
+            command = [self.python, str(ROOT / 'scripts/prefetch_lclu.py'),
+                       '--config', str(self.config_path), '--bounds', *map(str, box),
+                       '--year', str(year)]
+            done = subprocess.run(command, cwd=ROOT, timeout=self.timeout,
+                                  capture_output=True, text=True)
+            if done.returncode:
+                # Operator-side only, like preparation failures.
+                logs = self.cache / 'failures'
+                logs.mkdir(exist_ok=True)
+                log = logs / f'prefetch-{year}-{int(box[0])}-{int(box[1])}.log'
+                log.write_text(done.stdout + done.stderr)
+                raise RuntimeError(f'Annual prefetch failed; operator log: {log}')
+            reports.append(json.loads(done.stdout.strip().splitlines()[-1]))
+        return {'state': 'prefetched', 'boxes': reports}
 
     def _lock(self, key: str) -> threading.Lock:
         with self._locks_guard:

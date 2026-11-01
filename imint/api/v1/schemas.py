@@ -89,6 +89,17 @@ class LcluRequest(BaseModel):
     year: int = Field(ge=2017, le=2025)
 
 
+class LcluPrefetchRequest(BaseModel):
+    """A view or municipality box to warm for one exact year (WGS84 degrees)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    west: float = Field(ge=10, le=25)
+    south: float = Field(ge=55, le=70)
+    east: float = Field(ge=10, le=25)
+    north: float = Field(ge=55, le=70)
+    year: int = Field(ge=2017, le=2025)
+
+
 class AnalyzerSummary(BaseModel):
     """Per-analyzer result summary returned in the job response."""
 
