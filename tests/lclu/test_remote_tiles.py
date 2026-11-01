@@ -149,7 +149,7 @@ def test_prepare_embedding_routes_the_published_root_to_range_reads(tmp_path, mo
         (registry / name).write_bytes(b"pinned")
     config = {"registry": {**file_identity(registry / "manifest.parquet"), "path": "registry/manifest.parquet"},
               "landmasks": {**file_identity(registry / "landmasks.parquet"), "path": "registry/landmasks.parquet"},
-              "max_blocks": 4, "embedding_cache": "cache",
+              "max_blocks": 4, "embedding_cache": "cache", "band_cache_max_bytes": 10**9,
               "remote_tiles": f"{TESSERA_NPY_MIRROR_URL}/v1"}
     monkeypatch.setattr(geotessera, "GeoTessera", lambda **kw: SimpleNamespace(**kw))
     calls = []
@@ -163,6 +163,9 @@ def test_prepare_embedding_routes_the_published_root_to_range_reads(tmp_path, mo
     assert calls[0]["root"] == f"{TESSERA_NPY_MIRROR_URL}/v1"
     assert calls[0]["cache"].name == "geotessera-0.10.2-v1-vultr-bands"
     assert provenance["registry"]["sha256"] == config["registry"]["sha256"]
+    assert provenance["band_cache"]["removed"] == 0           # the budget runs after each window
+    with pytest.raises(ValueError, match="band cache budget"):
+        prep.prepare_embedding({**config, "band_cache_max_bytes": 0}, tmp_path, grid, 2025)
 
     with pytest.raises(ValueError, match="published v1/vultr"):
         prep.prepare_embedding({**config, "remote_tiles": "https://example.org/npy/v1"},
@@ -170,3 +173,79 @@ def test_prepare_embedding_routes_the_published_root_to_range_reads(tmp_path, mo
     whole = {k: v for k, v in config.items() if k != "remote_tiles"}
     with pytest.raises(KeyError, match="max_download_bytes"):
         prep.prepare_embedding(whole, tmp_path, grid, 2025)
+
+
+def test_a_prefetched_box_serves_its_windows_without_requests(tmp_path, served):
+    root, url = served
+    grid = Grid.from_lonlat(18, 59.3)
+    gt, _ = two_blocks(tmp_path, root, grid)
+    b = grid.bounds()
+    report = prep.prefetch_bands(gt, (b["west"], b["south"], b["east"], b["north"]), 2025,
+                                 root=url, cache=tmp_path / "bands", max_bytes=10**9)
+    assert report["blocks"] == 2 and report["fetched_bands"] > 0 and report["skipped_blocks"] == 0
+    RangeHandler.requests = []
+    _, valid, provenance = prep.assemble_remote_embedding(gt, grid, 2025, root=url,
+                                                          cache=tmp_path / "bands", max_blocks=4)
+    assert RangeHandler.requests == [] and provenance["bands"]["fetched"] == 0 and valid.any()
+
+
+def test_prefetch_budget_takes_the_nearest_block_first(tmp_path, served):
+    root, url = served
+    grid = Grid.from_lonlat(18, 59.3)
+    gt, _ = two_blocks(tmp_path, root, grid)
+    b = grid.bounds()
+    # A box east of 18° E: the 18.05 block is nearer than the 17.95 one.
+    box = (b["west"] + 2000, b["south"], b["east"] + 2000, b["north"])
+    one_block = 3 * prep.BAND_ROWS * 302 * (128 + 4)
+    report = prep.prefetch_bands(gt, box, 2025, root=url, cache=tmp_path / "bands",
+                                 max_bytes=one_block)
+    assert report["skipped_blocks"] == 1
+    cached = {p.name.split("_b")[0] for p in (tmp_path / "bands").rglob("*.npy")}
+    assert cached == {"grid_18.05_59.30", "grid_18.05_59.30_scales"}
+
+
+def test_band_budget_evicts_least_recently_used_but_spares_recent_bands(tmp_path):
+    import os
+    import time
+    cache = tmp_path / "bands" / "2025"
+    cache.mkdir(parents=True)
+    now = time.time()
+    for i, age in enumerate((5000, 4000, 3000, 10)):            # seconds since last use
+        path = cache / f"grid_{i}_b0.npy"
+        path.write_bytes(b"x" * 100)
+        os.utime(path, (now - age, now - age))
+    result = prep.enforce_band_budget(tmp_path / "bands", max_bytes=200, grace_s=600)
+    left = sorted(p.name for p in cache.iterdir())
+    assert left == ["grid_2_b0.npy", "grid_3_b0.npy"]       # oldest two went, budget met
+    assert result == {"bands": 4, "bytes": 200, "removed": 2, "freed": 200}
+    # Over budget, but the only band left besides one in use is within the grace period.
+    result = prep.enforce_band_budget(tmp_path / "bands", max_bytes=50, grace_s=600)
+    assert sorted(p.name for p in cache.iterdir()) == ["grid_3_b0.npy"] and result["removed"] == 1
+    assert prep.enforce_band_budget(tmp_path / "bands", max_bytes=0, grace_s=600)["removed"] == 0
+
+
+def test_prefetch_child_uses_the_smaller_budget_and_skips_staged_configs(tmp_path, monkeypatch):
+    import json as _json
+    from geotessera.registry import TESSERA_NPY_MIRROR_URL
+    from imint.inference.lclu import EMBEDDING
+    from scripts import prefetch_lclu
+    staged = tmp_path / "staged.json"
+    staged.write_text(_json.dumps({"version": 1, "embedding": EMBEDDING}))
+    assert prefetch_lclu.prefetch(staged, (0, 0, 1, 1), 2025) == {"state": "not-needed"}
+    remote = tmp_path / "remote.json"
+    base = {"version": 1, "embedding": EMBEDDING, "remote_tiles": f"{TESSERA_NPY_MIRROR_URL}/v1",
+            "band_cache_max_bytes": 500, "prefetch_max_bytes": 900,
+            "registry": {"path": "r"}, "landmasks": {"path": "l"}}
+    remote.write_text(_json.dumps(base))
+    calls = []
+    monkeypatch.setattr(prep, "pinned_geotessera", lambda config, base: ("gt", tmp_path / "tiles"))
+    monkeypatch.setattr(prep, "prefetch_bands",
+                        lambda gt, box, year, **kw: calls.append(kw) or {"fetched_bands": 2})
+    monkeypatch.setattr(prep, "enforce_band_budget", lambda cache, budget: {"removed": 0})
+    monkeypatch.setattr(prefetch_lclu, "verify_file", lambda record, base: None)
+    report = prefetch_lclu.prefetch(remote, (0, 0, 1, 1), 2025)
+    assert report == {"state": "prefetched", "fetched_bands": 2, "band_cache": {"removed": 0}}
+    assert calls[0]["max_bytes"] == 500 and calls[0]["cache"].name.endswith("-bands")
+    remote.write_text(_json.dumps({**base, "prefetch_max_bytes": 0}))
+    with pytest.raises(ValueError, match="prefetch budget"):
+        prefetch_lclu.prefetch(remote, (0, 0, 1, 1), 2025)

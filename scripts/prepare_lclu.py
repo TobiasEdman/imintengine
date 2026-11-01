@@ -189,6 +189,7 @@ def _remote_band(url: str, k: int, shape: tuple, dtype, cache: Path) -> np.ndarr
     rows = min(BAND_ROWS, shape[0] - k * BAND_ROWS)
     if path.is_file():
         band = np.load(path, allow_pickle=False)
+        os.utime(path)   # recency for the cache budget
     else:
         band = np.ascontiguousarray(read_npy_window(url, k * BAND_ROWS, k * BAND_ROWS + rows,
                                                     0, shape[1]))
@@ -287,6 +288,95 @@ def assemble_remote_embedding(gt, grid: Grid, year: int, *, root: str, cache: Pa
                            'bands': {'fetched': len(missing), 'cached': len(wanted) - len(missing)},
                            'storage': 'remote-npy-range', 'root': root}
 
+
+def prefetch_bands(gt, bounds_3006: tuple, year: int, *, root: str, cache: Path,
+                   max_bytes: int) -> dict:
+    """Fetch every band a box's windows could need, nearest the box centre first.
+
+    For view and municipality prefetch: any later window inside the box reads
+    only cached bands. Stops before exceeding ``max_bytes`` of new bands, so a
+    large municipality is filled from the view outward within the budget.
+    """
+    import math
+    from concurrent.futures import ThreadPoolExecutor
+    import rasterio
+    from rasterio.warp import transform_bounds
+    from rasterio.windows import from_bounds
+    from geotessera.registry import tile_to_embedding_paths
+    from geotessera.remote import get_fs, read_npy_window
+
+    west, south, east, north = bounds_3006
+    cx, cy = (west + east) / 2, (south + north) / 2
+    lonlat = transform_bounds('EPSG:3006', 'EPSG:4326', *bounds_3006, densify_pts=41)
+    clon, clat = (lonlat[0] + lonlat[2]) / 2, (lonlat[1] + lonlat[3]) / 2
+    blocks = sorted((b for b in gt.registry.load_blocks_for_region(bounds=lonlat, year=year)
+                     if b[0] == year), key=lambda b: (b[1] - clon) ** 2 + (b[2] - clat) ** 2)
+    here = cache / str(year)
+    wanted, budget = [], {'bytes': 0, 'skipped_blocks': 0}
+    for _, lon, lat in blocks:
+        with rasterio.open(gt.registry.fetch_landmask(lon=lon, lat=lat)) as reference:
+            crs, transform, (height, width) = reference.crs, reference.transform, reference.shape
+        raw = from_bounds(*transform_bounds('EPSG:3006', crs, *bounds_3006, densify_pts=41),
+                          transform=transform)
+        top = max(0, math.floor(raw.row_off) - 2)
+        bottom = min(height, math.ceil(raw.row_off + raw.height) + 2)
+        if bottom <= top:
+            continue
+        ks = range(top // BAND_ROWS, (bottom - 1) // BAND_ROWS + 1)
+        sizes = (gt.registry.get_tile_file_size(year, lon, lat),
+                 gt.registry.get_scales_file_size(year, lon, lat))
+        block = []
+        for relative, size, (dtype, shape, item) in zip(
+                tile_to_embedding_paths(lon, lat, year), sizes,
+                [(np.int8, (height, width, 128), 128), (np.float32, (height, width), 4)]):
+            url = f"{root.rstrip('/')}/{relative.as_posix()}"
+            block += [(url, k, shape, dtype, size, BAND_ROWS * width * item)
+                      for k in ks if not _band_path(here, url, k).is_file()]
+        cost = sum(w[5] for w in block)
+        if budget['bytes'] + cost > max_bytes:
+            budget['skipped_blocks'] += 1
+            continue
+        budget['bytes'] += cost
+        wanted += block
+
+    def check(url: str, size: int) -> None:
+        if get_fs(url).size(url) != size:
+            raise ValueError('Remote tile size disagrees with the pinned registry')
+        read_npy_window(url, 0, 0, 0, 0)
+
+    with ThreadPoolExecutor(BAND_WORKERS) as pool:
+        list(pool.map(lambda pair: check(*pair), {(w[0], w[4]) for w in wanted}))
+        list(pool.map(lambda w: _remote_band(w[0], w[1], w[2], w[3], here), wanted))
+    return {'blocks': len(blocks), 'fetched_bands': len(wanted),
+            'fetched_bytes_estimate': budget['bytes'], 'skipped_blocks': budget['skipped_blocks']}
+
+
+def enforce_band_budget(cache: Path, max_bytes: int, grace_s: float = 600) -> dict:
+    """Delete least recently used bands until the cache fits ``max_bytes``.
+
+    A band touched within ``grace_s`` seconds is never deleted, so a window
+    being assembled keeps the bands it is reading.
+    """
+    import time
+    bands = []
+    for path in cache.rglob('*_b*.npy'):
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        bands.append((stat.st_mtime, stat.st_size, path))
+    total = sum(size for _, size, _ in bands)
+    removed, freed, now = 0, 0, time.time()
+    for mtime, size, path in sorted(bands):
+        if total - freed <= max_bytes:
+            break
+        if now - mtime < grace_s:
+            continue
+        path.unlink(missing_ok=True)
+        removed, freed = removed + 1, freed + size
+    return {'bands': len(bands), 'bytes': total - freed, 'removed': removed, 'freed': freed}
+
+
 def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
     from imint.data.wekeo_vpp import (fetch_vpp_tiles_local, _bounds_overlap,
                                      _VPP_PRODUCT_TYPES)
@@ -366,6 +456,37 @@ def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
     return aux, provenance
 
 
+def pinned_geotessera(config: dict, base: Path):
+    """GeoTessera 0.10.2 on the pinned v1/vultr registry, and its whole-tile cache."""
+    if version('geotessera') != '0.10.2':
+        raise ValueError('Preparation requires geotessera==0.10.2')
+    registry = verify_file(config['registry'], base)
+    landmasks = verify_file(config['landmasks'], base)
+    if registry.name != 'manifest.parquet' or landmasks.name != 'landmasks.parquet' or registry.parent != landmasks.parent:
+        raise ValueError('Pinned registry directory must contain both canonical parquet files')
+    from geotessera import GeoTessera
+    cache = (base / config['embedding_cache']).resolve() / 'geotessera-0.10.2-v1-vultr'
+    validate_embedding_cache(cache)
+    gt = GeoTessera(dataset_version='v1', dataset_variant='vultr', registry_dir=str(registry.parent),
+                    cache_dir=str(cache / 'registry'), embeddings_dir=str(cache))
+    return gt, cache
+
+
+def remote_bands(config: dict, cache: Path) -> tuple[str, Path, int]:
+    """The pinned remote tile root, the band cache beside the tile cache, and its budget.
+
+    Range reads of the same v1/vultr tiles; bands never enter geotessera's own
+    cache layout.
+    """
+    from geotessera.registry import TESSERA_NPY_MIRROR_URL
+    if config['remote_tiles'] != f'{TESSERA_NPY_MIRROR_URL}/v1':
+        raise ValueError('remote_tiles must be the published v1/vultr tile root')
+    budget = config['band_cache_max_bytes']
+    if type(budget) is not int or budget <= 0:
+        raise ValueError('Explicit positive band cache budget is required')
+    return config['remote_tiles'], cache.parent / 'geotessera-0.10.2-v1-vultr-bands', budget
+
+
 def prepare_embedding(config: dict, base: Path, grid: Grid, year: int):
     """(embedding, validity, provenance) from the configured TESSERA source.
 
@@ -382,29 +503,15 @@ def prepare_embedding(config: dict, base: Path, grid: Grid, year: int):
         verify_file(config['cog_index'], base)
         emb_provenance['cog_index'] = public_identity(config['cog_index'])
     else:
-        if version('geotessera') != '0.10.2':
-            raise ValueError('Preparation requires geotessera==0.10.2')
-        registry = verify_file(config['registry'], base)
-        landmasks = verify_file(config['landmasks'], base)
-        if registry.name != 'manifest.parquet' or landmasks.name != 'landmasks.parquet' or registry.parent != landmasks.parent:
-            raise ValueError('Pinned registry directory must contain both canonical parquet files')
         max_blocks = config['max_blocks']
         if type(max_blocks) is not int or not 1 <= max_blocks <= 4:
             raise ValueError('Explicit block budget of at most four blocks is required')
-        from geotessera import GeoTessera
-        cache = (base / config['embedding_cache']).resolve() / 'geotessera-0.10.2-v1-vultr'
-        validate_embedding_cache(cache)
-        gt = GeoTessera(dataset_version='v1', dataset_variant='vultr', registry_dir=str(registry.parent),
-                       cache_dir=str(cache / 'registry'), embeddings_dir=str(cache))
+        gt, cache = pinned_geotessera(config, base)
         if 'remote_tiles' in config:
-            # Range reads of the same v1/vultr tiles; bands live beside the
-            # full-tile cache, never inside geotessera's own layout.
-            from geotessera.registry import TESSERA_NPY_MIRROR_URL
-            if config['remote_tiles'] != f'{TESSERA_NPY_MIRROR_URL}/v1':
-                raise ValueError('remote_tiles must be the published v1/vultr tile root')
+            root, bands, budget = remote_bands(config, cache)
             embedding, valid, emb_provenance = assemble_remote_embedding(
-                gt, grid, year, root=config['remote_tiles'], max_blocks=max_blocks,
-                cache=cache.parent / 'geotessera-0.10.2-v1-vultr-bands')
+                gt, grid, year, root=root, max_blocks=max_blocks, cache=bands)
+            emb_provenance['band_cache'] = enforce_band_budget(bands, budget)
         else:
             max_bytes = config['max_download_bytes']
             if type(max_bytes) is not int or max_bytes <= 0:
