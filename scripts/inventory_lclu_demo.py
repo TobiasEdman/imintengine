@@ -30,6 +30,27 @@ def block_key(row: dict) -> str:
     return f"{row['year']}_{row['lon']:.2f}_{row['lat']:.2f}"
 
 
+def registry_rows(registry: Path, bounds_4326: tuple, years):
+    """v1/vultr registry rows for ``years`` whose 0.1° tile can touch the lon/lat box."""
+    west, south, east, north = bounds_4326
+    columns = ['version', 'variant', 'year', 'lon', 'lat', 'grid_size', 'scales_size']
+    for batch in pq.ParquetFile(registry).iter_batches(batch_size=65536, columns=columns):
+        predicates = [pc.equal(batch['version'], '1.0'), pc.equal(batch['variant'], 'vultr'),
+                      pc.is_in(batch['year'], value_set=pa.array(list(years))),
+                      pc.greater_equal(batch['lon'], west - .05), pc.less_equal(batch['lon'], east + .05),
+                      pc.greater_equal(batch['lat'], south - .05), pc.less_equal(batch['lat'], north + .05)]
+        mask = predicates[0]
+        for predicate in predicates[1:]:
+            mask = pc.and_(mask, predicate)
+        yield from batch.filter(mask).to_pylist()
+
+
+def block_complete(row: dict) -> bool:
+    """Both files hold whole H×W×128 int8 vectors and matching H×W float32 scales."""
+    q, s = row['grid_size'] - 128, row['scales_size'] - 128
+    return q > 0 and q % 128 == 0 and s % 4 == 0 and q // 128 == s // 4
+
+
 def build(registry: Path, registry_sha256: str, boundaries: Path,
           boundary_receipt: Path, kiruna: Path) -> dict:
     identity = file_identity(registry)
@@ -56,26 +77,16 @@ def build(registry: Path, registry_sha256: str, boundaries: Path,
     union = unary_union(buffers)
     west, south, east, north = union.bounds
     blocks = []
-    columns = ['version', 'variant', 'year', 'lon', 'lat', 'grid_size', 'scales_size']
-    for batch in pq.ParquetFile(registry).iter_batches(batch_size=65536, columns=columns):
-        predicates = [pc.equal(batch['version'], '1.0'), pc.equal(batch['variant'], 'vultr'),
-                      pc.is_in(batch['year'], value_set=pa.array(YEARS)),
-                      pc.greater_equal(batch['lon'], west - .05), pc.less_equal(batch['lon'], east + .05),
-                      pc.greater_equal(batch['lat'], south - .05), pc.less_equal(batch['lat'], north + .05)]
-        mask = predicates[0]
-        for predicate in predicates[1:]:
-            mask = pc.and_(mask, predicate)
-        for row in batch.filter(mask).to_pylist():
-            footprint = box(row['lon']-.05, row['lat']-.05, row['lon']+.05, row['lat']+.05)
-            matches = [i for i, buffered in enumerate(buffers) if buffered.intersects(footprint)]
-            if not matches:
-                continue
-            q, s = row['grid_size'] - 128, row['scales_size'] - 128
-            if q <= 0 or q % 128 or s % 4 or q // 128 != s // 4:
-                raise ValueError(f'Incomplete block: {block_key(row)}')
-            blocks.append(row)
-            for i in matches:
-                areas[i]['block_keys'].append(block_key(row))
+    for row in registry_rows(registry, (west, south, east, north), YEARS):
+        footprint = box(row['lon']-.05, row['lat']-.05, row['lon']+.05, row['lat']+.05)
+        matches = [i for i, buffered in enumerate(buffers) if buffered.intersects(footprint)]
+        if not matches:
+            continue
+        if not block_complete(row):
+            raise ValueError(f'Incomplete block: {block_key(row)}')
+        blocks.append(row)
+        for i in matches:
+            areas[i]['block_keys'].append(block_key(row))
     keys = [block_key(row) for row in blocks]
     if not blocks or len(keys) != len(set(keys)):
         raise ValueError('Empty or duplicated registry selection')
