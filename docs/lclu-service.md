@@ -124,7 +124,7 @@ timeout (1–900 seconds); failures retain a private operator log.
 | `registry`, `landmasks` | Pinned `manifest.parquet` and `landmasks.parquet` in one directory |
 | `max_blocks` | Integer 1–4 |
 | `max_download_bytes` | Positive cap on missing embedding/scales/landmask bytes (whole-tile downloads) |
-| `remote_tiles` | Optional, exactly `https://data.source.coop/tessera/tessera/npy/v1`: read only the needed rows of each tile by HTTP range, in 256-row bands kept beside the cache, instead of downloading whole tiles; replaces `max_download_bytes`. A tile is fetched only after its remote size matches the pinned registry. Same values as the other sources (bit for bit in `tests/lclu/test_remote_tiles.py`) |
+| `remote_tiles` | Optional, exactly `https://data.source.coop/tessera/tessera/npy/v1`: read only the needed rows of each tile by HTTP range, in 256-row bands (8 requests in parallel) kept beside the cache, instead of downloading whole tiles; replaces `max_download_bytes`. A tile is fetched only after its remote size matches the pinned registry. Same values as the other sources (bit for bit in `tests/lclu/test_remote_tiles.py`) |
 | `embedding_cache` | Dedicated writable cache; metadata must match v1/vultr |
 | `identity_cache` | Private writable directory for local-source verification receipts |
 | `vpp_index` | Pinned canonical WEkEO `index.json` |

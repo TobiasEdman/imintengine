@@ -174,13 +174,18 @@ def assemble_embedding(gt, grid: Grid, year: int, *, max_blocks: int, max_bytes:
                             'uncached_source_bytes': missing_bytes, 'blocks': len(blocks)}
 
 
-BAND_ROWS = 256  # remote tiles are read and cached in fixed row bands
+BAND_ROWS = 256    # remote tiles are read and cached in fixed row bands
+BAND_WORKERS = 8   # parallel range requests; one stream measured ~4.7 MB/s
+
+
+def _band_path(cache: Path, url: str, k: int) -> Path:
+    return cache / f'{Path(url).stem}_b{k}.npy'
 
 
 def _remote_band(url: str, k: int, shape: tuple, dtype, cache: Path) -> np.ndarray:
     """Rows [k·BAND_ROWS, …) of a remote (H, W[, 128]) NPY tile, kept on disk."""
     from geotessera.remote import read_npy_window
-    path = cache / f'{Path(url).stem}_b{k}.npy'
+    path = _band_path(cache, url, k)
     rows = min(BAND_ROWS, shape[0] - k * BAND_ROWS)
     if path.is_file():
         band = np.load(path, allow_pickle=False)
@@ -200,11 +205,12 @@ def assemble_remote_embedding(gt, grid: Grid, year: int, *, root: str, cache: Pa
 
     Same blocks, landmask georeferencing, dequantization, resampling and merge
     as assemble_embedding and the compact COG path. Each tile is read in fixed
-    BAND_ROWS bands by HTTP range (one request per band) and the bands are kept
-    on disk; a tile is only fetched after its remote size matches the pinned
-    registry.
+    BAND_ROWS bands by HTTP range (one request per band, BAND_WORKERS at a
+    time) and the bands are kept on disk; a tile is only fetched after its
+    remote size matches the pinned registry.
     """
     import math
+    from concurrent.futures import ThreadPoolExecutor
     import rasterio
     from rasterio.warp import transform_bounds, reproject, Resampling
     from rasterio.windows import Window, from_bounds, transform as window_transform
@@ -218,9 +224,9 @@ def assemble_remote_embedding(gt, grid: Grid, year: int, *, root: str, cache: Pa
         bounds=transform_bounds('EPSG:3006', 'EPSG:4326', *bounds), year=year)
     if not blocks or len(blocks) > max_blocks or any(y != year for y, _, _ in blocks):
         raise InputUnavailable('Missing exact-year blocks or block budget exceeded')
-    merged = np.zeros((128, 512, 512), np.float16)
-    valid = np.zeros((512, 512), bool)
-    files, bands = [], {'fetched': 0, 'cached': 0}
+    here = cache / str(year)
+    # 1. Each block's native window and the bands it needs.
+    windows, wanted, files = [], [], []
     for _, lon, lat in blocks:
         with rasterio.open(gt.registry.fetch_landmask(lon=lon, lat=lat)) as reference:
             crs, transform, (height, width) = reference.crs, reference.transform, reference.shape
@@ -231,25 +237,39 @@ def assemble_remote_embedding(gt, grid: Grid, year: int, *, root: str, cache: Pa
         bottom = min(height, math.ceil(raw.row_off + raw.height) + 2)
         if right <= left or bottom <= top:
             continue
+        ks = range(top // BAND_ROWS, (bottom - 1) // BAND_ROWS + 1)
         sizes = (gt.registry.get_tile_file_size(year, lon, lat),
                  gt.registry.get_scales_file_size(year, lon, lat))
-        parts = []
+        sources = []
         for relative, size, (dtype, shape) in zip(
                 tile_to_embedding_paths(lon, lat, year), sizes,
                 [(np.int8, (height, width, 128)), (np.float32, (height, width))]):
             url = f"{root.rstrip('/')}/{relative.as_posix()}"
-            ks = range(top // BAND_ROWS, (bottom - 1) // BAND_ROWS + 1)
-            here = cache / str(year)
-            missing = [k for k in ks if not (here / f'{Path(url).stem}_b{k}.npy').is_file()]
-            if missing and get_fs(url).size(url) != size:
-                raise ValueError('Remote tile size disagrees with the pinned registry')
-            band = np.concatenate([_remote_band(url, k, shape, dtype, here) for k in ks])
-            offset = ks[0] * BAND_ROWS
-            parts.append(band[top - offset:bottom - offset, left:right])
-            bands['fetched'] += len(missing)
-            bands['cached'] += len(ks) - len(missing)
+            sources.append((url, dtype, shape))
+            wanted += [(url, k, shape, dtype, size) for k in ks]
             files.append({'file': Path(url).name, 'size': size})
-        q, scales = parts
+        windows.append((crs, transform, left, top, right, bottom, ks, sources))
+    # 2. Fetch the missing bands in parallel: first each file's size check and
+    #    header (memoised by geotessera, so read once), then the bands.
+    from geotessera.remote import read_npy_window
+    missing = [w for w in wanted if not _band_path(here, w[0], w[1]).is_file()]
+
+    def check(url: str, size: int) -> None:
+        if get_fs(url).size(url) != size:
+            raise ValueError('Remote tile size disagrees with the pinned registry')
+        read_npy_window(url, 0, 0, 0, 0)   # parses and memoises the header only
+
+    with ThreadPoolExecutor(BAND_WORKERS) as pool:
+        list(pool.map(lambda pair: check(*pair), {(w[0], w[4]) for w in missing}))
+        list(pool.map(lambda w: _remote_band(w[0], w[1], w[2], w[3], here), missing))
+    # 3. Merge exactly as the tile and COG paths do.
+    merged = np.zeros((128, 512, 512), np.float16)
+    valid = np.zeros((512, 512), bool)
+    for crs, transform, left, top, right, bottom, ks, sources in windows:
+        offset = ks[0] * BAND_ROWS
+        q, scales = (np.concatenate([_remote_band(url, k, shape, dtype, here) for k in ks])
+                     [top - offset:bottom - offset, left:right]
+                     for url, dtype, shape in sources)
         arr = q.astype(np.float32) * scales[..., np.newaxis]
         if not np.isfinite(arr).all():
             raise ValueError('Nonfinite dequantized remote data')
@@ -263,9 +283,9 @@ def assemble_remote_embedding(gt, grid: Grid, year: int, *, root: str, cache: Pa
         take = (weights >= 1 - 1e-6) & np.any(chunk != 0, axis=0)
         merged[:, take] = chunk[:, take]
         valid |= take
-    return merged, valid, {'files': files, 'blocks': len(blocks), 'bands': bands,
+    return merged, valid, {'files': files, 'blocks': len(blocks),
+                           'bands': {'fetched': len(missing), 'cached': len(wanted) - len(missing)},
                            'storage': 'remote-npy-range', 'root': root}
-
 
 def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
     from imint.data.wekeo_vpp import (fetch_vpp_tiles_local, _bounds_overlap,

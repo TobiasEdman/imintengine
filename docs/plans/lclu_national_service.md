@@ -54,7 +54,7 @@ must also cover the whole country, and HR-VPP does not yet.
 | Region | TESSERA source | First new map (estimate) | Storage |
 |---|---|---|---|
 | Our 11 areas | staged COGs on the PVC | about 5 s after a warm-up (model + export) | about 300 GB, exists |
-| Rest of Sweden | original tiles by HTTP range, 256-row band cache | a few more seconds for 40–150 MB of rows, hidden by the warm-up while the year is chosen | ≤ 200 GB cache |
+| Rest of Sweden | original tiles by HTTP range, 256-row band cache, 8 parallel requests | 40–150 MB of rows: 10–30 s at the one-stream 4.7 MB/s measured from the public source (`tessera-storage.json`), less in parallel — to be measured from ICE; the warm-up runs it while the year is chosen | ≤ 200 GB cache |
 
 ## Work packages
 
