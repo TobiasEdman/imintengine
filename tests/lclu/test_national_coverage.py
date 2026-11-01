@@ -9,6 +9,7 @@ from scripts import audit_lclu_national_coverage as audit
 
 pytest.importorskip("mgrs")
 COUNTIES = audit.SWEDISH_COUNTIES
+GRUNDDATA = ("volym", "grundyta", "medeldiameter")
 
 
 @pytest.fixture
@@ -49,18 +50,22 @@ def inputs(tmp_path):
     # SKG mirror: every county present in every layer.
     skg = tmp_path / "skg_open"
     manifest = {"derived": {}, "vrt": {}}
-    for layer in ("markfukt/markfukt_", "tradhojd/tradhojd_10m_",
-                  "grunddata/omdrev2/volym_", "grunddata/omdrev2/grundyta_"):
-        for county in COUNTIES:
+    # Omdrev 3 exists for nine counties only, as in the real mirror.
+    layers = [("markfukt/markfukt_", COUNTIES), ("tradhojd/tradhojd_10m_", COUNTIES),
+              *((f"grunddata/omdrev2/{v}_", COUNTIES) for v in GRUNDDATA),
+              *((f"grunddata/omdrev3/{v}_", COUNTIES[:9]) for v in GRUNDDATA)]
+    for layer, counties in layers:
+        for county in counties:
             rel = f"{layer}{county}.tif"
             (skg / rel).parent.mkdir(parents=True, exist_ok=True)
             (skg / rel).write_bytes(b"x")
             manifest["derived"][rel] = {"sha256": "0" * 64}
     manifest["vrt"]["tradhojd/tradhojd_10m.vrt"] = {
         "sources": [f"tradhojd/tradhojd_10m_{c}.tif" for c in COUNTIES]}
-    for name in ("volym", "grundyta"):
-        manifest["vrt"][f"grunddata/{name}_omdrev2.vrt"] = {
-            "sources": [f"grunddata/omdrev2/{name}_{c}.tif" for c in COUNTIES]}
+    for name in GRUNDDATA:
+        for omdrev, counties in ((2, COUNTIES), (3, COUNTIES[:9])):
+            manifest["vrt"][f"grunddata/{name}_omdrev{omdrev}.vrt"] = {
+                "sources": [f"grunddata/omdrev{omdrev}/{name}_{c}.tif" for c in counties]}
     (skg / "MANIFEST.json").write_text(json.dumps(manifest))
     return dict(boundary=boundary, registry=registry, vpp_index=vpp / "index.json",
                 skg_manifest=skg / "MANIFEST.json", tiles=tiles, root=tmp_path)
@@ -77,7 +82,9 @@ def test_audit_counts_each_source_and_names_the_ready_years(inputs):
     assert report["hr_vpp"]["years"]["2023"]["missing"] == len(inputs["tiles"])
     assert report["hr_vpp"]["gapfill_bytes_at_cached_mean"] == len(inputs["tiles"]) * 5 * 1000
     assert all(not layer["missing"] for layer in report["static_aux"].values())
-    assert set(report["static_aux"]) == {"markfukt", "tradhojd", "volym_omdrev2", "grundyta_omdrev2"}
+    assert set(report["static_aux"]) == {"markfukt", "tradhojd", *GRUNDDATA}
+    assert report["static_aux"]["volym"]["by_omdrev"] == {"2": sorted(COUNTIES),
+                                                          "3": sorted(COUNTIES[:9])}
     assert report["ready_years"] == ["2024"]
     assert set(report["inputs"]) == {"boundary", "registry", "vpp_index", "skg_manifest"}
 
@@ -90,6 +97,34 @@ def test_a_county_missing_from_one_layer_blocks_every_year(inputs):
                          inputs["skg_manifest"], [2024])
     assert report["static_aux"]["markfukt"]["missing"] == ["09"]
     assert report["ready_years"] == []
+
+
+def test_a_county_counts_when_any_scanning_round_has_it(inputs):
+    """Omdrev 3 covering nine counties must not block; a county no round has must."""
+    skg = inputs["skg_manifest"].parent
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["ready_years"] == ["2024"]
+    # A county only omdrev 3 has is still covered...
+    (skg / f"grunddata/omdrev2/medeldiameter_{COUNTIES[0]}.tif").unlink()
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["static_aux"]["medeldiameter"]["missing"] == []
+    assert COUNTIES[0] not in report["static_aux"]["medeldiameter"]["by_omdrev"]["2"]
+    # ...one no round has blocks every year, and so does a variable with no round at all.
+    (skg / f"grunddata/omdrev3/medeldiameter_{COUNTIES[0]}.tif").unlink()
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["static_aux"]["medeldiameter"]["missing"] == [COUNTIES[0]]
+    assert report["ready_years"] == []
+    manifest = json.loads(inputs["skg_manifest"].read_text())
+    for omdrev in (2, 3):
+        del manifest["vrt"][f"grunddata/grundyta_omdrev{omdrev}.vrt"]
+    inputs["skg_manifest"].write_text(json.dumps(manifest))
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["static_aux"]["grundyta"] == {"present": [], "missing": sorted(COUNTIES),
+                                                "by_omdrev": {}}
 
 
 def test_cli_writes_the_report_and_a_summary(inputs, capsys):

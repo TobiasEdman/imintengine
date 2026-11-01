@@ -12,8 +12,9 @@ what is there:
 * HR-VPP: MGRS tiles that intersect Sweden with all five season-1 metrics in
   the WEkEO index and on disk — the serving rule — the missing pairs, and
   their size at the mean cached COG size (the gap-fill input).
-* Forestry, tree height and markfukt: counties present in the SKG mirror,
-  against the 21 Swedish counties.
+* Forestry (volume, basal area, mean diameter; any scanning round), tree
+  height and markfukt: counties present in the SKG mirror, against the 21
+  Swedish counties.
 * DEM: the GLO-30 1° tiles the country needs, read on demand from public COGs.
 
 No network access; every input is hashed into the report.
@@ -135,22 +136,35 @@ def hr_vpp(index_path: Path, tiles: set[str], years) -> dict:
 
 
 def static_aux(skg_manifest: Path) -> dict:
-    """Counties present per SKG layer, by the mirror's own county lists."""
+    """Counties present per SKG layer, by the mirror's own county lists.
+
+    A grunddata variable is read newest scanning round first, per pixel
+    (``skg_open.OMDREV_PRIORITY``), and omdrev 3 exists for nine counties
+    only. A county therefore counts as covered for a variable when any round
+    has it; the per-round counties are reported alongside.
+    """
     os.environ["SKG_OPEN_DIR"] = str(skg_manifest.parent)
     from imint.training import skg_open
 
     manifest = json.loads(skg_manifest.read_text())
     county = re.compile(r"_(\d{2})\.tif$")
-    layers = {"markfukt": set(skg_open._county_rasters(manifest, "markfukt/markfukt_")),
-              "tradhojd": skg_open.staged_tradhojd_counties(manifest)}
-    for vrt, record in manifest.get("vrt", {}).items():
-        if vrt.startswith("grunddata/"):
-            layers[Path(vrt).stem] = {m.group(1) for s in record.get("sources", [])
-                                      if (m := county.search(s))
-                                      and (skg_manifest.parent / s).exists()}
-    return {name: {"present": sorted(found),
-                   "missing": sorted(set(SWEDISH_COUNTIES) - found)}
-            for name, found in sorted(layers.items())}
+
+    def counties(sources: list[str]) -> set[str]:
+        return {m.group(1) for s in sources
+                if (m := county.search(s)) and (skg_manifest.parent / s).exists()}
+
+    def coverage(found: set[str]) -> dict:
+        return {"present": sorted(found), "missing": sorted(set(SWEDISH_COUNTIES) - found)}
+
+    report = {"markfukt": coverage(set(skg_open._county_rasters(manifest, "markfukt/markfukt_"))),
+              "tradhojd": coverage(skg_open.staged_tradhojd_counties(manifest))}
+    vrts = manifest.get("vrt", {})
+    for variable in skg_open.GRUNDDATA_VARIABLES:
+        by_omdrev = {str(r): counties(vrts[key]["sources"]) for r in skg_open.OMDREV_PRIORITY
+                     if (key := f"grunddata/{variable}_omdrev{r}.vrt") in vrts}
+        report[variable] = {**coverage(set().union(*by_omdrev.values())),
+                            "by_omdrev": {r: sorted(c) for r, c in sorted(by_omdrev.items())}}
+    return report
 
 
 def dem(sweden) -> dict:
