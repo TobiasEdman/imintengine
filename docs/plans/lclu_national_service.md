@@ -48,6 +48,7 @@ must also cover the whole country, and HR-VPP does not yet.
 | HR-VPP (WEkEO cache) covers only the demo areas' MGRS tiles; 2025 is unpublished everywhere | `docs/verification/lclu-service/coverage-matrix.md` |
 | DEM (GLO-30) is staged per area; forestry and markfukt are per-county mosaics on the PVC; county masks limit windows to Sweden | `scripts/stage_lclu_demo.py`, `imint/training/skg_open.py` |
 | From this cloud session `data.source.coop` is blocked; from ICE it is unverified | session network policy |
+| HR-VPP files are S3 objects: a WEkEO search result's `location` is `s3://hr-vpp-products-vpp-v01-<year>/CLMS/Pan-European/Biophysical/VPP/v01/<year>/s1/<file>.tif`. The HDA client (hda 2.40) orders each file and streams it whole, never by range. VITO announced a move of all HR-VPP data to CDSE in 2025; unverified | `tests/test_wekeo_vpp.py`, hda 2.40 `api.py`, [VITO](https://remotesensing.vito.be/services/copernicus-land-monitoring-service-hr-vpp) |
 
 ## Target
 
@@ -79,6 +80,14 @@ must also cover the whole country, and HR-VPP does not yet.
 4. **HR-VPP national gap-fill** after the audit (D4). Same WEkEO path as the
    demo gap-fill, no CDSE units. 2025 stays unavailable until it is
    published.
+   - First `k8s/hrvpp-access-probe-job.yaml` (`scripts/probe_hrvpp_access.py`)
+     decides whether HR-VPP can be read per window instead: the cached
+     file's block layout, Range on the WEkEO download, and a CDSE `eodata`
+     copy, each with pixel parity of a 512 × 512 window against the cache.
+   - Per window, about 2.6 MB of the five metrics is needed. A whole
+     MGRS tile-year is about 555 MB.
+   - If a windowed source reproduces the cache, HR-VPP is read on demand
+     like TESSERA and DEM, and the gap-fill becomes a cache.
 5. **DEM on demand.** Read GLO-30 windows from the public COGs per request,
    with a disk cache.
 6. **National region in the service.**
