@@ -11,6 +11,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
+import weakref
 
 from pyproj import Transformer
 from shapely.geometry import Point, mapping, shape
@@ -84,6 +86,12 @@ class RepositorySources:
         self.python = os.path.abspath(base / settings['python'])
         self.cache = cache / 'lclu-inputs'
         self.cache.mkdir(parents=True, exist_ok=True)
+        # One preparation per key at a time: a warm-up and a map request for
+        # the same grid and year must not both stage and rename the target.
+        # The API holds one worker process (its own flock), so a process lock
+        # suffices; a lock lives only while some caller holds a reference.
+        self._locks: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
+        self._locks_guard = threading.Lock()
         # Only operator-qualified regions are advertised. A registry row alone
         # is never sufficient to enable a year in the product.
         self.regions = self.config['qualified_regions']
@@ -126,6 +134,13 @@ class RepositorySources:
                  'properties': {'name': str(r.get('name', 'Demo')), 'years': r['years']}}
                 for r in self.regions if 'geometry' in r]
 
+    def _lock(self, key: str) -> threading.Lock:
+        with self._locks_guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = self._locks[key] = threading.Lock()
+            return lock
+
     def prepare(self, grid: Grid, year: int) -> tuple[Path, dict]:
         identity = self.identity(grid, year)
         if public_identity(file_identity(self.config_path)) != public_identity(self.settings['config']):
@@ -139,31 +154,32 @@ class RepositorySources:
         key = contract_pin({'source': identity, 'grid': grid.describe(), 'year': year,
                             'producer': producer})
         target = self.cache / key
-        if not target.exists():
-            staging = Path(tempfile.mkdtemp(prefix='.preparing-', dir=self.cache))
-            try:
-                command = [self.python, str(ROOT / 'scripts/prepare_lclu.py'),
-                           '--config', str(self.config_path), '--east', str(grid.east),
-                           '--north', str(grid.north), '--year', str(year),
-                           '--output', str(staging)]
-                # Logs stay operator-side; no private paths/provider errors in HTTP.
-                with (staging / 'preparation.log').open('w') as log:
-                    subprocess.run(command, cwd=ROOT, timeout=self.timeout, check=True,
-                                   stdout=log, stderr=subprocess.STDOUT)
-                entry = json.loads((staging / 'entry.json').read_text())
-                validate_bundle(verify_file(entry['input'], staging), entry['input'], grid, year)
-                os.rename(staging, target)
-            except Exception as exc:
-                if (staging / 'preparation.log').is_file():
-                    logs = self.cache / 'failures'
-                    logs.mkdir(exist_ok=True)
-                    log_path = logs / f'{staging.name}.log'
-                    os.replace(staging / 'preparation.log', log_path)
-                    raise RuntimeError(f'Annual preparation failed; operator log: {log_path}') from exc
-                raise
-            finally:
-                if staging.exists():
-                    shutil.rmtree(staging)
+        with self._lock(key):
+            if not target.exists():
+                staging = Path(tempfile.mkdtemp(prefix='.preparing-', dir=self.cache))
+                try:
+                    command = [self.python, str(ROOT / 'scripts/prepare_lclu.py'),
+                               '--config', str(self.config_path), '--east', str(grid.east),
+                               '--north', str(grid.north), '--year', str(year),
+                               '--output', str(staging)]
+                    # Logs stay operator-side; no private paths/provider errors in HTTP.
+                    with (staging / 'preparation.log').open('w') as log:
+                        subprocess.run(command, cwd=ROOT, timeout=self.timeout, check=True,
+                                       stdout=log, stderr=subprocess.STDOUT)
+                    entry = json.loads((staging / 'entry.json').read_text())
+                    validate_bundle(verify_file(entry['input'], staging), entry['input'], grid, year)
+                    os.rename(staging, target)
+                except Exception as exc:
+                    if (staging / 'preparation.log').is_file():
+                        logs = self.cache / 'failures'
+                        logs.mkdir(exist_ok=True)
+                        log_path = logs / f'{staging.name}.log'
+                        os.replace(staging / 'preparation.log', log_path)
+                        raise RuntimeError(f'Annual preparation failed; operator log: {log_path}') from exc
+                    raise
+                finally:
+                    if staging.exists():
+                        shutil.rmtree(staging)
         entry = json.loads((target / 'entry.json').read_text())
         if (entry['year'] != year or entry['center_3006'] != [grid.east, grid.north]
                 or entry['embedding'] != EMBEDDING

@@ -221,3 +221,49 @@ def test_regional_sources_route_exact_year_without_cross_region_fallback(tmp_pat
     with pytest.raises(ValueError, match='At least one'): RegionalSources([], tmp_path, tmp_path)
     ambiguous = RegionalSources([settings[0], settings[0]], tmp_path, tmp_path)
     with pytest.raises(ValueError, match='Overlapping'): ambiguous.identity(grids[0], 2024)
+
+
+def test_concurrent_preparations_of_one_key_run_once(tmp_path, monkeypatch):
+    """A warm-up and a map request for the same place and year prepare once."""
+    import threading
+    import time
+    from imint.inference.lclu import AUX_NAMES, public_identity
+    grid = Grid.from_lonlat(17.64, 59.86)
+    b = grid.bounds()
+    config = tmp_path/'sources.json'
+    write_json(config, {'version':1, 'embedding':EMBEDDING, 'qualified_regions':[
+        {'country':'SE', 'verification':'operator-check-1', 'years':[2024],
+         'bounds_3006':[b[k] for k in ('west','south','east','north')]}]})
+    source = RepositorySources({'config':file_identity(config), 'python':'python3.12',
+                                'timeout_seconds':30}, tmp_path, tmp_path/'cache')
+    runs, both_inside = [], threading.Barrier(2, timeout=5)
+    def prepared(command, **kwargs):
+        runs.append(command)
+        time.sleep(.3)   # long enough for a second caller to arrive
+        out = Path(command[command.index('--output') + 1])
+        arrays = {'tessera': np.full((128,512,512), .25, np.float16),
+                  'valid_embedding': np.ones((512,512), bool), 'year': np.int32(2024),
+                  'tessera_year': np.int32(2024), 'vpp_year': np.int32(2024),
+                  'crs': np.array('EPSG:3006'), 'transform': np.array(list(grid.transform())[:6]),
+                  **{name: np.ones((512,512), np.float32) for name in AUX_NAMES}}
+        np.savez_compressed(out/'input.npz', **arrays)
+        write_json(out/'entry.json', {'year':2024, 'center_3006':[grid.east, grid.north],
+                                     'input':{**file_identity(out/'input.npz'), 'path':'input.npz'},
+                                     'embedding':EMBEDDING,
+                                     'source_config':public_identity(file_identity(config))})
+    monkeypatch.setattr(subprocess, 'run', prepared)
+    results, errors = [], []
+    def caller():
+        both_inside.wait()
+        try:
+            results.append(source.prepare(grid, 2024))
+        except Exception as exc:
+            errors.append(exc)
+    threads = [threading.Thread(target=caller) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(20)
+    assert errors == [] and len(runs) == 1
+    assert results[0][0] == results[1][0] and results[0][0].is_file()
+    assert not list(source.cache.glob('.preparing-*'))
