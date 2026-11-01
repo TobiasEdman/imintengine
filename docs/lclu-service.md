@@ -191,6 +191,7 @@ input and applies the canonical Swedish county mask to cross-border pixels.
 | `GET /v1/lclu` | Readiness, candidate years, legend and prepared-location markers |
 | `GET /v1/lclu/availability?lon=17.64&lat=59.86` | Snapped geometry and qualified years |
 | `POST /v1/lclu` | Submit `{"lon":17.64,"lat":59.86,"year":2024}`; receive 202 and `poll_url` |
+| `POST /v1/lclu/prepare` | Same body; start preparing that place and year in the background, 202 |
 | `GET /v1/jobs/{id}` | Shared lifecycle, phase and annual result |
 | `GET /v1/lclu/jobs/{id}/files/{name}` | Completed TIFF, PNG overlay, legend or provenance only |
 
@@ -198,6 +199,14 @@ One shared execution slot serializes legacy and annual jobs. Admission counts
 queued/running work across both routes. `IMINT_API_MAX_JOBS` defaults to 4 and
 accepts 1–64; excess work returns 429 with Retry-After. Identical grid/year/model/
 source requests reuse pending or completed jobs; failures can be retried.
+
+The map viewer calls `POST /v1/lclu/prepare` when a place is chosen and when
+the year changes. Preparation was 12.9 s of a measured 18.1 s new Stockholm
+map, and it now runs while the user decides. One warm-up runs at a time,
+outside the execution slot; a newer request replaces one that has not started,
+and shutdown finishes a running warm-up but drops a waiting one. A map request
+for the same place and year waits for the warm-up's input instead of
+preparing again (one preparation per key).
 Shutdown stops admission and drains accepted work before releasing the lock.
 
 Prepared inputs persist in `lclu-inputs/`; outputs in `lclu/<cache-key>/`.

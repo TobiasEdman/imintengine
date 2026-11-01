@@ -225,3 +225,125 @@ def test_showcase_assets_work_for_static_and_api_hosting(api):
         for path in served:
             assert client.get(path).status_code==200
         assert client.get('/lclu-assets/../config/analyzers.yaml').status_code==404
+
+
+def test_prepare_warms_the_newest_request_outside_the_job_queue(api, monkeypatch):
+    gates = {0: (threading.Event(), threading.Event()), 3: (threading.Event(), threading.Event())}
+    async def run():
+        req = lambda year: api.server.LcluRequest(**{**REQUEST, 'year': year})
+        with pytest.raises(api.server.HTTPException) as unconfigured:
+            await api.server.prepare_lclu(req(2024))
+        assert unconfigured.value.status_code == 503
+        life = api.server.lifespan(api.server.app)
+        await life.__aenter__()
+        service = install(api, monkeypatch)
+        calls, original = [], service.sources.prepare
+        def recorded(grid, year):
+            index = len(calls)
+            calls.append(year)
+            if index in gates:
+                gates[index][0].set()
+                assert gates[index][1].wait(10)
+            return original(grid, year)
+        monkeypatch.setattr(service.sources, 'prepare', recorded)
+        assert (await api.server.prepare_lclu(req(2023))) == {'state': 'queued'}
+        assert await asyncio.to_thread(gates[0][0].wait, 2)
+        await api.server.prepare_lclu(req(2024))     # waits behind the running one ...
+        await api.server.prepare_lclu(req(2023))     # ... and is replaced by the newest
+        with pytest.raises(api.server.HTTPException) as unqualified:
+            await api.server.prepare_lclu(req(2025))
+        assert unqualified.value.status_code == 422
+        # A map request is not held back by the running warm-up.
+        job = await api.server.submit_lclu(req(2024))
+        for _ in range(200):
+            if api.server._jobs[job.job_id]['status'] == 'success':
+                break
+            await asyncio.sleep(.05)
+        assert api.server._jobs[job.job_id]['status'] == 'success'
+        assert calls == [2023, 2024]                 # the warm-up, then the job's own
+        gates[0][1].set()
+        await api.server._lclu_warm_task
+        assert calls == [2023, 2024, 2023]           # the replaced 2024 warm-up never ran
+        # Shutdown waits for a running warm-up's writes and drops a waiting one.
+        await api.server.prepare_lclu(req(2024))
+        assert await asyncio.to_thread(gates[3][0].wait, 2)
+        await api.server.prepare_lclu(req(2023))
+        shutdown = asyncio.create_task(life.__aexit__(None, None, None))
+        await asyncio.sleep(.05)
+        assert not shutdown.done()
+        gates[3][1].set()
+        await shutdown
+        assert calls == [2023, 2024, 2023, 2024] and not api.server._pending_jobs
+    try:
+        asyncio.run(run())
+    finally:
+        for _, release in gates.values():
+            release.set()
+
+
+def test_prepare_endpoint_validates_like_a_map_request(api):
+    with TestClient(api.server.app) as client:
+        for changes in ({'year': 2016}, {'year': 2026}, {'checkpoint': 'private.pt'}, {'lon': 9}):
+            assert client.post('/v1/lclu/prepare', json={**REQUEST, **changes}).status_code == 422
+
+
+def test_a_warmed_place_skips_preparation_in_the_map_request(api, monkeypatch):
+    """End to end through RepositorySources: the warm-up's input is the job's input."""
+    import subprocess
+    import time
+    from imint.inference.lclu import AUX_NAMES, EMBEDDING, Grid, LcluService, public_identity, write_json
+    from imint.inference.lclu_sources import RepositorySources
+    from scripts.cache_predict import file_identity
+    grid = Grid.from_lonlat(REQUEST['lon'], REQUEST['lat'])
+    b = grid.bounds()
+    config = api.tmp/'sources.json'
+    write_json(config, {'version': 1, 'embedding': EMBEDDING, 'qualified_regions': [
+        {'country': 'SE', 'verification': 'unit-test', 'years': [2023, 2024],
+         'bounds_3006': [b[k] for k in ('west', 'south', 'east', 'north')]}]})
+    runs = []
+    def preparation(command, **kwargs):
+        year = int(command[command.index('--year') + 1])
+        runs.append(year)
+        time.sleep(1.0)   # stands in for the measured 12.9 s Stockholm preparation
+        out = Path(command[command.index('--output') + 1])
+        arrays = {'tessera': np.full((128, 512, 512), .25, np.float16),
+                  'valid_embedding': np.ones((512, 512), bool), 'year': np.int32(year),
+                  'tessera_year': np.int32(year), 'vpp_year': np.int32(year),
+                  'crs': np.array('EPSG:3006'), 'transform': np.array(list(grid.transform())[:6]),
+                  **{name: np.ones((512, 512), np.float32) for name in AUX_NAMES}}
+        np.savez_compressed(out/'input.npz', **arrays)
+        write_json(out/'entry.json', {
+            'year': year, 'center_3006': [grid.east, grid.north], 'public_area': True,
+            'input': {**file_identity(out/'input.npz'), 'path': 'input.npz'}, 'embedding': EMBEDDING,
+            'source_config': public_identity(file_identity(config)),
+            'auxiliary_provenance': {'vpp': {'year': year, 'season': 1,
+                                             'index': {'sha256': 'a'*64, 'size': 1}, 'files': []}}})
+    monkeypatch.setattr(subprocess, 'run', preparation)
+    class Model:
+        contract = {'synthetic': True}
+        def predict(self, path, record):
+            return np.zeros((504, 504), np.uint8)
+    async def finished(job_id):
+        for _ in range(400):
+            job = api.server._jobs[job_id]
+            if job['status'] in ('success', 'failed'):
+                return job
+            await asyncio.sleep(.05)
+        raise AssertionError('job did not finish')
+    async def run():
+        async with api.server.lifespan(api.server.app):
+            sources = RepositorySources({'config': file_identity(config), 'python': 'python3.12',
+                                         'timeout_seconds': 30}, api.tmp, api.tmp/'cache')
+            monkeypatch.setattr(api.server, '_lclu_service',
+                                LcluService(Model(), sources, api.tmp/'artifacts'))
+            req = lambda year: api.server.LcluRequest(**{**REQUEST, 'year': year})
+            cold = await finished((await api.server.submit_lclu(req(2023))).job_id)
+            await api.server.prepare_lclu(req(2024))
+            await api.server._lclu_warm_task
+            warm = await finished((await api.server.submit_lclu(req(2024))).job_id)
+            return cold, warm
+    cold, warm = asyncio.run(run())
+    assert cold['status'] == warm['status'] == 'success'
+    assert runs == [2023, 2024]          # the map request started no second preparation
+    assert cold['result']['timing_ms']['preparation'] >= 1000
+    assert warm['result']['timing_ms']['preparation'] < 500

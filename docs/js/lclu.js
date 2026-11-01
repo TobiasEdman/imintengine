@@ -27,6 +27,13 @@ function controls() {
   $('year').disabled = busy || $('year').options.length === 0 || !$('year').options[0].value;
   $('progress').hidden = !busy;
 }
+// Start preparing the chosen place and year while the user decides. Best
+// effort: "Skapa karta" reports any real error, so a failed warm-up is silent.
+function warm() {
+  const year = Number($('year').value);
+  if (!selection || !year || $('year').selectedOptions[0]?.disabled) return;
+  request('/v1/lclu/prepare', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...selection,year})}).catch(() => {});
+}
 async function select(lat, lon) {
   if (busy) return;
   const current = ++generation;
@@ -46,6 +53,7 @@ async function select(lat, lon) {
     if (data.years.length) {
       data.years.slice().reverse().forEach(year => $('year').add(new Option(String(year), String(year))));
       status('Välj år och skapa din karta. Pixelernas datatäckning kontrolleras vid körning.');
+      warm();
     } else { $('year').add(new Option('Inga tillgängliga år','')); status(data.message); }
     for (const year of (data.unavailable_years || []).slice().reverse()) {
       const option = new Option(`${year} – ej verifierade årsdata`, String(year));
@@ -79,7 +87,7 @@ async function mapClick(latlng) {
 }
 map.on('click', event => mapClick(event.latlng));
 $('location-form').addEventListener('submit', event => { event.preventDefault(); select(Number($('lat').value),Number($('lon').value)); });
-$('year').addEventListener('change', () => { clearResult(); controls(); });
+$('year').addEventListener('change', () => { clearResult(); controls(); warm(); });
 $('opacity').addEventListener('input', () => { const value=Number($('opacity').value); $('opacity-value').value=`${value} %`; if(overlay) overlay.setOpacity(value/100); });
 $('create').addEventListener('click', async () => {
   if (busy || !selection) return;
