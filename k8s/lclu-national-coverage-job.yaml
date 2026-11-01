@@ -38,7 +38,7 @@ spec:
             - |
               set -euo pipefail
               export PYTHONUNBUFFERED=1
-              SHA=5c2c3bda3a471dfef7869db37cfb1f82b7c96803
+              SHA=7dd444f7b5e6bc88e6851c810304acb61748c9e3
               echo "=== lclu-national-coverage — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git curl > /dev/null 2>&1
               pip install --quiet --no-cache-dir numpy rasterio pyproj shapely pyarrow mgrs
