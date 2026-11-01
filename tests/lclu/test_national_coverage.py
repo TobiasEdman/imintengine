@@ -101,3 +101,30 @@ def test_cli_writes_the_report_and_a_summary(inputs, capsys):
     summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert summary["ready_years"] == ["2024"] and summary["tessera_missing"] == {"2023": 1, "2024": 0}
     assert json.loads(out.read_text())["years"] == [2023, 2024]
+
+
+def test_job_pins_the_audit_it_runs():
+    import re
+    import subprocess
+    from pathlib import Path
+
+    yaml = pytest.importorskip("yaml")
+    root = Path(__file__).resolve().parents[2]
+    job = yaml.safe_load((root / "k8s/lclu-national-coverage-job.yaml").read_text())
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    script = container["command"][-1]
+    assert "@sha256:" in container["image"]
+    assert 'test "$(git rev-parse HEAD)" = "$SHA"' in script
+    assert "python3 scripts/audit_lclu_national_coverage.py" in script
+    assert "numberMatched" in script and "registry differs from the campaign pin" in script
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+    sha = re.search(r"SHA=([0-9a-f]{40})", script)[1]
+    git = ["git", "-C", str(root)]
+    if subprocess.run([*git, "cat-file", "-e", sha], capture_output=True).returncode:
+        pytest.skip(f"{sha} not in this clone")
+    assert subprocess.run([*git, "merge-base", "--is-ancestor", sha, "HEAD"]).returncode == 0
+    changed = subprocess.run([*git, "diff", "--name-only", sha, "HEAD", "--",
+                              "scripts/audit_lclu_national_coverage.py",
+                              "scripts/inventory_lclu_demo.py"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert changed == [], f"bump SHA in k8s/lclu-national-coverage-job.yaml; changed: {changed}"
