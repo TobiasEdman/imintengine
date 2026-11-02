@@ -1,0 +1,10 @@
+{
+  "id": "0129",
+  "subject": "WEkEO HR-VPP downloads: never cache a cut-short COG",
+  "description": "On 2026-11-02 the LCLU municipality campaign stopped on VPP_2019_S2_T33VWG-010m_V101_s1_SOSD.tif in /data/vpp_wekeo: 17,191,936 bytes on disk while its tiles end at 117,333,963. It was written 2026-10-30 by the LCLU HR-VPP gap-fill. imint.data.wekeo_vpp._prefetch_one_tile downloads straight to the final path and treats any existing file as done; the header of a cut-short file still opens, so it was indexed and never fetched again. An audit of all 1400 cached COGs found only this one. Fix: download into dest/.partial and move into the cache only when every block of every resolution ends inside the file (GDAL block table, no pixel reads); an incomplete cached COG is moved aside as <name>.incomplete and fetched again. Tests use a real tiled COG with overviews. Tobias approved the immediate repair (cluster job repair-vpp-t33vwg-2019) and this PR on 2026-11-02. Not in scope: re-auditing the cache (done), CDSE paths, the LCLU campaign itself. Review: Codex.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/vpp-download-complete",
+  "created_at": "2026-11-02T10:54:29Z",
+  "updated_at": "2026-11-02T10:54:29Z"
+}
