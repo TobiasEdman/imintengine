@@ -1,0 +1,390 @@
+{
+ "voice": "Syntetisk röst, klonad från Tobias Edmans egen inspelning (VoxCPM2)",
+ "voice_en": "Synthetic voice cloned from Tobias Edman's own recording, with a British accent prompt from the Kokoro voice George (VoxCPM2)",
+ "films": [
+  {
+   "case_id": "marine_leisure",
+   "title": {
+    "sv": "Fritidsbåtar · Bohuslän",
+    "en": "Recreational boats · Bohuslän"
+   },
+   "group": "Marine",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/marine-leisure.mp4",
+     "vtt": "showcase/films/en/marine-leisure.vtt",
+     "poster": "showcase/films/en/marine-leisure.webp",
+     "seconds": 32.0,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/marine-leisure.mp4",
+     "vtt": "showcase/films/sv/marine-leisure.vtt",
+     "poster": "showcase/films/sv/marine-leisure.webp",
+     "seconds": 29.04,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "marine_commercial",
+   "title": {
+    "sv": "Sjöfart · Öresund",
+    "en": "Shipping · Öresund"
+   },
+   "group": "Marine",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/marine-commercial.mp4",
+     "vtt": "showcase/films/en/marine-commercial.vtt",
+     "poster": "showcase/films/en/marine-commercial.webp",
+     "seconds": 32.0,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/marine-commercial.mp4",
+     "vtt": "showcase/films/sv/marine-commercial.vtt",
+     "poster": "showcase/films/sv/marine-commercial.webp",
+     "seconds": 29.88,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "marine_radar_skagen",
+   "title": {
+    "sv": "Radar · Skagen",
+    "en": "Radar · Skagen"
+   },
+   "group": "Marine",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/marine-radar-skagen.mp4",
+     "vtt": "showcase/films/en/marine-radar-skagen.vtt",
+     "poster": "showcase/films/en/marine-radar-skagen.webp",
+     "seconds": 32.76,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/marine-radar-skagen.mp4",
+     "vtt": "showcase/films/sv/marine-radar-skagen.vtt",
+     "poster": "showcase/films/sv/marine-radar-skagen.webp",
+     "seconds": 30.64,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "marine_radar_oresund",
+   "title": {
+    "sv": "Radar · Öresund",
+    "en": "Radar · Öresund"
+   },
+   "group": "Marine",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/marine-radar-oresund.mp4",
+     "vtt": "showcase/films/en/marine-radar-oresund.vtt",
+     "poster": "showcase/films/en/marine-radar-oresund.webp",
+     "seconds": 33.76,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/marine-radar-oresund.mp4",
+     "vtt": "showcase/films/sv/marine-radar-oresund.vtt",
+     "poster": "showcase/films/sv/marine-radar-oresund.webp",
+     "seconds": 32.8,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "kustlinje",
+   "title": {
+    "sv": "Kustlinje · Skåne",
+    "en": "Shoreline · Skåne"
+   },
+   "group": "Coast",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/kustlinje.mp4",
+     "vtt": "showcase/films/en/kustlinje.vtt",
+     "poster": "showcase/films/en/kustlinje.webp",
+     "seconds": 33.72,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/kustlinje.mp4",
+     "vtt": "showcase/films/sv/kustlinje.vtt",
+     "poster": "showcase/films/sv/kustlinje.webp",
+     "seconds": 31.44,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "vegetationskant",
+   "title": {
+    "sv": "Vegetationskant · Vänern",
+    "en": "Vegetation edge · Vänern"
+   },
+   "group": "Coast",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/vegetationskant.mp4",
+     "vtt": "showcase/films/en/vegetationskant.vtt",
+     "poster": "showcase/films/en/vegetationskant.webp",
+     "seconds": 35.36,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/vegetationskant.mp4",
+     "vtt": "showcase/films/sv/vegetationskant.vtt",
+     "poster": "showcase/films/sv/vegetationskant.webp",
+     "seconds": 30.36,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "water_quality_bohuslan",
+   "title": {
+    "sv": "Vattenkvalitet · Bohuslän",
+    "en": "Water quality · Bohuslän"
+   },
+   "group": "Water quality",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/water-quality-bohuslan.mp4",
+     "vtt": "showcase/films/en/water-quality-bohuslan.vtt",
+     "poster": "showcase/films/en/water-quality-bohuslan.webp",
+     "seconds": 38.72,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/water-quality-bohuslan.mp4",
+     "vtt": "showcase/films/sv/water-quality-bohuslan.vtt",
+     "poster": "showcase/films/sv/water-quality-bohuslan.webp",
+     "seconds": 32.76,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "water_quality_lilla_karlso",
+   "title": {
+    "sv": "Vattenkvalitet · Lilla Karlsö",
+    "en": "Water quality · Lilla Karlsö"
+   },
+   "group": "Water quality",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/water-quality-lilla-karlso.mp4",
+     "vtt": "showcase/films/en/water-quality-lilla-karlso.vtt",
+     "poster": "showcase/films/en/water-quality-lilla-karlso.webp",
+     "seconds": 32.12,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/water-quality-lilla-karlso.mp4",
+     "vtt": "showcase/films/sv/water-quality-lilla-karlso.vtt",
+     "poster": "showcase/films/sv/water-quality-lilla-karlso.webp",
+     "seconds": 31.64,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "sr",
+   "title": {
+    "sv": "Superupplösning · Stockholm",
+    "en": "Superresolution · Stockholm"
+   },
+   "group": "Pixel and sensor",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/sr.mp4",
+     "vtt": "showcase/films/en/sr.vtt",
+     "poster": "showcase/films/en/sr.webp",
+     "seconds": 37.44,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/sr.mp4",
+     "vtt": "showcase/films/sv/sr.vtt",
+     "poster": "showcase/films/sv/sr.webp",
+     "seconds": 37.76,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "aircraft_parallax",
+   "title": {
+    "sv": "Bandparallax · Öckerö",
+    "en": "Band parallax · Öckerö"
+   },
+   "group": "Pixel and sensor",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/aircraft-parallax.mp4",
+     "vtt": "showcase/films/en/aircraft-parallax.vtt",
+     "poster": "showcase/films/en/aircraft-parallax.webp",
+     "seconds": 35.48,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/aircraft-parallax.mp4",
+     "vtt": "showcase/films/sv/aircraft-parallax.vtt",
+     "poster": "showcase/films/sv/aircraft-parallax.webp",
+     "seconds": 34.68,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "coregistration",
+   "title": {
+    "sv": "Koregistrering",
+    "en": "Image alignment"
+   },
+   "group": "Pixel and sensor",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/coregistration.mp4",
+     "vtt": "showcase/films/en/coregistration.vtt",
+     "poster": "showcase/films/en/coregistration.webp",
+     "seconds": 34.08,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/coregistration.mp4",
+     "vtt": "showcase/films/sv/coregistration.vtt",
+     "poster": "showcase/films/sv/coregistration.webp",
+     "seconds": 32.96,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "era5_strategies",
+   "title": {
+    "sv": "Hämtningsstrategier · Skåne",
+    "en": "Acquisition strategies · Skåne"
+   },
+   "group": "Atmosphere",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/era5-strategies.mp4",
+     "vtt": "showcase/films/en/era5-strategies.vtt",
+     "poster": "showcase/films/en/era5-strategies.webp",
+     "seconds": 35.68,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/era5-strategies.mp4",
+     "vtt": "showcase/films/sv/era5-strategies.vtt",
+     "poster": "showcase/films/sv/era5-strategies.webp",
+     "seconds": 34.56,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "era5_cloud_models",
+   "title": {
+    "sv": "Molnmodeller · Kiruna",
+    "en": "Cloud models · Kiruna"
+   },
+   "group": "Atmosphere",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/era5-cloud-models.mp4",
+     "vtt": "showcase/films/en/era5-cloud-models.vtt",
+     "poster": "showcase/films/en/era5-cloud-models.webp",
+     "seconds": 35.52,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/era5-cloud-models.mp4",
+     "vtt": "showcase/films/sv/era5-cloud-models.vtt",
+     "poster": "showcase/films/sv/era5-cloud-models.webp",
+     "seconds": 31.96,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "wetland_pirinen",
+   "title": {
+    "sv": "Våtmarksunderlag · Stormyran",
+    "en": "Wetland inputs · Stormyran"
+   },
+   "group": "Land cover",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/wetland-pirinen.mp4",
+     "vtt": "showcase/films/en/wetland-pirinen.vtt",
+     "poster": "showcase/films/en/wetland-pirinen.webp",
+     "seconds": 34.84,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/wetland-pirinen.mp4",
+     "vtt": "showcase/films/sv/wetland-pirinen.vtt",
+     "poster": "showcase/films/sv/wetland-pirinen.webp",
+     "seconds": 31.12,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "fire",
+   "title": {
+    "sv": "Skogsbrand · Kårböle",
+    "en": "Wildfire · Kårböle"
+   },
+   "group": "Land cover",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/fire.mp4",
+     "vtt": "showcase/films/en/fire.vtt",
+     "poster": "showcase/films/en/fire.webp",
+     "seconds": 32.88,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/fire.mp4",
+     "vtt": "showcase/films/sv/fire.vtt",
+     "poster": "showcase/films/sv/fire.webp",
+     "seconds": 31.64,
+     "youtube": null
+    }
+   }
+  },
+  {
+   "case_id": "grazing",
+   "title": {
+    "sv": "Betesmark · Lund",
+    "en": "Grazing land · Lund"
+   },
+   "group": "Land cover",
+   "versions": {
+    "en": {
+     "mp4": "showcase/films/en/grazing.mp4",
+     "vtt": "showcase/films/en/grazing.vtt",
+     "poster": "showcase/films/en/grazing.webp",
+     "seconds": 36.92,
+     "youtube": null
+    },
+    "sv": {
+     "mp4": "showcase/films/sv/grazing.mp4",
+     "vtt": "showcase/films/sv/grazing.vtt",
+     "poster": "showcase/films/sv/grazing.webp",
+     "seconds": 34.16,
+     "youtube": null
+    }
+   }
+  }
+ ]
+}

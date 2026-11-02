@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:08.290
+Recreational boats in Bohuslän. Sentinel-2 offers snapshots of activity around Hunnebostrand.
+
+00:00:09.410 --> 00:00:15.330
+The detector marks possible boats. A water mask removes detections on land.
+
+00:00:16.450 --> 00:00:23.010
+The heatmap combines detections from five dates; it does not track individual journeys.
+
+00:00:24.130 --> 00:00:31.330
+Detection patterns can guide further investigation. Coverage depends on clear satellite views.

@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:06.370
+Fritidsbåtar i Bohuslän. Sentinel-2 ger ögonblicksbilder av aktiviteten kring Hunnebostrand.
+
+00:00:07.490 --> 00:00:12.130
+Detektorn markerar möjliga båtar. En vattenmask tar bort detektioner på land.
+
+00:00:14.490 --> 00:00:19.290
+Värmekartan kombinerar detektioner från fem datum. Den följer inte enskilda resor.
+
+00:00:21.490 --> 00:00:28.370
+Detektionsmönstren kan vägleda fortsatta undersökningar. Täckningen beror på molnfria satellitbilder.

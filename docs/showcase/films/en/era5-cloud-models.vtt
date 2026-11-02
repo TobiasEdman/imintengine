@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:09.090
+Cloud models can disagree. Four selected Kiruna scenes expose differences between several cloud-detection methods.
+
+00:00:10.210 --> 00:00:18.530
+The panels show RGB, SCL, s2cloudless, OmniCloudMask and the DES optical-thickness model.
+
+00:00:19.650 --> 00:00:26.210
+A partly cloudy image reveals different responses to cloud, land and atmospheric effects.
+
+00:00:27.330 --> 00:00:34.850
+These examples do not rank accuracy. s2cloudless also uses substituted input bands in this comparison.

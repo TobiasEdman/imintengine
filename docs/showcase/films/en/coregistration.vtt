@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:08.610
+Align images before comparing change. Even small relative offsets can confuse a satellite time series.
+
+00:00:09.730 --> 00:00:16.290
+These original flicker animations show the same example before and after mutual-information alignment.
+
+00:00:17.410 --> 00:00:23.810
+Edge overlays make remaining differences visible without relying only on a summary score.
+
+00:00:24.930 --> 00:00:33.410
+An internal residual is not absolute positional accuracy. Seasonal changes can also create different edges.
