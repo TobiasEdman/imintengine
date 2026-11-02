@@ -1,15 +1,19 @@
 # Public annual land-cover API for the static showcase page (task 0131).
 #
 # docs/lclu.html on GitHub Pages calls https://lclu.icedc.se (docs/js/lclu-config.js).
-# The serving pod is the municipality campaign Job lclu-stockholm-0124-r8
-# (11 areas x 2017-2024, R4 qualified per area-year); it is unauthenticated, so
-# this exposes only what the page needs:
+# The serving pod is the municipality campaign Job lclu-stockholm-0124-r9
+# (11 areas x 2017-2024, R4 qualified per area-year): the first deployment
+# carrying the runtime storage budget, which refuses new warm-ups and maps
+# before the demo volume fills. r8 has no such budget and is never exposed;
+# until r9 exists this Service has no endpoints.
+# The API is unauthenticated, so this exposes only what the page needs:
 #   * only the /v1/lclu prefix (catalogue, availability, map jobs, files,
 #     pixel, prepare, prefetch); every other API route stays cluster-internal;
 #   * CORS for the exact showcase origin only (digitalearth.se/case embeds the
 #     same page in an iframe, so its requests carry this origin too);
 #   * a per-client request rate limit and a small request body.
-# The Job's own queue bound (IMINT_API_MAX_JOBS=4) caps concurrent work.
+# The rate limit and the Job's queue bound (IMINT_API_MAX_JOBS=4) bound request
+# and compute rate only; disk use over time is bounded by the storage budget.
 # Tobias approved the public API on 2026-11-02.
 #
 #   kubectl --context icekube -n prithvi-training-default apply --dry-run=server -f k8s/lclu-public.yaml
@@ -21,9 +25,9 @@ metadata:
   namespace: prithvi-training-default
   labels: { app: lclu-stockholm, task: "0131" }
 spec:
-  # job-name, not app: r7 (2024 only) carries the same app label.
+  # job-name, not app: r7 and r8 carry the same app label.
   selector:
-    job-name: lclu-stockholm-0124-r8
+    job-name: lclu-stockholm-0124-r9
   ports:
     - { name: http, port: 8000, targetPort: 8000, protocol: TCP }
 ---
