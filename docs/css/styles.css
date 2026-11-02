@@ -504,6 +504,8 @@
             .map-grid { grid-template-columns: 1fr; }
             .charts-grid { grid-template-columns: 1fr; }
             .header { padding: 16px; }
+            .header-nav, .sub-tab-nav { flex-wrap: wrap; }
+            .tab-description code { overflow-wrap: anywhere; }
         }
 
         /* ── Lede / hint / methods disclosure (showcase-copy rewrite) ──
