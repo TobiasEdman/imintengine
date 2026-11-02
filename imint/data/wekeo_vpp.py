@@ -30,6 +30,7 @@ License: Copernicus Open Access
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -60,6 +61,8 @@ _VPP_FILENAME_RE = re.compile(
 )
 
 _INDEX_NAME = "index.json"
+# Downloads land here first and move into the cache only when complete.
+_PARTIAL_DIR = ".partial"
 
 
 # ── Stage 1: bulk prefetch ───────────────────────────────────────────────
@@ -124,7 +127,7 @@ def prefetch_vpp_cogs(
     if missing:
         raise RuntimeError(
             f"{len(missing)} VPP product(s) reported a successful download but "
-            f"produced no file; cache is incomplete: {sorted(missing)}"
+            f"produced no complete file; cache is incomplete: {sorted(missing)}"
         )
 
     return index
@@ -227,15 +230,20 @@ def _prefetch_one_tile(
 ) -> None:
     """Search + download every wanted VPP COG for one MGRS tile.
 
-    Mutates ``index`` and ``missing`` in place. Idempotent — COGs already on
-    disk are not re-downloaded.
+    Mutates ``index`` and ``missing`` in place. Idempotent — complete COGs
+    already on disk are not re-downloaded. An incomplete one is moved aside
+    as ``<name>.incomplete`` and downloaded again. A download goes to
+    ``dest/.partial`` and enters the cache only once it is complete, so an
+    interrupted transfer never looks like a cached COG.
 
-    A product whose download reports success without producing the predicted
-    path is appended to ``missing`` and skipped, not raised on: the caller
+    A product whose download reports success without producing a complete
+    file is appended to ``missing`` and skipped, not raised on: the caller
     reports the full list at the end. Failing at the first one discards every
     remaining download in the run (2026-08-25: one absent T34VCK/2022/MAXV
     killed a queue of 87 pairs after 53 COGs).
     """
+    partial = dest / _PARTIAL_DIR
+    partial.mkdir(exist_ok=True)
     for ptype in types:
         matches = client.search({
             "dataset_id": _HDA_DATASET_ID,
@@ -252,15 +260,23 @@ def _prefetch_one_tile(
             if meta["year"] not in years_set or meta["season"] != season:
                 continue
             target = dest / fname
+            if target.exists() and not _cog_complete(target):
+                target.replace(target.with_name(fname + ".incomplete"))
             if not target.exists():
-                result.download(str(dest))
-            # hda can return from download() without having written the path
-            # _result_filename predicts. Verify before opening: _cog_bounds_4326
-            # would otherwise raise RasterioIOError straight through the caller's
-            # 401-only retry and abort the whole run.
-            if not target.exists():
-                missing.append(fname)
-                continue
+                # An entry must not outlive its file: re-added below only
+                # once a complete replacement is in place.
+                index.pop(fname, None)
+                result.download(str(partial))
+                # hda can return from download() without having written the
+                # path _result_filename predicts, or with a cut-short file.
+                # Check before opening: _cog_bounds_4326 would otherwise raise
+                # RasterioIOError straight through the caller's 401-only retry
+                # and abort the whole run.
+                fetched = partial / fname
+                if not (fetched.exists() and _cog_complete(fetched)):
+                    missing.append(fname)
+                    continue
+                fetched.replace(target)
             if fname not in index:
                 index[fname] = {
                     **meta, "bounds_4326": _cog_bounds_4326(target),
@@ -361,6 +377,41 @@ def _result_filename(result) -> str:
             if fid:
                 return os.path.basename(fid)
     return os.path.basename(str(result))
+
+
+def _cog_complete(path: Path) -> bool:
+    """Whether every block of band 1, at every resolution, ends inside the file.
+
+    A cut-short download keeps a readable header: rasterio opens it and
+    _cog_bounds_4326 succeeds, and the missing blocks fail only when a window
+    reads them (2026-11-02: T33VWG/2019 SOSD held 17 of 117 MB and stopped
+    the LCLU campaign). Reads GDAL's block table, never pixels.
+
+    A cut inside the TIFF metadata leaves the table unreadable rather than
+    wrong, so a block whose offset or size GDAL cannot give, or a file GDAL
+    cannot open, counts as incomplete too. HR-VPP COGs have no sparse
+    (zero-size) blocks; one would also count as incomplete.
+    """
+    import rasterio
+    from rasterio.errors import RasterioIOError
+
+    size = path.stat().st_size
+    try:
+        with rasterio.open(path) as src:
+            levels = [{}] + [{"overview_level": i} for i in range(len(src.overviews(1)))]
+        for options in levels:
+            with rasterio.open(path, **options) as src:
+                block_h, block_w = src.block_shapes[0]
+                for y in range(math.ceil(src.height / block_h)):
+                    for x in range(math.ceil(src.width / block_w)):
+                        offset = src.get_tag_item(f"BLOCK_OFFSET_{x}_{y}", "TIFF", bidx=1)
+                        count = src.get_tag_item(f"BLOCK_SIZE_{x}_{y}", "TIFF", bidx=1)
+                        if (offset is None or count is None or int(count) == 0
+                                or int(offset) + int(count) > size):
+                            return False
+    except RasterioIOError:
+        return False
+    return True
 
 
 def _cog_bounds_4326(path: Path) -> list[float]:
