@@ -253,32 +253,67 @@ class TestDownloadCompleteness:
 
     @pytest.fixture
     def cog(self, tmp_path) -> bytes:
-        """A real tiled COG with overviews, as HR-VPP ships them."""
+        """A real tiled COG with overviews, as HR-VPP ships them.
+
+        Small blocks give a block table of several kilobytes, so a cut can
+        land inside the metadata as well as inside the pixel data.
+        """
         import rasterio
         from rasterio.transform import from_origin
 
         data = np.random.default_rng(0).integers(1, 365, (2048, 2048)).astype(np.int16)
         path = tmp_path / "source.tif"
         with rasterio.open(path, "w", driver="COG", height=2048, width=2048, count=1,
-                           dtype="int16", crs="EPSG:32633", blocksize=512,
+                           dtype="int16", crs="EPSG:32633", blocksize=128,
                            compress="deflate",
                            transform=from_origin(500_000, 6_700_000, 10, 10)) as dst:
             dst.write(data, 1)
         return path.read_bytes()
 
     @staticmethod
-    def prefetch(dest: Path, result: _Result) -> tuple[dict, list]:
-        index, missing = {}, []
+    def payload_start(path: Path) -> int:
+        """Offset of the first pixel block: everything before it is metadata."""
+        import rasterio
+
+        with rasterio.open(path) as src:
+            levels = [{}] + [{"overview_level": i} for i in range(len(src.overviews(1)))]
+        offsets = []
+        for options in levels:
+            with rasterio.open(path, **options) as src:
+                offsets.append(int(src.get_tag_item("BLOCK_OFFSET_0_0", "TIFF", bidx=1)))
+        return min(offsets)
+
+    @staticmethod
+    def prefetch(dest: Path, result: _Result, index: dict | None = None) -> tuple[dict, list]:
+        index, missing = ({} if index is None else index), []
         wekeo_vpp._prefetch_one_tile(_Client(result), "T33VWG", ["SOSD"], {2019}, 1,
                                      dest, index, missing)
         return index, missing
 
     def test_block_table_finds_truncation(self, tmp_path, cog):
-        whole, cut = tmp_path / "whole.tif", tmp_path / "cut.tif"
+        whole = tmp_path / "whole.tif"
         whole.write_bytes(cog)
-        cut.write_bytes(cog[: len(cog) * 2 // 3])
         assert wekeo_vpp._cog_complete(whole)
-        assert not wekeo_vpp._cog_complete(cut)
+        start = self.payload_start(whole)
+        # Inside the metadata (Codex review of #123: 1,232 of 7.5 MB passed),
+        # at its end, and inside the pixel data; the shortest stops GDAL opening.
+        cuts = (64, 600, 1232, start // 2, start - 1, start + 1, len(cog) * 2 // 3)
+        assert 1232 < start
+        for cut in cuts:
+            path = tmp_path / f"cut_{cut}.tif"
+            path.write_bytes(cog[:cut])
+            assert not wekeo_vpp._cog_complete(path), cut
+
+    def test_index_entry_dies_with_a_rejected_cog(self, tmp_path, cog):
+        """A cached COG that is set aside and not replaced leaves no index entry."""
+        cached, replacement = cog[: len(cog) * 2 // 3], cog[: len(cog) // 2]
+        (tmp_path / _FNAME).write_bytes(cached)
+        index = {_FNAME: {"metric": "SOSD", "tileId": "T33VWG", "year": 2019, "season": 1,
+                          "bounds_4326": [0.0, 0.0, 1.0, 1.0]}}
+        index, missing = self.prefetch(tmp_path, _Result(replacement), index)
+        assert missing == [_FNAME] and _FNAME not in index
+        assert not (tmp_path / _FNAME).exists()
+        assert (tmp_path / f"{_FNAME}.incomplete").read_bytes() == cached
 
     def test_truncated_download_never_enters_the_cache(self, tmp_path, cog):
         index, missing = self.prefetch(tmp_path, _Result(cog[: len(cog) // 2]))

@@ -263,6 +263,9 @@ def _prefetch_one_tile(
             if target.exists() and not _cog_complete(target):
                 target.replace(target.with_name(fname + ".incomplete"))
             if not target.exists():
+                # An entry must not outlive its file: re-added below only
+                # once a complete replacement is in place.
+                index.pop(fname, None)
                 result.download(str(partial))
                 # hda can return from download() without having written the
                 # path _result_filename predicts, or with a cut-short file.
@@ -383,21 +386,31 @@ def _cog_complete(path: Path) -> bool:
     _cog_bounds_4326 succeeds, and the missing blocks fail only when a window
     reads them (2026-11-02: T33VWG/2019 SOSD held 17 of 117 MB and stopped
     the LCLU campaign). Reads GDAL's block table, never pixels.
+
+    A cut inside the TIFF metadata leaves the table unreadable rather than
+    wrong, so a block whose offset or size GDAL cannot give, or a file GDAL
+    cannot open, counts as incomplete too. HR-VPP COGs have no sparse
+    (zero-size) blocks; one would also count as incomplete.
     """
     import rasterio
+    from rasterio.errors import RasterioIOError
 
     size = path.stat().st_size
-    with rasterio.open(path) as src:
-        levels = [{}] + [{"overview_level": i} for i in range(len(src.overviews(1)))]
-    for options in levels:
-        with rasterio.open(path, **options) as src:
-            block_h, block_w = src.block_shapes[0]
-            for y in range(math.ceil(src.height / block_h)):
-                for x in range(math.ceil(src.width / block_w)):
-                    offset = src.get_tag_item(f"BLOCK_OFFSET_{x}_{y}", "TIFF", bidx=1)
-                    count = src.get_tag_item(f"BLOCK_SIZE_{x}_{y}", "TIFF", bidx=1)
-                    if offset and count and int(offset) + int(count) > size:
-                        return False
+    try:
+        with rasterio.open(path) as src:
+            levels = [{}] + [{"overview_level": i} for i in range(len(src.overviews(1)))]
+        for options in levels:
+            with rasterio.open(path, **options) as src:
+                block_h, block_w = src.block_shapes[0]
+                for y in range(math.ceil(src.height / block_h)):
+                    for x in range(math.ceil(src.width / block_w)):
+                        offset = src.get_tag_item(f"BLOCK_OFFSET_{x}_{y}", "TIFF", bidx=1)
+                        count = src.get_tag_item(f"BLOCK_SIZE_{x}_{y}", "TIFF", bidx=1)
+                        if (offset is None or count is None or int(count) == 0
+                                or int(offset) + int(count) > size):
+                            return False
+    except RasterioIOError:
+        return False
     return True
 
 
