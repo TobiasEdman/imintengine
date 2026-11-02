@@ -1,0 +1,64 @@
+# Public annual land-cover API for the static showcase page (task 0131).
+#
+# docs/lclu.html on GitHub Pages calls https://lclu.icedc.se (docs/js/lclu-config.js).
+# The serving pod is the municipality campaign Job lclu-stockholm-0124-r8
+# (11 areas x 2017-2024, R4 qualified per area-year); it is unauthenticated, so
+# this exposes only what the page needs:
+#   * only the /v1/lclu prefix (catalogue, availability, map jobs, files,
+#     pixel, prepare, prefetch); every other API route stays cluster-internal;
+#   * CORS for the exact showcase origin only (digitalearth.se/case embeds the
+#     same page in an iframe, so its requests carry this origin too);
+#   * a per-client request rate limit and a small request body.
+# The Job's own queue bound (IMINT_API_MAX_JOBS=4) caps concurrent work.
+# Tobias approved the public API on 2026-11-02.
+#
+#   kubectl --context icekube -n prithvi-training-default apply --dry-run=server -f k8s/lclu-public.yaml
+#   kubectl --context icekube -n prithvi-training-default apply -f k8s/lclu-public.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: lclu-public
+  namespace: prithvi-training-default
+  labels: { app: lclu-stockholm, task: "0131" }
+spec:
+  # job-name, not app: r7 (2024 only) carries the same app label.
+  selector:
+    job-name: lclu-stockholm-0124-r8
+  ports:
+    - { name: http, port: 8000, targetPort: 8000, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lclu-public-ingress
+  namespace: prithvi-training-default
+  labels: { app: lclu-stockholm, task: "0131" }
+  annotations:
+    cert-manager.io/issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://tobiasedman.github.io"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Content-Type"
+    nginx.ingress.kubernetes.io/cors-expose-headers: "Content-Disposition"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "false"
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [lclu.icedc.se]
+      secretName: lclu-icedc-tls
+  rules:
+    - host: lclu.icedc.se
+      http:
+        paths:
+          - path: /v1/lclu
+            pathType: Prefix
+            backend:
+              service:
+                name: lclu-public
+                port: { number: 8000 }
