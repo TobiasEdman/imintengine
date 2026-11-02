@@ -49,6 +49,57 @@ def test_download_resume_verifies_bytes_and_rejects_partial_file(tmp_path, monke
     assert len(calls) == 2
 
 
+def _responses(monkeypatch, outcomes):
+    """requests.get yields one outcome per call: an HTTP status, or an exception to raise."""
+    import requests
+
+    class Response:
+        def __init__(self, status):
+            self.status_code = status
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f'{self.status_code} error', response=self)
+        def iter_content(self, *_): yield b'1234'
+
+    queue, slept = list(outcomes), []
+    def get(*_args, **_kwargs):
+        outcome = queue.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return Response(outcome)
+    monkeypatch.setattr('scripts.stage_lclu_demo.requests.get', get)
+    monkeypatch.setattr('scripts.stage_lclu_demo.time.sleep', slept.append)
+    return queue, slept
+
+
+def test_transient_source_failures_are_retried(tmp_path, monkeypatch):
+    """A 503 from data.source.coop stopped campaign r8 at 70 of 88 cells (2026-11-02)."""
+    import requests
+    from scripts import stage_lclu_demo
+
+    queue, slept = _responses(monkeypatch, [503, requests.ConnectionError('reset'), 200])
+    path = tmp_path/'source.npy'
+    fetch('https://example.org/source', path, maximum=4, expected=4)
+    assert path.read_bytes() == b'1234' and queue == []
+    assert slept == list(stage_lclu_demo.RETRY_DELAYS_S[:2])
+    assert not path.with_suffix('.npy.partial').exists()
+
+
+@pytest.mark.parametrize('outcomes, raised, sleeps', [
+    ([404], 'HTTPError', 0),          # not transient: no retry
+    ([503] * 5, 'HTTPError', 4),      # transient, but every attempt fails
+])
+def test_lasting_source_failures_still_stop(tmp_path, monkeypatch, outcomes, raised, sleeps):
+    queue, slept = _responses(monkeypatch, outcomes)
+    path = tmp_path/'source.npy'
+    with pytest.raises(Exception) as caught:
+        fetch('https://example.org/source', path, maximum=4, expected=4)
+    assert type(caught.value).__name__ == raised
+    assert len(slept) == sleeps and queue == [] and not path.exists()
+
+
 def test_private_recipe_caps_resources_and_keeps_reference_data_read_only(tmp_path):
     path = Path(__file__).resolve().parents[2]/'docker/lclu/render_job.py'
     spec = importlib.util.spec_from_file_location('render_lclu_job', path)

@@ -28,6 +28,12 @@ from imint.training.copernicus_dem import _get_cog_urls
 from scripts.cache_predict import file_identity
 from scripts.prepare_lclu import prepare, verify_aux_metadata, verify_source_file
 
+# A transient public-source failure is retried before it stops a campaign: one
+# 503 from data.source.coop ended r8 at 70 of 88 cells (2026-11-02). Other
+# errors (404, budget, size) are not transient and fail at once.
+RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+RETRY_DELAYS_S = (5, 20, 60, 180)
+
 
 def fetch(url: str, path: Path, *, maximum: int, expected: int | None = None) -> Path:
     receipt = path.with_suffix(path.suffix + '.json')
@@ -40,6 +46,22 @@ def fetch(url: str, path: Path, *, maximum: int, expected: int | None = None) ->
             raise ValueError('Registry/download size mismatch')
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
+    for delay in RETRY_DELAYS_S:
+        try:
+            return _download(url, path, receipt, maximum=maximum, expected=expected)
+        except requests.HTTPError as exc:
+            if exc.response is None or exc.response.status_code not in RETRY_STATUS:
+                raise
+            error = exc
+        except (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.ChunkedEncodingError) as exc:
+            error = exc
+        print(f'Retrying {url} in {delay} s after: {error}', flush=True)
+        time.sleep(delay)
+    return _download(url, path, receipt, maximum=maximum, expected=expected)
+
+
+def _download(url: str, path: Path, receipt: Path, *, maximum: int, expected: int | None) -> Path:
     partial = path.with_suffix(path.suffix + '.partial')
     try:
         with requests.get(url, stream=True, timeout=(15, 90)) as response:
