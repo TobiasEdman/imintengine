@@ -216,3 +216,86 @@ class TestFallbackWiring:
             monkeypatch.setenv("VPP_WEKEO_DIR", d)  # empty — no index.json
             with pytest.raises(RuntimeError, match="no covering WEkEO cache"):
                 cdse_vpp.fetch_vpp_tiles(0.0, 0.0, 1.0, 1.0, size_px=32)
+
+
+# ── download completeness ────────────────────────────────────────────────
+
+_FNAME = "VPP_2019_S2_T33VWG-010m_V101_s1_SOSD.tif"
+
+
+class _Result:
+    """An hda search result whose download writes ``payload`` into the directory."""
+
+    def __init__(self, payload: bytes):
+        self.results = [{"properties": {"location": f"s3://bucket/{_FNAME}"}}]
+        self.payload = payload
+        self.downloads: list[str] = []
+
+    def download(self, directory: str) -> None:
+        self.downloads.append(directory)
+        Path(directory, _FNAME).write_bytes(self.payload)
+
+
+class _Client:
+    def __init__(self, result: _Result):
+        self.result = result
+
+    def search(self, query: dict) -> list:
+        return [self.result] if query["productType"] == "SOSD" else []
+
+
+class TestDownloadCompleteness:
+    """A cut-short COG keeps a readable header, so existence is no proof.
+
+    2026-11-02: T33VWG/2019 SOSD held 17 of 117 MB for three days and
+    stopped the LCLU campaign the first time a window read its tail.
+    """
+
+    @pytest.fixture
+    def cog(self, tmp_path) -> bytes:
+        """A real tiled COG with overviews, as HR-VPP ships them."""
+        import rasterio
+        from rasterio.transform import from_origin
+
+        data = np.random.default_rng(0).integers(1, 365, (2048, 2048)).astype(np.int16)
+        path = tmp_path / "source.tif"
+        with rasterio.open(path, "w", driver="COG", height=2048, width=2048, count=1,
+                           dtype="int16", crs="EPSG:32633", blocksize=512,
+                           compress="deflate",
+                           transform=from_origin(500_000, 6_700_000, 10, 10)) as dst:
+            dst.write(data, 1)
+        return path.read_bytes()
+
+    @staticmethod
+    def prefetch(dest: Path, result: _Result) -> tuple[dict, list]:
+        index, missing = {}, []
+        wekeo_vpp._prefetch_one_tile(_Client(result), "T33VWG", ["SOSD"], {2019}, 1,
+                                     dest, index, missing)
+        return index, missing
+
+    def test_block_table_finds_truncation(self, tmp_path, cog):
+        whole, cut = tmp_path / "whole.tif", tmp_path / "cut.tif"
+        whole.write_bytes(cog)
+        cut.write_bytes(cog[: len(cog) * 2 // 3])
+        assert wekeo_vpp._cog_complete(whole)
+        assert not wekeo_vpp._cog_complete(cut)
+
+    def test_truncated_download_never_enters_the_cache(self, tmp_path, cog):
+        index, missing = self.prefetch(tmp_path, _Result(cog[: len(cog) // 2]))
+        assert missing == [_FNAME] and index == {}
+        assert not (tmp_path / _FNAME).exists()
+
+    def test_truncated_cached_cog_is_fetched_again(self, tmp_path, cog):
+        (tmp_path / _FNAME).write_bytes(cog[: len(cog) // 3])
+        result = _Result(cog)
+        index, missing = self.prefetch(tmp_path, result)
+        assert missing == [] and len(result.downloads) == 1
+        assert (tmp_path / _FNAME).read_bytes() == cog
+        assert (tmp_path / f"{_FNAME}.incomplete").stat().st_size == len(cog) // 3
+        assert (index[_FNAME]["year"], index[_FNAME]["metric"]) == (2019, "SOSD")
+
+    def test_complete_cached_cog_is_not_fetched(self, tmp_path, cog):
+        (tmp_path / _FNAME).write_bytes(cog)
+        result = _Result(cog)
+        _, missing = self.prefetch(tmp_path, result)
+        assert missing == [] and result.downloads == []
