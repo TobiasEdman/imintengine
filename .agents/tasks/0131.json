@@ -1,0 +1,10 @@
+{
+  "id": "0131",
+  "subject": "Publish the interactive annual land-cover page on the ImintEngine showcase",
+  "description": "Tobias asked on 2026-11-02 to publish the interactive annual land-cover map (the IM-024 municipality demo, task 0128) on the ImintEngine showcase together with Codex, and approved a public, unauthenticated API for it. Scope: the static page (docs/lclu.html, docs/js/lclu.js, docs/css/lclu.css, docs/js/lclu-config.js with apiBase https://lclu.icedc.se) and its link from the Marktäcke tab; k8s/lclu-public.yaml with a Service pinned to the campaign Job lclu-stockholm-0124-r8 and an Ingress on lclu.icedc.se that exposes only the /v1/lclu prefix, with TLS (letsencrypt-prod), CORS for the exact origin https://tobiasedman.github.io and a per-IP rate limit; tests for those properties; a short note on the public surface. The cluster objects are applied only after r8 serves all 88 qualified area-years and the manifest has a Codex PASS. Not in scope: the service code itself (it runs from the 0128 branch bundle and needs its own PR), deleting r7, authentication. Review: Codex.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/lclu-showcase-public",
+  "created_at": "2026-11-02T21:07:05Z",
+  "updated_at": "2026-11-02T21:07:05Z"
+}
