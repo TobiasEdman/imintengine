@@ -17,6 +17,7 @@
     var data = null;
     var lang = storedLang() || 'sv';
     var listeners = [];
+    var tabVideos = [];
 
     function storedLang() {
         try {
@@ -117,7 +118,19 @@
         listeners.push(sync);
         sync();
         block.addEventListener('toggle', function () { if (!block.open) video.pause(); });
+        video.addEventListener('play', function () {
+            tabVideos.forEach(function (other) { if (other !== video) other.pause(); });
+        });
+        tabVideos.push(video);
         container.insertBefore(block, container.firstChild);
+    }
+
+    // Theme and sub-tab navigation hide a player's ancestors without closing its
+    // <details>, so pause every player that is no longer rendered.
+    function pauseHiddenTabFilms() {
+        tabVideos.forEach(function (video) {
+            if (!video.paused && video.getClientRects().length === 0) video.pause();
+        });
     }
 
     function renderGallery(root) {
@@ -162,8 +175,15 @@
             .then(function (json) {
                 data = json;
                 var gallery = document.getElementById('film-gallery');
-                if (gallery) renderGallery(gallery);
-                else data.films.forEach(renderTabFilm);
+                if (gallery) {
+                    renderGallery(gallery);
+                    return;
+                }
+                data.films.forEach(renderTabFilm);
+                // Bubbles after app.js's own tab handlers have switched the active panels.
+                document.addEventListener('click', function (e) {
+                    if (e.target.closest('.theme-tab[data-tab], .sub-tab')) pauseHiddenTabFilms();
+                });
             })
             .catch(function (err) { console.warn('Showcase films unavailable:', err); });
     }
