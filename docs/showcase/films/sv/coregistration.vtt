@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:09.090
+Passa in bilderna innan förändringar jämförs. Även små relativa förskjutningar kan försvåra tolkningen av en tidsserie av satellitbilder.
+
+00:00:10.210 --> 00:00:16.290
+De här ursprungliga blinkanimationerna visar samma exempel före och efter inpassning med ömsesidig information.
+
+00:00:17.410 --> 00:00:23.810
+Överlagrade kanter gör kvarvarande skillnader synliga, utan att vi enbart behöver lita på ett sammanfattande mått.
+
+00:00:24.930 --> 00:00:32.290
+Ett internt restfel är inte ett mått på absolut lägesnoggrannhet. Även årstidsförändringar kan ge olika kanter.
