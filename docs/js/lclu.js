@@ -2,6 +2,12 @@
  * at the chosen place the map shows the timeline's year, or nothing. */
 'use strict';
 const $ = id => document.getElementById(id);
+// A browser may still hold the page from before the timeline: ask for a
+// reload instead of failing half-initialised against the old controls.
+if (!$('year-ticks')) {
+  $('status').textContent = 'Sidan har uppdaterats. Ladda om sidan för att fortsätta.';
+  throw new Error('lclu.html predates lclu.js');
+}
 const apiBase = new URL((window.IMINT_LCLU_CONFIG?.apiBase || window.location.origin).replace(/\/?$/, '/'));
 const apiUrl = path => new URL(path.replace(/^\/+/, ''), apiBase).href;
 const map = L.map('map', {minZoom: 4, maxZoom: 18, zoomAnimation: false, fadeAnimation: false}).setView([62.1, 16.5], 5);
@@ -9,7 +15,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }).addTo(map);
 // place: the chosen window {key, lat, lon, years}; key is the server's grid centre.
-let place = null, footprint = null, generation = 0, busy = false, ready = false, inspection = 0;
+let place = null, footprint = null, generation = 0, busy = false, ready = false, inspection = 0, clicks = 0;
 let latestYear = 0, candidateYears = [], areaLayers = [], areaNames = [];
 // Maps made this browser session, bottom to top. Results persist on the server,
 // so a reload restores the list from sessionStorage and reuses the artifacts.
@@ -164,8 +170,10 @@ map.on('moveend', () => {
   if (map.getZoom() < 12) return;
   prefetchTimer = setTimeout(() => prefetch(map.getBounds(), available(timelineYear()) ? timelineYear() : latestYear), 600);
 });
+// Resolves true when this call's selection became the current place.
 async function select(lat, lon, {pan=true, year}={}) {
-  if (busy) return;
+  if (busy) return false;
+  clearTimeout(createTimer); clearTimeout(warmTimer);
   const current = ++generation, previous = place ? timelineYear() : null;
   closeInspection(); place = null; render();
   $('lat').value = lat.toFixed(5); $('lon').value = lon.toFixed(5);
@@ -173,14 +181,14 @@ async function select(lat, lon, {pan=true, year}={}) {
   status('Kontrollerar tillgängliga år …');
   try {
     const data = await request(`/v1/lclu/availability?lon=${lon}&lat=${lat}`);
-    if (current !== generation) return;
+    if (current !== generation) return false;
     if (footprint) map.removeLayer(footprint);
     footprint = L.geoJSON(data.geometry.footprint, {interactive:false,style:{color:'#1a4338',weight:2,fillOpacity:.06}}).addTo(map);
     // Keep the user's detail zoom when choosing another nearby point.
     if (pan && map.getZoom() < 12) map.fitBounds(footprint.getBounds(), {maxZoom:12,padding:[25,25]});
     else if (pan) map.panTo([lat,lon]);
     place = {key: data.geometry.center.join(','), lat, lon, years: data.years};
-    if (!place.years.length) { status(data.message); return; }
+    if (!place.years.length) { status(data.message); return true; }
     // Keep the year being compared across places when this place has it.
     const pick = year ?? shownAt(place.key)?.year ?? (available(previous) ? previous : Math.max(...place.years));
     $('year').value = String(pick);
@@ -188,7 +196,8 @@ async function select(lat, lon, {pan=true, year}={}) {
     if (entry && year !== undefined) show(entry);
     if (entry) status(`Årskarta ${pick}. Dra i tidsaxeln för att byta år.`);
     else { status('Välj år på tidsaxeln och skapa din karta. Pixlarnas datatäckning kontrolleras vid körning.'); warm(pick); }
-  } catch (error) { if (current === generation) status(error.message,true); }
+    return true;
+  } catch (error) { if (current === generation) status(error.message,true); return false; }
   finally { if (current === generation) render(); }
 }
 function focusPlace(entry) {
@@ -212,12 +221,18 @@ function onTimeline() {
   hidePlace(place.key); render();
   if (!available(year)) { status(`${year} – ej verifierade årsdata för denna plats.`); return; }
   if (!busy) status(`${year}: ingen karta än. Släpp tidsaxeln för att skapa den.`);
-  clearTimeout(warmTimer); warmTimer = setTimeout(() => warm(year), 350);
+  const key = place.key;
+  clearTimeout(warmTimer);
+  warmTimer = setTimeout(() => { if (place?.key === key && timelineYear() === year) warm(year); }, 350);
 }
 // A release (or the last of several arrow-key steps) creates the year.
 function onRelease() {
   clearTimeout(createTimer);
-  createTimer = setTimeout(() => { const year = timelineYear(); if (place && available(year) && !find(place.key, year)) create(year); }, 450);
+  if (!place) return;
+  const key = place.key, year = timelineYear();
+  createTimer = setTimeout(() => {
+    if (place?.key === key && timelineYear() === year && available(year) && !find(key, year)) create(year);
+  }, 450);
 }
 async function create(year) {
   if (!place || !available(year)) return;
@@ -255,9 +270,10 @@ function topmostAt(latlng) {
   return null;
 }
 async function mapClick(latlng) {
-  const entry = topmostAt(latlng);
+  const click = ++clicks, entry = topmostAt(latlng);
   if (!entry) return select(latlng.lat,latlng.lng);
-  if (entry.key !== place?.key) await select(entry.lat, entry.lon, {pan:false, year: entry.year});
+  if (entry.key !== place?.key && !busy && !(await select(entry.lat, entry.lon, {pan:false, year: entry.year}))) return;
+  if (click !== clicks) return;
   const current=++inspection;
   const message=document.createElement('div'); message.textContent='Läser markklass …';
   const popup=L.popup().setLatLng(latlng).setContent(message).openOn(map);
