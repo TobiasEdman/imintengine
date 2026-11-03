@@ -2,12 +2,13 @@
   "id": "0139",
   "subject": "Make the annual-map page the single Markt\u00e4cke page",
   "description": "Tobias asked on 2026-11-03 to merge the Markt\u00e4ckekartering sub-tab into the annual-map page so the information about what you create sits where you create it, approved a mockup and chose to build it as a PR. Scope: docs/lclu.html gains 'S\u00e5 skapas din \u00e5rskarta' (the example tile's inputs, training label and result, with sources and legends) and 'Hur v\u00e4l st\u00e4mmer kartan?' (the four summary cards, the qualitative lede and the method); the nfi_validation tab content, its TAB_CONFIG entry and dead inspector code are removed; the Markt\u00e4cke sub-tab nav links to lclu.html; the teaser privacy tests now guard the new location. Tobias chose to leave out the qualitative results table, the three observations and the Prithvi image. Not in scope: scripts' MANIFEST output, the API-hosted page's image serving, model results of any kind. Review: Codex.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-marktacke-page",
   "created_at": "2026-11-03T14:45:00Z",
-  "updated_at": "2026-11-03T14:39:51Z",
+  "updated_at": "2026-11-03T14:58:40Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-03T14:39:51Z"
+  "claimed_at": "2026-11-03T14:39:51Z",
+  "completed_at": "2026-11-03T14:58:40Z"
 }
