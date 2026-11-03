@@ -2,12 +2,14 @@
   "id": "0132",
   "subject": "Land the annual-map service code that runs behind lclu.icedc.se on main",
   "description": "Tobias decided on 2026-11-03 that the service code deployed as r9 behind https://lclu.icedc.se, which until now lives only on claude/upbeat-goldberg-bnbbux (task 0128) and agent/te/codex/lclu-vpp-snapshot-0128 (00f03145, Codex, Claude PASS), goes to main through a reviewed PR. Scope: that history as reviewed and deployed (annual-map service, regional sources, campaign staging and acceptance, runtime storage budget, VPP snapshots, release isolation, national-service probes and audits), with main brought in and the #125 showcase files kept as on main. No behavioural change beyond what is deployed. Not in scope: the 2024 wall-to-wall map (separate task), changing the running r9. Review: Codex.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-service-main-v2",
   "created_at": "2026-11-03T08:09:03Z",
-  "updated_at": "2026-11-03T08:09:37Z",
+  "updated_at": "2026-11-03T09:30:03Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-03T08:09:37Z"
+  "claimed_at": "2026-11-03T08:09:37Z",
+  "completed_at": "2026-11-03T09:30:03Z",
+  "pr": "https://github.com/TobiasEdman/imintengine/pull/127"
 }
