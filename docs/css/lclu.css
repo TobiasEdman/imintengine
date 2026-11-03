@@ -10,3 +10,25 @@ main{max-width:1500px;margin:auto;padding:32px}.intro{max-width:830px;margin-bot
 .legend-details{margin-top:20px}.legend-details summary{cursor:pointer}.legend-details li{margin:8px 0}
 
 .header-nav{display:flex;flex-wrap:wrap;gap:8px}.header-nav a{text-decoration:none}.header{gap:16px;flex-wrap:wrap}
+
+/* Year timeline: ticks sit under the range thumb's centre at each year. */
+.timeline{--thumb:16px;margin:22px 0 4px}.timeline-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}.timeline-head output{font-weight:600;color:var(--forest)}
+#year{display:block;width:100%;margin:0;accent-color:var(--forest)}#year:disabled{opacity:.5;cursor:not-allowed}
+.year-ticks{position:relative;height:24px;margin-top:2px}
+.year-tick{position:absolute;top:0;transform:translateX(-50%);background:none;border-radius:4px;padding:5px 1px 3px;font-size:11px;font-weight:500;color:var(--muted);line-height:1}
+.year-tick.made::before{content:'';position:absolute;top:0;left:50%;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--forest)}
+.year-tick.current{color:var(--forest);font-weight:700}
+.year-tick:disabled{opacity:1;cursor:default}.year-tick.unavailable{color:#b5bcb8;text-decoration:line-through}
+.timeline-hint{font-size:12px;line-height:1.4;color:var(--muted);margin:6px 0 0}
+/* Maps made this session. */
+#session{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}#session h3{font-size:16px;margin-bottom:6px}
+.session-note{font-size:12px;line-height:1.4;color:var(--muted);margin-bottom:12px}
+#session-list{list-style:none;padding:0;margin:0 0 16px;display:grid;gap:8px}
+.session-place{border:1px solid var(--line);border-radius:8px;padding:8px 10px}.session-place.current{border-color:var(--forest)}
+.session-place-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.session-place-name{background:none;padding:2px 0;text-align:left;font-size:12px;font-weight:600;color:var(--forest)}
+.session-remove{background:none;color:var(--muted);padding:0 6px;font-size:18px;line-height:1}
+.session-years{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.year-chip{padding:4px 10px;font-size:12px;border-radius:999px;background:#f3f5f4;color:var(--muted);border:1px solid var(--line)}
+.year-chip[aria-pressed=true]{background:var(--mint);color:var(--forest);border-color:var(--forest)}
+#session label{display:flex;justify-content:space-between;font-size:12px}#opacity{width:100%;accent-color:var(--forest)}

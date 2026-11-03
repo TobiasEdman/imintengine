@@ -32,6 +32,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -869,15 +870,22 @@ _LCLU_ASSETS = {'lclu.js': 'js/lclu.js', 'lclu-config.js': 'js/lclu-config.js',
                 'leaflet.js': 'js/vendor/leaflet.min.js', 'leaflet.css': 'css/leaflet.css'}
 
 
+def _api_hosted_page() -> str:
+    """The showcase page with its assets served by this API.
+
+    An asset reference may carry a version query (``js/lclu.js?v=2``); the
+    query is kept so a release reaches browsers that cached an older asset.
+    """
+    page = (_WEB_ROOT / 'lclu.html').read_text()
+    for name, relative in _LCLU_ASSETS.items():
+        page = re.sub(rf'(src|href)="{re.escape(relative)}(?=[?"])', rf'\1="/lclu-assets/{name}', page)
+    return page.replace('href="index.html"', 'href="https://digitalearth.se/case/"')
+
+
 @app.get('/lclu', include_in_schema=False)
 async def lclu_page():
     # The versioned page is also deployable directly in the static showcase.
-    page = (_WEB_ROOT / 'lclu.html').read_text()
-    for name, relative in _LCLU_ASSETS.items():
-        page = page.replace('src="'+relative+'"', 'src="/lclu-assets/'+name+'"')
-        page = page.replace('href="'+relative, 'href="/lclu-assets/'+name)
-    page = page.replace('href="index.html"', 'href="https://digitalearth.se/case/"')
-    return HTMLResponse(page)
+    return HTMLResponse(_api_hosted_page())
 
 
 @app.get('/lclu-assets/{name}', include_in_schema=False)
