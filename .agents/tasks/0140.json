@@ -2,12 +2,13 @@
   "id": "0140",
   "subject": "Move the holdout census and the ladder records off the public repo",
   "description": "A sweep on 2026-11-03 found that docs/experiments/nfi_multiyear_holdout_census_20261012.json, served by Pages since 2026-10-12, names 273 real holdout tiles (exact 5.12 km footprints, 208 of them holding NFI plots), and that the rung-ablation ladder records (ladder_miou_v2_2026-10-13.md, ladder_miou_v2_20261013.json, ladder_distill_stage.md) publish paper results. Tobias decided: remove the census from main with a private copy first and extend the tile guard to holdoutval_ names, without a history rewrite; and make the ladder files private. Private copies: TobiasEdman/imintengine-experiments PR #2. Scope: remove the four files, repoint references to private pointers, extend test_no_nfi_tile_locations_tracked, move test fixtures outside Sweden's tile range, regenerate the ladder manifests' plan line. Not in scope: git history rewrite, GitHub Support, the SLU notice (Tobias), other result files Tobias chose to keep public. Review: Codex.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/privacy-census-ladder",
   "created_at": "2026-11-03T15:20:00Z",
-  "updated_at": "2026-11-03T15:16:41Z",
+  "updated_at": "2026-11-03T15:33:55Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-03T15:16:41Z"
+  "claimed_at": "2026-11-03T15:16:41Z",
+  "completed_at": "2026-11-03T15:33:55Z"
 }
