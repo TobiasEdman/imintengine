@@ -128,6 +128,7 @@ class TrainingConfig:
     log_training_exposure: bool = False
     max_class_weight: float = 5.0
     weighting_method: str = "sqrt"                    # "inverse", "sqrt", "effective_number"
+    class_stats_path: str | None = None                # None → <data_dir>/class_stats.json
     device: str | None = None                          # Auto-detect
 
     # ── Architecture v5 ──────────────────────────────────────────────────

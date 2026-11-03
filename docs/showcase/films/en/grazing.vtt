@@ -1,13 +1,13 @@
 WEBVTT
 
-00:00:00.450 --> 00:00:09.890
+00:00:00.450 --> 00:00:09.250
 Study grazing activity over a season. The showcase follows agricultural parcels northeast of Lund using a satellite time series.
 
-00:00:11.010 --> 00:00:18.050
+00:00:10.370 --> 00:00:17.410
 Agricultural parcel boundaries link vegetation observations to the areas being assessed.
 
-00:00:19.170 --> 00:00:24.610
+00:00:18.530 --> 00:00:23.970
 Seasonal changes in vegetation and water indices feed the grazing classifier.
 
-00:00:26.170 --> 00:00:36.250
+00:00:25.530 --> 00:00:35.610
 The configured example reports 68 active, 8 inactive and 4 without a valid classification. Confidence is not measured accuracy.

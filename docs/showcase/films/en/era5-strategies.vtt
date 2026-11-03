@@ -1,13 +1,13 @@
 WEBVTT
 
-00:00:00.450 --> 00:00:09.570
+00:00:00.450 --> 00:00:07.330
 Which dates are worth downloading? The Skåne showcase compares six filtering strategies for selecting usable satellite scenes.
 
-00:00:10.690 --> 00:00:17.410
+00:00:08.450 --> 00:00:15.170
 These historical totals combine live selection measurements with estimated spectral-download times.
 
-00:00:18.530 --> 00:00:26.210
+00:00:16.290 --> 00:00:23.970
 Mean cloud optical thickness describes the selected images. Lower values indicate less model-estimated cloud.
 
-00:00:27.330 --> 00:00:35.010
+00:00:25.090 --> 00:00:32.770
 The benchmark used an earlier weather filter. Current conditions and the updated filter need fresh evaluation.

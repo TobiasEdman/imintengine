@@ -1,13 +1,13 @@
 WEBVTT
 
-00:00:00.450 --> 00:00:09.570
+00:00:00.450 --> 00:00:07.650
 Radar observations near Skagen. Sentinel-1 observes radar reflections from the anchorage, including through cloud and darkness.
 
-00:00:10.690 --> 00:00:16.130
+00:00:08.770 --> 00:00:14.210
 The model uses current and earlier radar observations from the same orbit.
 
-00:00:17.690 --> 00:00:25.050
+00:00:15.770 --> 00:00:23.130
 The displayed grid also contains nine lower-score candidates. None has been matched to AIS.
 
-00:00:26.170 --> 00:00:32.090
+00:00:24.250 --> 00:00:30.170
 The image is not terrain-corrected. Predicted vessel attributes and positions need validation.

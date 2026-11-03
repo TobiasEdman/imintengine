@@ -37,7 +37,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.tile_fetch import fetch_nmd_label_local
 from imint.training.tile_time import resolve_tile_year
-from imint.schema.unified_schema import merge_all, merge_all_2023, UNIFIED_CLASS_NAMES
+from imint.schema.unified_schema import (
+    NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES, merge_all, merge_all_2023,
+)
 
 def _compute_nmd_area_map(nmd_label: np.ndarray, pixel_ha: float = 0.01) -> np.ndarray:
     """Per-pixel area map derived from NMD raster via connected components.
@@ -362,8 +364,8 @@ def build_tile_label(
                 f"nmd_label_raw out of range: dtype={nmd_label.dtype} "
                 f"max={int(nmd_label.max())} (expected uint8, max <= 19)"
             )
-        # Unified label must be in range: 2018 → <=22, 2023 → <=27.
-        _max_unified = 27 if nmd_version == 2023 else 22
+        # Unified label must be in range: 2018 → <=22, 2023 → the full schema.
+        _max_unified = NUM_UNIFIED_CLASSES - 1 if nmd_version == 2023 else 22
         if int(unified.max()) > _max_unified:
             raise AssertionError(
                 f"unified label out of range: max={int(unified.max())} "

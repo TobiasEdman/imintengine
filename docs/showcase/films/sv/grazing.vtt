@@ -1,13 +1,13 @@
 WEBVTT
 
-00:00:00.450 --> 00:00:08.450
+00:00:00.450 --> 00:00:08.770
 Studera betesaktivitet under en säsong. Exemplet följer jordbruksområden nordost om Lund med en tidsserie av satellitbilder.
 
-00:00:09.570 --> 00:00:14.690
+00:00:09.890 --> 00:00:15.010
 Jordbruksområdenas gränser kopplar observationer av vegetationen till de ytor som bedöms.
 
-00:00:16.570 --> 00:00:22.170
+00:00:16.890 --> 00:00:22.490
 Säsongsförändringar i vegetations- och vattenindex används som indata till betesklassificeringen.
 
-00:00:23.570 --> 00:00:33.490
+00:00:23.890 --> 00:00:33.810
 Det konfigurerade exemplet rapporterar 68 aktiva, 8 inaktiva och 4 utan giltig klassificering. Modellens säkerhetsmått är inte uppmätt noggrannhet.
