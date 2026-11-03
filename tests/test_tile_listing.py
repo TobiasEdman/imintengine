@@ -30,13 +30,13 @@ def _touch(path, size=0):
 def _populate(tmp_path):
     """Two real tiles plus one temp in each spelling seen in the repo."""
     real = [
-        _touch(tmp_path / "holdoutval_99_1404_2024.npz", 32),
-        _touch(tmp_path / "holdoutval_99_1405_2024.npz", 32),
+        _touch(tmp_path / "holdoutval_9_4_2024.npz", 32),
+        _touch(tmp_path / "holdoutval_9_5_2024.npz", 32),
     ]
     temps = [
-        _touch(tmp_path / "holdoutval_99_1406_2024.npz.tmp.npz"),  # savez spelling
-        _touch(tmp_path / "holdoutval_99_1407_2024.tmp.npz"),      # [:-4] spelling
-        _touch(tmp_path / "holdoutval_99_1408_2024.vpp_tmp.npz"),  # mkstemp infix
+        _touch(tmp_path / "holdoutval_9_6_2024.npz.tmp.npz"),  # savez spelling
+        _touch(tmp_path / "holdoutval_9_7_2024.tmp.npz"),      # [:-4] spelling
+        _touch(tmp_path / "holdoutval_9_8_2024.vpp_tmp.npz"),  # mkstemp infix
     ]
     return real, temps
 

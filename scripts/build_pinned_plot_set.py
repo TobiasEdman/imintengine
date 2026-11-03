@@ -7,7 +7,8 @@ head's out-of-fold forest-type accuracy under a pinned protocol
 assignment depends only on the sample count and the label vector, so the
 comparison is controlled if and only if every column scores the SAME
 plots in the SAME canonical order. Nothing enforced that
-(docs/experiments/ladder_distill_stage.md, problem 2): CROMA and
+(ladder_distill_stage.md, problem 2; kept privately, in the private
+experiments repo, until the paper): CROMA and
 TerraMind can only forward tiles that carry ``s1_vv_vh``, so their
 feature parquets naturally cover fewer plots than the other four
 columns'.

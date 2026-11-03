@@ -3,7 +3,7 @@
 # pinned-protocol distillability OOF → deployable head → dense
 # sidecars in /cephfs/distill/prithvi300m_r2 (consumed by rungs 3/4).
 # Prereq: ladder-distill-pinned-plots (once, shared).
-# Plan: docs/experiments/ladder_distill_stage.md
+# Plan: ladder_distill_stage.md (private experiments repo, until the paper)
 apiVersion: batch/v1
 kind: Job
 metadata:

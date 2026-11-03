@@ -4,7 +4,7 @@
 # (croma_r2_crop_distillability.json). Evidence for the R5
 # decision — writes NO gate, feeds NO queue rung.
 # Prereq: ladder-lucas-crop-split (once, shared).
-# Plan: docs/experiments/ladder_distill_stage.md
+# Plan: ladder_distill_stage.md (private experiments repo, until the paper)
 apiVersion: batch/v1
 kind: Job
 metadata:

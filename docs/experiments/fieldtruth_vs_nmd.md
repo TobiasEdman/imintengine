@@ -2,7 +2,7 @@
 
 **Status:** PROVISIONAL historical numbers; held-out provenance not verified here
 **Created:** 2026-09-26 · **Review update:** 2026-10-12
-**Parent:** [`ladder_distill_stage.md`](ladder_distill_stage.md) ·
+**Parent:** `ladder_distill_stage.md` (kept privately, in the private experiments repo, until the paper) ·
 **Related:** [`lucas_validation_plan.md`](lucas_validation_plan.md)
 
 Every earlier comparison in this project scored the ladder against NMD — a map
@@ -134,7 +134,9 @@ The 2024 plot-driven campaign is recorded in PR #67. The September table
 is being superseded by a multi-year evaluation, about 1,000 per
 inventory year 2018–2024 (plan: #69). Merged #71 versioned the 2024
 leftovers and ran the
-[2026-10-12 legacy-holdout census](https://github.com/TobiasEdman/imintengine/blob/91902bf2cf3b8f9bef7aa0579da52d877245fbb8/docs/experiments/nfi_multiyear_holdout_census_2026-10-12.md),
+[2026-10-12 legacy-holdout census](nfi_multiyear_holdout_census_2026-10-12.md)
+(its per-tile record is kept privately, in the private experiments repo:
+tile identities are location data),
 which excludes 212 tiles that overlap same-year training imagery; #75
 enriches the remaining holdout copy and tops up 2018–2022; #68 freezes and
 scores the result. These later populations do not retroactively validate the

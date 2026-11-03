@@ -53,7 +53,8 @@ do not interpret a larger v2 number as improvement over them. No results,
 checkpoints or datasets have been recomputed by this migration.
 One explicit rescore has been made since, from stored best-epoch confusion
 matrices and without modifying any log or checkpoint: the 28 distillation-ladder
-cells, in [ladder_miou_v2_2026-10-13.md](../experiments/ladder_miou_v2_2026-10-13.md).
+cells. That record (`ladder_miou_v2_2026-10-13.md`) is kept privately, in the
+private experiments repo, until the paper.
 
 | Artifact | Historical mIoU / affected context |
 |---|---|
@@ -66,7 +67,7 @@ cells, in [ladder_miou_v2_2026-10-13.md](../experiments/ladder_miou_v2_2026-10-1
 | [NFI findings](../data/nfi_validation_findings.md), [v8 JSON](../data/nfi-validation-v8.json) | checkpoint validation mIoU 0.5352, 0.5148 |
 | [LULC dashboard data](../data/lulc-data.json) | displayed mIoU 43.27 |
 | [2026-04-27 checkpoint notes](checkpoint_2026-04-27.md), [hyperparameters](hyperparameters.md) | 0.3663, 0.3082, 0.2675 |
-| [VPP repair](../experiments/vpp_repair_effect.md), [label-source ladder](../experiments/label_source_ladder.md), [model race](../experiments/model_race_plan.md), [ladder distillation](../experiments/ladder_distill_stage.md) | historical training/validation mIoU tables and selection comparisons |
+| [VPP repair](../experiments/vpp_repair_effect.md), [label-source ladder](../experiments/label_source_ladder.md), [model race](../experiments/model_race_plan.md), ladder distillation (`ladder_distill_stage.md`, kept privately until the paper) | historical training/validation mIoU tables and selection comparisons |
 | [Conversation logs](../conversation_log/) | historical training tables |
 | Existing training checkpoints | stored best scores and the historical `best_model.pt` choice; unversioned full-state resume is refused |
 

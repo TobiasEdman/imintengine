@@ -4,8 +4,8 @@ Measured 2026-10-12 on the data volume, read-only, three times: a first run
 with the initial script (05:57–06:38 UTC) and two reruns with the script as
 corrected after Codex's two reviews of PR #71 (17:19–17:57 and 18:06–18:51
 UTC). Every count was identical across the three runs; the numbers below are
-the last run's, and all three are in the
-[JSON record](nfi_multiyear_holdout_census_20261012.json).
+the last run's. The per-tile census record, with all three runs, is kept
+privately, in the private experiments repo: tile identities are location data.
 This is the readiness check decision D3 asked for before the August-2026
 off-footprint holdout may be reused as evaluation imagery. It is a planning
 result: no freeze, no fetch, no GPU, no byte written under `/data`.
@@ -87,8 +87,8 @@ no tile has).
 | **Total** | 154 | **6,821** | 6,461 | 5,586 | 856 / 1,005 |
 
 The 212 excluded tiles include 58 without any NFI plot (LUCAS-driven tiles);
-their names are in the JSON record so the evaluation copy leaves them out
-reproducibly. No plot-year failed the value gate. The "also on a v4 tile"
+their names are in the private per-tile record so the evaluation copy leaves
+them out reproducibly. No plot-year failed the value gate. The "also on a v4 tile"
 column of the first table is the overlap with plots already indexed in-crop
 on cohort or 2024-campaign tiles: for 2024 these are the campaign's own
 evaluation tiles (1,326 of 1,402), for 2018 and 2022 they sit on *training*
@@ -110,7 +110,7 @@ identity module by sha256.
 | Files present | 1,463 of 1,650 planned; 187 never built (2018 2, 2019 17, 2020 13, 2021 4, 2022 124, 2023 13, 2024 14) |
 | Readable as root | 1,463; unreadable 0; none outside the Phase-A manifest |
 | Admitted (year resolvable, no contradiction between explicit year and spectral dates) | 1,463; quarantined 0 |
-| Not world-readable | 84, all mode `0600 uid=0` (2018 22, 2019 4, 2020 4, 2021 3, 2022 26, 2023 9, 2024 16); names in the JSON record |
+| Not world-readable | 84, all mode `0600 uid=0` (2018 22, 2019 4, 2020 4, 2021 3, 2022 26, 2023 9, 2024 16); names in the private per-tile record |
 | Spectral `(24, 512, 512)`, bbox on the 10 m lattice, bbox equal to the manifest | 1,463 / 1,463 / 1,463 |
 | Tile year equals manifest year (lenient and strict readers agree) | 1,463 |
 
@@ -179,7 +179,7 @@ set is excluded by decision; the other-year overlap stays allowed.
   18:51:34 UTC (45 min). PVC mounted `readOnly` at volume and mount level.
   CPU only. Log 54,090 bytes, sha256
   `53d3582b4c73679e67a821ce3cadd9473e4c29e4ab1b9c6e9d5bfbbd92023909`.
-- Earlier runs, same counts, kept under `previous_runs` in the JSON record:
+- Earlier runs, same counts, kept under `previous_runs` in the private per-tile record:
   `nfi-holdout-census-v2` (script `df7dea1…`, 17:19–17:57 UTC, log sha256
   `2a723217…`; parsed files counted as fully accounted for) and
   `nfi-holdout-census` (script `54c526e…`, 05:57–06:38 UTC, log sha256
@@ -192,9 +192,9 @@ set is excluded by decision; the other-year overlap stays allowed.
   `train_dir` pointing at the holdout directory inconclusive, a
   `train_tiles.json` under `checkpoints/` detected, quarantined tile counted
   nowhere, identity leak guard, wrong identity module refused).
-- Raw plot identities and coordinates stayed in the data environment; the
-  report and the JSON record carry counts, year tables, tile names and file
-  paths only.
+- Raw plot identities and coordinates stayed in the data environment. This
+  report carries counts, year tables and file paths only; the per-tile record,
+  which also names tiles, is kept privately.
 
 ## What this does not decide
 

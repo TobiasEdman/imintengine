@@ -29,13 +29,13 @@ def data_root(tmp_path: Path) -> Path:
     root = tmp_path / "data"
     for sub in ("holdout_eval_512", "nfi", "distill/heads", "unified_v2_512", "vpp_wekeo", "manifests"):
         (root / sub).mkdir(parents=True)
-    kept = _bbox(100, 1250)                      # evaluation-copy tile, 2019
-    _tile(root / "holdout_eval_512/holdoutval_100_1250_2019.npz", kept, 2019, stamped=True)
-    train = _bbox(140, 1250)                     # same-year (2019) training tile
+    kept = _bbox(100, 1100)                      # evaluation-copy tile, 2019
+    _tile(root / "holdout_eval_512/holdoutval_100_1100_2019.npz", kept, 2019, stamped=True)
+    train = _bbox(140, 1100)                     # same-year (2019) training tile
     np.savez(root / "unified_v2_512/tile_a.npz",
              bbox_3006=np.array([train["west"], train["south"], train["east"], train["north"]]),
              year=np.array(2019), spectral=np.zeros((2, 2, 2)))
-    other = _bbox(160, 1250)                     # other-year (2021) training tile
+    other = _bbox(160, 1100)                     # other-year (2021) training tile
     np.savez(root / "unified_v2_512/tile_b.npz",
              bbox_3006=np.array([other["west"], other["south"], other["east"], other["north"]]),
              year=np.array(2021), spectral=np.zeros((2, 2, 2)))
@@ -43,7 +43,7 @@ def data_root(tmp_path: Path) -> Path:
     def at(bbox, dx, dy):
         return bbox["west"] + dx, bbox["north"] - dy
 
-    free_a, free_b, free_c = _bbox(120, 1250), _bbox(121, 1250), _bbox(180, 1250)
+    free_a, free_b, free_c = _bbox(120, 1100), _bbox(121, 1100), _bbox(180, 1100)
     plots = _plots([
         (880001, 1, 2019, *at(kept, 2560, 2560)),    # covered by the evaluation copy
         (880002, 1, 2019, *at(kept, 2560, 2000)),    # in a teacher pool
@@ -53,7 +53,7 @@ def data_root(tmp_path: Path) -> Path:
         (880006, 1, 2019, *at(free_b, 100, 2560)),   # neighbour free cell, own tile
         (880007, 1, 2019, *at(other, 2560, 2560)),   # on an other-year training tile: allowed
         (880008, 1, 2019, *at(free_c, 2560, 2560)),  # far free cell
-        (880009, 1, 2019, *at(_bbox(139, 1250), 5000, 2560)),  # cell next to the training tile; centred tile overlaps it -> dropped
+        (880009, 1, 2019, *at(_bbox(139, 1100), 5000, 2560)),  # cell next to the training tile; centred tile overlaps it -> dropped
     ])
     plots.loc[plots["TractID"] == 880008, "VolSpruce"] = -5.0  # invalid -> never a candidate
     plots.to_parquet(root / "nfi/nfi_plots.parquet", index=False)

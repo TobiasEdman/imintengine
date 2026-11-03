@@ -57,9 +57,9 @@ Plot-years are NFI identities `(TractID, PlotID, Year)`.
 ## Current evidence: #71 census (2026-10-12)
 
 The authoritative dated source is the
-[census report at main 91902bf](https://github.com/TobiasEdman/imintengine/blob/91902bf2cf3b8f9bef7aa0579da52d877245fbb8/docs/experiments/nfi_multiyear_holdout_census_2026-10-12.md)
-and its
-[JSON record](https://github.com/TobiasEdman/imintengine/blob/91902bf2cf3b8f9bef7aa0579da52d877245fbb8/docs/experiments/nfi_multiyear_holdout_census_20261012.json).
+[census report](../experiments/nfi_multiyear_holdout_census_2026-10-12.md).
+Its per-tile census record is kept privately, in the private experiments
+repo: tile identities are location data.
 
 - 1,463 of 1,650 planned files exist. The census identifies the 187 not built.
 - Named-tile scans completed with no training/selection use detected. This

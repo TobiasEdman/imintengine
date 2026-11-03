@@ -328,6 +328,14 @@ def test_no_nfi_plot_coordinates_tracked() -> None:
 
 #: An NFI tile name: nfi<year>_<west>_<south> in SWEREF99 TM metres.
 _NFI_TILE_NAME = re.compile(r"nfi20\d\d_\d{6}_\d{7}")
+#: A holdout evaluation tile name: holdoutval_<tx>_<ty>[_<year>] on the
+#: 5120 m lattice, i.e. west = tx * 5120 and south = ty * 5120.
+_HOLDOUT_TILE_NAME = re.compile(r"holdoutval_(\d+)_(\d+)(?:_20\d\d)?(?!\d)")
+_HOLDOUT_TILE_M = 5120
+#: Sweden in SWEREF99 TM metres (EPSG:3006 area of use, with margin). A
+#: holdout tile whose corner falls outside is a synthetic fixture.
+_SWEDEN_E = (180_000, 1_100_000)
+_SWEDEN_N = (6_000_000, 7_800_000)
 #: A literal SWEREF99 TM (easting, northing) pair.
 _COORD_TUPLE = re.compile(r"\(\s*(\d{6})(?:\.\d+)?\s*,\s*(\d{7})(?:\.\d+)?\s*\)")
 #: An NFI file: "nfi", "holdout" or "fieldtruth" at the start of a path token
@@ -337,14 +345,22 @@ _TEXT_SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".txt", ".sh", ".toml"
                   ".cfg", ".ini", ".csv", ".html", ".js", ".ipynb"}
 
 
+def _in_sweden(east: int, north: int) -> bool:
+    return (_SWEDEN_E[0] <= east < _SWEDEN_E[1]) and (_SWEDEN_N[0] <= north < _SWEDEN_N[1])
+
+
 def _nfi_location_hits(rel: str, text: str) -> list[str]:
-    """NFI tile names anywhere, and coordinate pairs in NFI files.
+    """NFI and holdout tile names anywhere, and coordinate pairs in NFI files.
 
     NFI tiles are centred on the plots they carry, so a tile name or a tile
-    corner in NFI code locates a plot. A pair whose numbers are both whole
-    100 km is a synthetic test grid point, not a location.
+    corner in NFI code locates a plot. A holdout tile name gives its 5.12 km
+    footprint, and most holdout tiles carry NFI plots. A holdout name whose
+    corner lies outside Sweden, and a pair whose numbers are both whole
+    100 km, are synthetic test values, not locations.
     """
     hits = _NFI_TILE_NAME.findall(text)
+    hits += [m.group(0) for m in _HOLDOUT_TILE_NAME.finditer(text)
+             if _in_sweden(int(m.group(1)) * _HOLDOUT_TILE_M, int(m.group(2)) * _HOLDOUT_TILE_M)]
     if _NFI_PATH.search(rel.lower()):
         hits += [m.group(0) for m in _COORD_TUPLE.finditer(text)
                  if int(m.group(1)) % 100_000 or int(m.group(2)) % 100_000]
@@ -373,13 +389,46 @@ def test_nfi_location_patterns(rel: str, text: str, found: bool) -> None:
     assert bool(_nfi_location_hits(rel, text)) is found
 
 
+def _holdout_name(tx: int, ty: int, year: int | None = 2019) -> str:
+    """Built, so no holdout name inside Sweden sits literally in this file."""
+    return "holdoutval_%d_%d" % (tx, ty) + ("_%d" % year if year else "")
+
+
+# Lattice indices around the bounds: tx 35|36 and 214|215 straddle the east
+# limits, ty 1171|1172 and 1523|1524 the north limits.
+@pytest.mark.parametrize("rel, tx, ty, year, found", [
+    ("tests/test_tile_listing.py", 100, 1300, 2024, True),      # any file, not only NFI paths
+    ("docs/experiments/x.md", 100, 1300, None, True),           # the year suffix is optional
+    ("docs/experiments/x.json", 36, 1172, 2018, True),           # south-west corner, inside
+    ("docs/experiments/x.json", 214, 1523, 2018, True),          # north-east corner, inside
+    ("tests/test_x.py", 35, 1300, 2019, False),                  # west of Sweden
+    ("tests/test_x.py", 215, 1300, 2019, False),                 # east of Sweden
+    ("tests/test_x.py", 100, 1171, 2019, False),                 # south of Sweden
+    ("tests/test_x.py", 100, 1524, 2019, False),                 # north of Sweden
+    ("tests/test_census_holdout_val_512.py", 100, 1100, 2019, False),  # the census fixtures
+    ("tests/test_build_labels_pickle_safety.py", 9, 9, 2022, False),
+])
+def test_holdout_tile_names_are_hits_only_inside_sweden(
+        rel: str, tx: int, ty: int, year: int | None, found: bool) -> None:
+    assert bool(_nfi_location_hits(rel, _holdout_name(tx, ty, year))) is found
+
+
+@pytest.mark.parametrize("text", [
+    "holdoutval_1",              # the dashboard fixture: no lattice index
+    "/data/holdout_val_512",     # the holdout directory
+])
+def test_holdout_text_without_a_lattice_name_is_not_a_hit(text: str) -> None:
+    assert not _nfi_location_hits("tests/test_x.py", text)
+
+
 def test_no_nfi_tile_locations_tracked() -> None:
     """No tracked text file may name an NFI tile or carry an NFI coordinate pair.
 
     The parquet guard above misses text: on 2026-10-26 a probe yaml put seven
     top-up tile corners into a public PR branch, and a recovered Job header
-    on main named three nfi2024 tiles. Plot locations stay in the data
-    environment; probes read them from the PVC.
+    on main named three nfi2024 tiles. On 2026-11-03 a published census
+    record was found naming 273 holdout tiles. Plot locations stay in the
+    data environment; probes read them from the PVC.
     """
     import subprocess
 

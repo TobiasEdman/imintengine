@@ -3,7 +3,7 @@
 # owns only one restricted durable state subPath and the narrow
 # Kubernetes reads/CAS updates required by the freeze protocol.
 # It intentionally retains API egress and has no TTL.
-# Plan: docs/experiments/ladder_distill_stage.md
+# Plan: ladder_distill_stage.md (private experiments repo, until the paper)
 apiVersion: v1
 kind: ServiceAccount
 metadata:

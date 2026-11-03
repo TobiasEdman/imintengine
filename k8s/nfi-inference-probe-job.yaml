@@ -15,8 +15,8 @@
 # the Pod. The log prints a timeline, the wall time, GPU memory and the dump's
 # provenance metadata; it never prints the accuracy JSON, so nobody sees a
 # held-out score before scoring is authorized. One GPU on a 2080 Ti node, as
-# the distill stage's teacher inference used (docs/experiments/
-# ladder_distill_stage.md); HF_HUB_OFFLINE makes a weight download fail
+# the distill stage's teacher inference used (ladder_distill_stage.md, kept
+# privately until the paper); HF_HUB_OFFLINE makes a weight download fail
 # instead of hang.
 #
 # Try 1 (2026-10-27 13:43-13:51Z) passed every identity check (7.5 min for
