@@ -1,10 +1,13 @@
 {
   "id": "0137",
   "subject": "Retitle the annual-map page for land use over several years",
-  "description": "Tobias asked on 2026-11-03 to replace the heading \"En plats. Ett år. En karta.\" on docs/lclu.html with one about following land use and land cover over several years, and chose \"Markanvändning och marktäcke 2017–2024.\" interactively, keeping the sentence under it. Scope: the h2 in docs/lclu.html only, with the year span kept on one line. Not in scope: the page title, the intro sentence, any script or style change, r9/r10. Review: Codex.",
-  "status": "pending",
+  "description": "Tobias asked on 2026-11-03 to replace the heading \"En plats. Ett \u00e5r. En karta.\" on docs/lclu.html with one about following land use and land cover over several years, and chose \"Markanv\u00e4ndning och markt\u00e4cke 2017\u20132024.\" interactively, keeping the sentence under it. Scope: the h2 in docs/lclu.html only, with the year span kept on one line. Not in scope: the page title, the intro sentence, any script or style change, r9/r10. Review: Codex.",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-heading",
   "created_at": "2026-11-03T13:12:00Z",
-  "updated_at": "2026-11-03T13:12:00Z"
+  "updated_at": "2026-11-03T13:16:50Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-03T13:16:50Z"
 }
