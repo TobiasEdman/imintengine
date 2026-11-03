@@ -5,13 +5,16 @@ interpreter while the resident model/API keeps its existing environment.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import shutil
+import selectors
 import subprocess
 import tempfile
 import threading
+import time
 import weakref
 
 from pyproj import Transformer
@@ -20,18 +23,64 @@ from shapely.ops import transform
 
 from imint.inference.lclu import (
     EMBEDDING, YEARS, Grid, InputUnavailable, ROOT, public_identity,
-    validate_bundle, verify_file,
+    validate_bundle, verify_file, preparation_identity,
 )
 from scripts.cache_predict import contract_pin, file_identity
+from imint.inference.lclu_storage import (
+    PREPARATION_BYTES, PREPARATION_LOG_BYTES, StorageBudget,
+)
+
+
+_TRUNCATED = b'[Earlier preparation output truncated]\n'
+
+
+def run_preparation(command: list[str], *, timeout: int, log_path: Path) -> None:
+    """Drain a child while retaining at most 1 MiB of diagnostics, including errors.
+
+    Neither disk nor memory grows with stdout/stderr volume. The deadline also
+    covers draining the pipe, and the child is reaped before its allowance is
+    released, including on timeout.
+    """
+    tail = bytearray()
+    truncated = False
+    keep = PREPARATION_LOG_BYTES - len(_TRUNCATED)
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT) as child:
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    for key, _ in selector.select(remaining):
+                        chunk = os.read(key.fileobj.fileno(), 65536)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        tail.extend(chunk)
+                        if len(tail) > keep:
+                            del tail[:-keep]
+                            truncated = True
+            child.wait(timeout=max(0, deadline - time.monotonic()))
+            if child.returncode:
+                raise subprocess.CalledProcessError(child.returncode, command)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            log_path.write_bytes((_TRUNCATED if truncated else b'') + tail)
 
 
 class RegionalSources:
     """Route each exact-year request to one independently qualified inventory."""
 
-    def __init__(self, settings: list[dict], base: Path, cache: Path):
+    def __init__(self, settings: list[dict], base: Path, cache: Path, *, storage=None):
         if not isinstance(settings, list) or not settings:
             raise ValueError('At least one regional preparation inventory is required')
-        self.sources = [RepositorySources(item, base, cache) for item in settings]
+        self.storage = storage or StorageBudget.from_environment(cache)
+        self.sources = [RepositorySources(item, base, cache, storage=self.storage) for item in settings]
 
     def years(self, grid: Grid) -> list[int]:
         return sorted({year for source in self.sources for year in source.years(grid)})
@@ -49,6 +98,12 @@ class RegionalSources:
 
     def prepare(self, grid: Grid, year: int) -> tuple[Path, dict]:
         return self._source(grid, year).prepare(grid, year)
+
+    def prepared(self, grid: Grid, year: int):
+        return self._source(grid, year).prepared(grid, year)
+
+    def check_preparation(self, grid: Grid, year: int) -> None:
+        self._source(grid, year).check_preparation(grid, year)
 
     def prefetch(self, bounds: tuple, year: int) -> dict:
         """Warm every inventory that reads remote tiles for this box and year."""
@@ -84,7 +139,7 @@ class RegionalSources:
 
 
 class RepositorySources:
-    def __init__(self, settings: dict, base: Path, cache: Path):
+    def __init__(self, settings: dict, base: Path, cache: Path, *, storage=None):
         self.settings = settings
         self.config_path = verify_file(settings['config'], base)
         self.config = json.loads(self.config_path.read_text())
@@ -96,8 +151,9 @@ class RepositorySources:
         # Resolving a venv's python symlink selects the base interpreter and
         # loses that environment's packages. Preserve the invoked executable.
         self.python = os.path.abspath(base / settings['python'])
-        self.cache = cache / 'lclu-inputs'
+        self.cache = cache.resolve() / 'lclu-inputs'
         self.cache.mkdir(parents=True, exist_ok=True)
+        self.storage = storage or StorageBudget.from_environment(cache)
         # One preparation per key at a time: a warm-up and a map request for
         # the same grid and year must not both stage and rename the target.
         # The API holds one worker process (its own flock), so a process lock
@@ -133,6 +189,8 @@ class RepositorySources:
     def identity(self, grid: Grid, year: int) -> dict:
         if year not in self.years(grid):
             raise InputUnavailable('Verifierad källtäckning saknas för platsen och året.')
+        if public_identity(file_identity(self.config_path)) != public_identity(self.settings['config']):
+            raise ValueError('Preparation configuration changed; restart with a new manifest')
         return {'source_config': public_identity(self.settings['config'])}
 
     def locations(self) -> list[dict]:
@@ -188,49 +246,61 @@ class RepositorySources:
                 lock = self._locks[key] = threading.Lock()
             return lock
 
-    def prepare(self, grid: Grid, year: int) -> tuple[Path, dict]:
+    def _target(self, grid: Grid, year: int) -> Path:
         identity = self.identity(grid, year)
-        if public_identity(file_identity(self.config_path)) != public_identity(self.settings['config']):
-            raise ValueError('Preparation configuration changed; restart with a new manifest')
-        producer = {str(p.relative_to(ROOT)): file_identity(p)['sha256'] for p in [
-            ROOT / 'scripts/prepare_lclu.py', ROOT / 'scripts/enrich_tiles_tessera.py',
-            ROOT / 'imint/inference/lclu.py', ROOT / 'imint/inference/lclu_sources.py',
-            ROOT / 'imint/inference/lclu_cog.py',
-            *sorted((ROOT / 'imint/training').glob('*.py')),
-            ROOT / 'imint/data/wekeo_vpp.py']}
+        producer = preparation_identity()
         key = contract_pin({'source': identity, 'grid': grid.describe(), 'year': year,
                             'producer': producer})
-        target = self.cache / key
-        with self._lock(key):
-            if not target.exists():
-                staging = Path(tempfile.mkdtemp(prefix='.preparing-', dir=self.cache))
-                try:
-                    command = [self.python, str(ROOT / 'scripts/prepare_lclu.py'),
-                               '--config', str(self.config_path), '--east', str(grid.east),
-                               '--north', str(grid.north), '--year', str(year),
-                               '--output', str(staging)]
-                    # Logs stay operator-side; no private paths/provider errors in HTTP.
-                    with (staging / 'preparation.log').open('w') as log:
-                        subprocess.run(command, cwd=ROOT, timeout=self.timeout, check=True,
-                                       stdout=log, stderr=subprocess.STDOUT)
-                    entry = json.loads((staging / 'entry.json').read_text())
-                    validate_bundle(verify_file(entry['input'], staging), entry['input'], grid, year)
-                    os.rename(staging, target)
-                except Exception as exc:
-                    if (staging / 'preparation.log').is_file():
-                        logs = self.cache / 'failures'
-                        logs.mkdir(exist_ok=True)
-                        log_path = logs / f'{staging.name}.log'
-                        os.replace(staging / 'preparation.log', log_path)
-                        raise RuntimeError(f'Annual preparation failed; operator log: {log_path}') from exc
-                    raise
-                finally:
-                    if staging.exists():
-                        shutil.rmtree(staging)
-        entry = json.loads((target / 'entry.json').read_text())
-        if (entry['year'] != year or entry['center_3006'] != [grid.east, grid.north]
-                or entry['embedding'] != EMBEDDING
-                or entry['source_config'] != public_identity(self.settings['config'])):
-            raise ValueError('Prepared input identity mismatch')
-        path = verify_file(entry['input'], target)
-        return path, entry
+        return self.cache / key
+
+    def check_preparation(self, grid: Grid, year: int) -> None:
+        if not self._target(grid, year).is_dir():
+            self.storage.check(PREPARATION_BYTES)
+
+    def prepare(self, grid: Grid, year: int) -> tuple[Path, dict]:
+        """Warm an input; callers reading it later must use the prepared lease."""
+        with self.prepared(grid, year) as result:
+            return result
+
+    @contextmanager
+    def prepared(self, grid: Grid, year: int):
+        target = self._target(grid, year)
+        with self.storage.lease(target):
+            with self._lock(target.name):
+                if not target.exists():
+                    log = self.cache / 'failures' / f'{target.name}.log'
+                    with self.storage.reserve(PREPARATION_BYTES, paths=(target, log)):
+                        self._prepare(grid, year, target)
+                        log.unlink(missing_ok=True)
+            entry = json.loads((target / 'entry.json').read_text())
+            if (entry['year'] != year or entry['center_3006'] != [grid.east, grid.north]
+                    or entry['embedding'] != EMBEDDING
+                    or entry['source_config'] != public_identity(self.settings['config'])):
+                raise ValueError('Prepared input identity mismatch')
+            path = verify_file(entry['input'], target)
+            yield path, entry
+
+    def _prepare(self, grid: Grid, year: int, target: Path) -> None:
+        staging = Path(tempfile.mkdtemp(prefix='.preparing-', dir=self.cache))
+        try:
+            command = [self.python, str(ROOT / 'scripts/prepare_lclu.py'),
+                       '--config', str(self.config_path), '--east', str(grid.east),
+                       '--north', str(grid.north), '--year', str(year),
+                       '--output', str(staging)]
+            # Logs stay operator-side; no private paths/provider errors in HTTP.
+            run_preparation(command, timeout=self.timeout,
+                            log_path=staging / 'preparation.log')
+            entry = json.loads((staging / 'entry.json').read_text())
+            validate_bundle(verify_file(entry['input'], staging), entry['input'], grid, year)
+            os.rename(staging, target)
+        except Exception as exc:
+            if (staging / 'preparation.log').is_file():
+                logs = self.cache / 'failures'
+                logs.mkdir(exist_ok=True)
+                log_path = logs / f'{target.name}.log'
+                os.replace(staging / 'preparation.log', log_path)
+                raise RuntimeError(f'Annual preparation failed; operator log: {log_path}') from exc
+            raise
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)

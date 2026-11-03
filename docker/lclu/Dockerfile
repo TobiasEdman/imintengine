@@ -10,6 +10,7 @@ COPY scripts/ scripts/
 COPY config/ config/
 COPY docs/ docs/
 COPY docker/lclu/run.py docker/lclu/run.py
+COPY docker/lclu/layout.py docker/lclu/layout.py
 COPY docker/lclu/smoke.py docker/lclu/smoke.py
 COPY SOURCE_MANIFEST.json SOURCE_MANIFEST.json
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/imintengine \

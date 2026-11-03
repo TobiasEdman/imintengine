@@ -48,7 +48,9 @@ os.environ['PYTHONPATH'] = str(source)
 os.environ['IMINT_LCLU_MANIFEST'] = '/work/demo/serving.json'
 os.environ['IMINT_API_OUTPUT_DIR'] = '/work/results'
 os.environ['LCLU_EXECUTION_MODE'] = 'source-recipe'
-system_root = Path('/work/system/expat-2.5.0-1-deb12u5')
+sys.path.insert(0, str(source))
+from docker.lclu.layout import system_runtime_root
+system_root = system_runtime_root(Path('/work'))
 os.environ['LD_LIBRARY_PATH'] = subprocess.check_output(
     [sys.executable, str(source/'docker/lclu/system_runtime.py'), str(system_root)], text=True).strip()
 os.chdir(source)

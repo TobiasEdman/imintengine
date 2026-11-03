@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import version
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -28,7 +29,7 @@ from rasterio.warp import Resampling, calculate_default_transform, reproject, tr
 from imint.job import GeoContext
 from imint.schema.unified_schema import UNIFIED_CLASSES
 from imint.inference.lclu_legend import MAP_COLORS, legend
-from imint.training.tile_config import TileConfig
+from imint.tile_grid import bounds_from_center
 from scripts.cache_predict import atomic_write, contract_pin, file_identity
 
 YEARS = tuple(range(2017, 2026))
@@ -61,12 +62,12 @@ class Grid:
         if not (10 <= lon <= 25 and 55 <= lat <= 70):
             raise InputUnavailable("Välj en plats inom Sveriges datatäckning.")
         east, north = Transformer.from_crs(4326, 3006, always_xy=True).transform(lon, lat)
-        bbox = TileConfig(SOURCE_SIZE).bbox_from_center(east, north)
+        bbox = bounds_from_center(east, north, SOURCE_SIZE)
         return cls((bbox["west"] + bbox["east"]) // 2,
                    (bbox["south"] + bbox["north"]) // 2)
 
     def bounds(self, size: int = SOURCE_SIZE) -> dict:
-        return TileConfig(size).bbox_from_center(self.east, self.north)
+        return bounds_from_center(self.east, self.north, size)
 
     def transform(self, size: int = SOURCE_SIZE) -> Affine:
         b = self.bounds(size)
@@ -247,6 +248,14 @@ class BundleCatalog:
         validate_bundle(path, entry["input"], grid, year)
         return path, entry
 
+    @contextmanager
+    def prepared(self, grid: Grid, year: int):
+        # Qualified fixed bundles live outside the disposable runtime cache.
+        yield self.prepare(grid, year)
+
+    def check_preparation(self, grid: Grid, year: int) -> None:
+        self.entry(grid, year)
+
     def identity(self, grid: Grid, year: int) -> dict:
         entry = self.entry(grid, year)
         return {"input": public_identity(entry["input"]),
@@ -346,45 +355,78 @@ def export_map(prediction: np.ndarray, valid: np.ndarray, grid: Grid, output: Pa
             "class_counts": {str(k): int((classes == k).sum()) for k in UNIFIED_CLASSES}}
 
 
+def preparation_identity() -> dict:
+    """Bind both prepared inputs and result requests to the same producer code."""
+    files = [ROOT / 'scripts/prepare_lclu.py', ROOT / 'scripts/enrich_tiles_tessera.py',
+             Path(__file__), ROOT / 'imint/inference/lclu_sources.py',
+             ROOT / 'imint/inference/lclu_cog.py', ROOT / 'imint/inference/lclu_storage.py',
+             *sorted((ROOT / 'imint/training').glob('*.py')),
+             ROOT / 'imint/data/wekeo_vpp.py']
+    return {str(p.relative_to(ROOT)): file_identity(p)['sha256'] for p in files}
+
+
 def implementation_identity() -> dict:
     # Hash the numerical path and serving code, including uncommitted changes.
     files = [ROOT / "scripts/inference_comparison.py", ROOT / "scripts/cache_predict.py",
              ROOT / "imint/training/unified_dataset.py", ROOT / "imint/training/tile_config.py",
+             ROOT / "imint/tile_grid.py",
              ROOT / "imint/exporters/export.py", ROOT / "imint/schema/unified_schema.py",
              Path(__file__), ROOT / "imint/inference/lclu_legend.py",
              ROOT / "imint/inference/lclu_sources.py",
              ROOT / "imint/inference/lclu_cog.py",
+             ROOT / "imint/inference/lclu_storage.py",
              ROOT / "scripts/prepare_lclu.py"] + sorted((ROOT / "imint/fm").rglob("*.py"))
-    return {str(p.relative_to(ROOT)): file_identity(p)["sha256"] for p in files}
+    return {**{str(p.relative_to(ROOT)): file_identity(p)["sha256"] for p in files},
+            **preparation_identity()}
 
 
 class LcluService:
-    def __init__(self, model, sources, output_root: Path):
+    def __init__(self, model, sources, output_root: Path, *, storage=None):
+        from imint.inference.lclu_storage import StorageBudget
         self.model, self.sources = model, sources
-        self.output_root = output_root / "lclu"
+        self.storage = storage or getattr(sources, 'storage', None) or StorageBudget.from_environment(output_root)
+        self.output_root = output_root.resolve() / "lclu"
+        if self.output_root.parent != self.storage.root:
+            raise ValueError("Inputs and results must share the owned storage root")
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.code = implementation_identity()
         self.identity = {"version": 1, "model": model.contract, "implementation": self.code,
                          "runtime": {p: version(p) for p in ("torch", "numpy", "rasterio", "pyproj", "Pillow", "scipy")},
                          "embedding": EMBEDDING, "legend": legend(), "crop": [4, 508, 4, 508]}
 
+        # Each atomically published result sidecar is a persistent request ->
+        # content-key index. Rebuild the small in-memory lookup once at startup;
+        # serving a saved map never depends on retaining its prepared input.
+        self._results = {}
+        for metadata in self.output_root.glob('*/result.json'):
+            if not re.fullmatch(r'[a-f0-9]{64}', metadata.parent.name):
+                continue
+            result = json.loads(metadata.read_text())
+            request = result.get('request_key')
+            if request:
+                if request in self._results and self._results[request] != metadata.parent.name:
+                    raise RuntimeError('Conflicting cached maps for one source identity')
+                self._results[request] = metadata.parent.name
+
     @classmethod
     def from_manifest(cls, path: Path, output_root: Path) -> "LcluService":
+        from imint.inference.lclu_storage import StorageBudget
         manifest = json.loads(path.read_text())
         if manifest["version"] != 1:
             raise ValueError("Unsupported serving manifest")
         if sum(key in manifest for key in ("preparation", "preparations", "inputs")) != 1:
             raise ValueError("Exactly one source catalog type is required")
+        storage = StorageBudget.from_environment(output_root)
         if "preparations" in manifest:
             from imint.inference.lclu_sources import RegionalSources
-            sources = RegionalSources(manifest["preparations"], path.parent, output_root)
+            sources = RegionalSources(manifest["preparations"], path.parent, output_root, storage=storage)
         elif "preparation" in manifest:
             from imint.inference.lclu_sources import RepositorySources
-            sources = RepositorySources(manifest["preparation"], path.parent, output_root)
+            sources = RepositorySources(manifest["preparation"], path.parent, output_root, storage=storage)
         else:
             sources = BundleCatalog(manifest["inputs"], path.parent)
         model = TesseraR4(manifest["checkpoint"], path.parent, manifest.get("device", "cpu"))
-        return cls(model, sources, output_root)
+        return cls(model, sources, output_root, storage=storage)
 
     def key(self, grid: Grid, year: int) -> str:
         if type(year) is not int or year not in YEARS:
@@ -411,46 +453,69 @@ class LcluService:
         except (OSError, ValueError, KeyError) as exc:
             raise RuntimeError("Cached map failed integrity verification; operator repair required") from exc
 
+    def cached_request(self, request_key: str) -> dict | None:
+        key = self._results.get(request_key)
+        if key is None:
+            return None
+        cached = self.cached(key)
+        if cached is None:
+            raise RuntimeError('Cached map is missing; operator repair required')
+        provenance = json.loads((self.output_root / key / 'provenance.json').read_text())
+        if (cached.get('request_key') != request_key
+                or provenance.get('request_key') != request_key
+                or contract_pin({'request': request_key, 'input': provenance['input']}) != key):
+            raise RuntimeError('Cached map request identity failed integrity verification')
+        return cached
+
     def run(self, grid: Grid, year: int, phase: Callable[[str], None]) -> dict:
         start = time.perf_counter()
         if implementation_identity() != self.code:
             raise RuntimeError("Serving code changed; restart the API before inference")
         request_key = self.key(grid, year)
+        cached = self.cached_request(request_key)
+        if cached is not None:
+            return {**cached, "cache_hit": True, "request_ms": (time.perf_counter() - start) * 1000}
         phase("preparing")
-        path, entry = self.sources.prepare(grid, year)
+        with self.sources.prepared(grid, year) as (path, entry):
+            return self._run_prepared(grid, year, phase, start, request_key, path, entry)
+
+    def _run_prepared(self, grid, year, phase, start, request_key, path, entry):
         quality = validate_bundle(path, entry["input"], grid, year)
         sources = public_provenance(entry)
         key = contract_pin({"request": request_key, "input": public_identity(entry["input"])})
         cached = self.cached(key)
         if cached is not None:
             return {**cached, "cache_hit": True, "request_ms": (time.perf_counter() - start) * 1000}
-        prepared = time.perf_counter()
-        phase("classifying")
-        pred = self.model.predict(path, entry["input"])
-        inferred = time.perf_counter()
-        with np.load(path, allow_pickle=False) as data:
-            valid = data["valid_embedding"][4:508, 4:508].copy()
-        phase("exporting")
-        temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=self.output_root))
-        try:
-            details = export_map(pred, valid, grid, temporary)
-            provenance = {"year": year, "geometry": grid.describe(), "inference": self.identity,
-                          "input": public_identity(entry["input"]), "embedding": entry["embedding"],
-                          **sources,
-                          "historical_note": HISTORICAL_NOTE, "quality": quality,
-                          "created_at": datetime.now(timezone.utc).isoformat(),
-                          "timing_ms": {"preparation": (prepared - start) * 1000,
-                                        "inference": (inferred - prepared) * 1000,
-                                        "export": (time.perf_counter() - inferred) * 1000}}
-            write_json(temporary / "provenance.json", provenance)
-            files = {name: public_identity(file_identity(temporary / name)) for name in
-                     ("classification.tif", "overlay.png", "legend.json", "provenance.json")}
-            result = {"cache_key": key, "year": year, "geometry": grid.describe(),
-                      "files": files, "quality": quality, **details,
-                      "timing_ms": provenance["timing_ms"]}
-            write_json(temporary / "result.json", result)
-            os.rename(temporary, self.output_root / key)
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary)
-        return {**result, "cache_hit": False, "request_ms": (time.perf_counter() - start) * 1000}
+        from imint.inference.lclu_storage import MAP_BYTES
+        with self.storage.reserve(MAP_BYTES, paths=(self.output_root / key,)):
+            prepared = time.perf_counter()
+            phase("classifying")
+            pred = self.model.predict(path, entry["input"])
+            inferred = time.perf_counter()
+            with np.load(path, allow_pickle=False) as data:
+                valid = data["valid_embedding"][4:508, 4:508].copy()
+            phase("exporting")
+            temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=self.output_root))
+            try:
+                details = export_map(pred, valid, grid, temporary)
+                provenance = {"request_key": request_key, "year": year, "geometry": grid.describe(), "inference": self.identity,
+                              "input": public_identity(entry["input"]), "embedding": entry["embedding"],
+                              **sources,
+                              "historical_note": HISTORICAL_NOTE, "quality": quality,
+                              "created_at": datetime.now(timezone.utc).isoformat(),
+                              "timing_ms": {"preparation": (prepared - start) * 1000,
+                                            "inference": (inferred - prepared) * 1000,
+                                            "export": (time.perf_counter() - inferred) * 1000}}
+                write_json(temporary / "provenance.json", provenance)
+                files = {name: public_identity(file_identity(temporary / name)) for name in
+                         ("classification.tif", "overlay.png", "legend.json", "provenance.json")}
+                result = {"request_key": request_key, "cache_key": key, "year": year, "geometry": grid.describe(),
+                          "files": files, "quality": quality, **details,
+                          "timing_ms": provenance["timing_ms"]}
+                write_json(temporary / "result.json", result)
+                os.rename(temporary, self.output_root / key)
+                self._results[request_key] = key
+            finally:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+            return {**result, "cache_hit": False, "request_ms": (time.perf_counter() - start) * 1000}

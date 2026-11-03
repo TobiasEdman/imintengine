@@ -146,10 +146,9 @@ def test_preparation_timeout_preserves_private_log_and_qualifies_whole_window(tm
     assert source.years(Grid(grid.east+10,grid.north)) == []
     def timeout(command, **kwargs):
         assert kwargs['timeout'] == 7 and command[-1].startswith(str(source.cache))
-        kwargs['stdout'].write('private upstream diagnostic')
-        kwargs['stdout'].flush()
+        kwargs['log_path'].write_text('private upstream diagnostic')
         raise subprocess.TimeoutExpired(command, kwargs['timeout'])
-    monkeypatch.setattr(subprocess, 'run', timeout)
+    monkeypatch.setattr('imint.inference.lclu_sources.run_preparation', timeout)
     with pytest.raises(RuntimeError, match='operator log'): source.prepare(grid, 2024)
     logs = list((source.cache/'failures').glob('*.log'))
     assert len(logs) == 1 and logs[0].read_text() == 'private upstream diagnostic'
@@ -251,7 +250,7 @@ def test_concurrent_preparations_of_one_key_run_once(tmp_path, monkeypatch):
                                      'input':{**file_identity(out/'input.npz'), 'path':'input.npz'},
                                      'embedding':EMBEDDING,
                                      'source_config':public_identity(file_identity(config))})
-    monkeypatch.setattr(subprocess, 'run', prepared)
+    monkeypatch.setattr('imint.inference.lclu_sources.run_preparation', prepared)
     results, errors = [], []
     def caller():
         both_inside.wait()

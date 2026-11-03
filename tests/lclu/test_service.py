@@ -53,6 +53,11 @@ def service(bundle, tmp_path):
     return LcluService(SyntheticModel(), BundleCatalog([entry], tmp_path), tmp_path / 'outputs')
 
 
+def test_geometry_module_is_bound_to_serving_identity():
+    from imint.inference.lclu import ROOT, implementation_identity
+    assert implementation_identity()['imint/tile_grid.py'] == file_identity(ROOT / 'imint/tile_grid.py')['sha256']
+
+
 def test_geometry_native_crop_and_geotiff_roundtrip(tmp_path):
     grid = Grid.from_lonlat(17.64, 59.86)
     assert (grid.east, grid.north) == (647850, 6638770)
@@ -149,6 +154,25 @@ def test_reject_year_grid_source_and_changed_file(bundle, tmp_path):
     with pytest.raises(ValueError, match='identity mismatch'): app.run(grid, 2024, lambda _: None)
 
 
+def test_full_runtime_budget_keeps_verified_cache_readable(bundle, tmp_path, monkeypatch):
+    from imint.inference.lclu_storage import StorageLimitError, MAP_BYTES
+    grid, _, _, _ = bundle
+    app = service(bundle, tmp_path)
+    app.storage.max_bytes = MAP_BYTES - 1
+    with pytest.raises(StorageLimitError):
+        app.run(grid, 2024, lambda _: None)
+    assert app.model.calls == 0 and not list(app.output_root.iterdir())
+    app.storage.max_bytes = 4 * 2**30
+    first = app.run(grid, 2024, lambda _: None)
+    restarted = service(bundle, tmp_path)
+    restarted.storage.max_bytes = 1
+    monkeypatch.setattr('imint.inference.lclu_storage.shutil.disk_usage',
+                        lambda _: type('Disk', (), {'free': 0})())
+    cached = restarted.run(grid, 2024, lambda _: None)
+    assert cached['cache_hit'] and cached['cache_key'] == first['cache_key']
+    assert restarted.model.calls == 0
+
+
 def test_downloaded_provenance_excludes_nested_operator_paths(bundle, tmp_path):
     grid, _, entry, _ = bundle
     secret = '/private/operator/heldout/secret.tif'
@@ -192,3 +216,163 @@ def test_synthetic_checkpoint_strict_loader_and_real_forward(bundle, tmp_path):
     assert actual.shape == (504, 504) and actual.min() >= 0 and actual.max() < 28
     record['sha256'] = '0' * 64
     with pytest.raises(ValueError, match='identity mismatch'): TesseraR4(record, tmp_path, 'cpu')
+
+
+def test_more_native_warmups_than_capacity_keep_new_and_saved_maps_usable(bundle, tmp_path, monkeypatch):
+    """8 real 75-MiB native packages cycle through a 512-MiB runtime budget."""
+    from imint.inference.lclu import public_identity
+    from imint.inference.lclu_sources import RepositorySources
+    from imint.inference.lclu_storage import StorageBudget
+
+    grid, arrays, original_entry, _ = bundle
+    config = tmp_path/'sources.json'
+    bounds = grid.bounds()
+    write_json(config, {'version':1, 'embedding':EMBEDDING, 'qualified_regions':[
+        {'country':'SE', 'verification':'synthetic-capacity-test', 'years':list(range(2017,2025)),
+         'bounds_3006':[bounds[n] for n in ('west','south','east','north')]}]})
+    settings = {'config':file_identity(config), 'python':'unused', 'timeout_seconds':10}
+    root = tmp_path/'serving'
+    guard = StorageBudget(root, max_bytes=512*2**20, min_free_bytes=1)
+    source = RepositorySources(settings, tmp_path, root, storage=guard)
+    produced = []
+
+    def native_package(request_grid, year, target):
+        target.mkdir()
+        data = {**arrays, 'year':np.int32(year), 'tessera_year':np.int32(year), 'vpp_year':np.int32(year),
+                'vpp_sosd':np.full((512,512), (year-2000)*1000+130, np.float32),
+                'vpp_eosd':np.full((512,512), (year-2000)*1000+260, np.float32)}
+        # Uncompressed native NPZ deliberately exercises real retained bytes,
+        # not tiny all-zero compressed fixtures or a mocked byte counter.
+        path = target/'input.npz'
+        np.savez(path, **data)
+        assert 75*2**20 < path.stat().st_size < 80*2**20
+        entry = {**original_entry, 'year':year, 'input':file_identity(path),
+                 'source_config':public_identity(settings['config']),
+                 'auxiliary_provenance':{'vpp':{'year':year, 'season':1,
+                    'index':{'sha256':'a'*64,'size':1}, 'files':[]}}}
+        entry['input']['path'] = 'input.npz'
+        write_json(target/'entry.json', entry)
+        produced.append(target)
+
+    monkeypatch.setattr(source, '_prepare', native_package)
+    app = LcluService(SyntheticModel(), source, root, storage=guard)
+    results = []
+    for year in range(2017,2025):
+        source.check_preparation(grid, year)
+        source.prepare(grid, year)
+        result = app.run(grid, year, lambda _: None)
+        assert not result['cache_hit'] and result['valid_pixels'] == 504**2-100
+        results.append(result)
+        assert guard.used_bytes() <= guard.max_bytes
+    assert len(produced) == 8 and app.model.calls == 8
+    assert not produced[0].exists()  # actually evicted, not just ignored
+    assert 0 < sum(p.exists() for p in produced) < 8
+    assert guard.used_bytes() == sum(p.stat().st_size for p in root.rglob('*') if p.is_file())
+
+    # The persistent result sidecars rebuild the lookup after a process restart.
+    restarted_sources = RepositorySources(settings, tmp_path, root)
+    restarted = LcluService(SyntheticModel(), restarted_sources, root)
+    monkeypatch.setattr(restarted_sources, 'prepared', lambda *_: pytest.fail('Reprepared a saved map'))
+    restarted.storage.max_bytes = 1  # even with no space for a fresh input
+    saved = restarted.run(grid, 2017, lambda _: None)
+    assert saved['cache_hit'] and saved['cache_key'] == results[0]['cache_key']
+    assert restarted.model.calls == 0
+    assert (restarted.output_root/saved['cache_key']/'classification.tif').is_file()
+    # The new shortcut cannot bypass immutable source-configuration checks.
+    config.write_text(config.read_text()+' ')
+    with pytest.raises(ValueError, match='configuration changed'):
+        restarted.run(grid, 2017, lambda _: None)
+
+
+def test_request_cache_binds_all_preparation_producer_code(bundle, tmp_path, monkeypatch):
+    from imint.inference import lclu
+    grid, _, _, _ = bundle
+    app = service(bundle, tmp_path)
+    original = app.run(grid, 2024, lambda _: None)
+    producer = lclu.preparation_identity()
+    assert app.code.items() >= producer.items()
+    actual = lclu.file_identity
+    def changed_file(path):
+        identity = actual(path)
+        if path == lclu.ROOT/'imint/training/skg_grunddata.py':
+            return {**identity, 'sha256':'b'*64}
+        return identity
+    monkeypatch.setattr(lclu, 'file_identity', changed_file)
+    with pytest.raises(RuntimeError, match='Serving code changed'):
+        app.run(grid, 2024, lambda _: None)
+    restarted = service(bundle, tmp_path)
+    changed = restarted.run(grid, 2024, lambda _: None)
+    assert not changed['cache_hit'] and changed['cache_key'] != original['cache_key']
+
+
+def test_persistent_lookup_does_not_accept_rebound_result_metadata(bundle, tmp_path):
+    grid, _, _, _ = bundle
+    app = service(bundle, tmp_path)
+    result = app.run(grid, 2024, lambda _: None)
+    metadata = app.output_root/result['cache_key']/'result.json'
+    original = json.loads(metadata.read_text())
+    rebound = 'a'*64
+    write_json(metadata, {**original, 'request_key':rebound})
+    restarted = service(bundle, tmp_path)
+    with pytest.raises(RuntimeError, match='request identity'):
+        restarted.cached_request(rebound)
+
+
+def test_inference_holds_repository_input_lease_during_competing_eviction(bundle, tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import shutil
+    import threading
+    from imint.inference.lclu import public_identity
+    from imint.inference.lclu_sources import RepositorySources
+    from imint.inference.lclu_storage import StorageBudget, PREPARATION_BYTES
+
+    grid, _, entry, input_path = bundle
+    bounds = grid.bounds()
+    config = tmp_path/'sources.json'
+    write_json(config, {'version':1, 'embedding':EMBEDDING, 'qualified_regions':[
+        {'country':'SE', 'verification':'lease-integration-test', 'years':[2024],
+         'bounds_3006':[bounds[n] for n in ('west','south','east','north')]}]})
+    settings = {'config':file_identity(config), 'python':'unused', 'timeout_seconds':10}
+    root = tmp_path/'serving'
+    guard = StorageBudget(root, max_bytes=512*2**20, min_free_bytes=1)
+    source = RepositorySources(settings, tmp_path, root, storage=guard)
+
+    def prepare(request_grid, year, target):
+        target.mkdir()
+        shutil.copyfile(input_path, target/'input.npz')
+        write_json(target/'entry.json', {**entry,
+            'input':{**entry['input'], 'path':'input.npz'},
+            'source_config':public_identity(settings['config'])})
+
+    monkeypatch.setattr(source, '_prepare', prepare)
+    prepared, _ = source.prepare(grid, 2024)
+    others = [root/'lclu-inputs'/f'{i:064x}' for i in range(5)]
+    chunk = b'x'*(60*2**20)
+    for target in others[:4]:
+        with guard.reserve(len(chunk), paths=(target,)):
+            target.mkdir()
+            (target/'input.npz').write_bytes(chunk)
+    entered, release = threading.Event(), threading.Event()
+
+    class ReadingModel(SyntheticModel):
+        def predict(self, path, record):
+            assert path == prepared
+            entered.set()
+            assert release.wait(10)
+            assert file_identity(path)['sha256'] == record['sha256']
+            return super().predict(path, record)
+
+    app = LcluService(ReadingModel(), source, root, storage=guard)
+    with ThreadPoolExecutor(2) as pool:
+        prediction = pool.submit(app.run, grid, 2024, lambda _: None)
+        try:
+            assert entered.wait(10)
+            with guard.reserve(PREPARATION_BYTES, paths=(others[4],)):
+                others[4].mkdir()
+                (others[4]/'input.npz').write_bytes(chunk)
+            assert prepared.is_file() and any(not p.exists() for p in others[:4])
+        finally:
+            release.set()
+        result = prediction.result()
+    assert result['valid_pixels'] == 504**2-100 and not result['cache_hit']
+    assert guard.used_bytes() == sum(p.stat().st_size for p in root.rglob('*') if p.is_file())

@@ -9,16 +9,7 @@ from datetime import datetime, timezone
 from scripts.stage_lclu_demo import stage
 from imint.inference.lclu import write_json, public_identity
 from scripts.cache_predict import file_identity
-
-
-def deployment_root(work: Path) -> Path:
-    """A campaign stages beside the running two-area demo on the same volume.
-
-    Its manifest, process MANIFEST and API output directory (which holds the
-    single-worker flock) must not be the running demo's, or it would overwrite
-    that demo's provenance and fail to start while the demo holds the lock.
-    """
-    return work/'campaign' if os.environ.get('LCLU_CAMPAIGN') else work
+from docker.lclu.layout import deployment_root
 
 
 def main(source: Path, work: Path, data: Path) -> None:
@@ -29,9 +20,12 @@ def main(source: Path, work: Path, data: Path) -> None:
     if os.environ.get('LCLU_CAMPAIGN'):
         from scripts.stage_lclu_campaign import stage_campaign
         years = [int(value) for value in os.environ['LCLU_YEARS'].split(',')]
+        reuse_roots = (work/'stockholm', work/'kiruna_tatort')
+        if base != work/'campaign':
+            reuse_roots = (work/'campaign/shared', *reuse_roots)
         manifest = stage_campaign(source/'config/lclu/municipalities.json', years, data,
-                                  work/'campaign', int(os.environ['LCLU_MAX_ORIGINAL_BYTES']),
-                                  reuse_roots=(work/'stockholm', work/'kiruna_tatort'))
+                                  base, int(os.environ['LCLU_MAX_ORIGINAL_BYTES']),
+                                  reuse_roots=reuse_roots)
         write_json(root/'serving.json', manifest)
         run_args = {'years': years, 'campaign': manifest['campaign']}
     else:

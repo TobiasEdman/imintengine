@@ -227,6 +227,23 @@ def test_showcase_assets_work_for_static_and_api_hosting(api):
         assert client.get('/lclu-assets/../config/analyzers.yaml').status_code==404
 
 
+def test_api_hosted_page_uses_its_origin_with_public_static_configuration(api, monkeypatch):
+    root = api.tmp/'static-showcase'
+    (root/'js').mkdir(parents=True)
+    public = root/'js/lclu-config.js'
+    configured = "window.IMINT_LCLU_CONFIG = {apiBase: 'https://lclu.icedc.se'};\n"
+    public.write_text(configured)
+    monkeypatch.setattr(api.server, '_WEB_ROOT', root)
+    with TestClient(api.server.app, base_url='http://127.0.0.1:8788') as client:
+        response = client.get('/lclu-assets/lclu-config.js')
+        assert response.status_code == 200
+        assert response.headers['content-type'].startswith('application/javascript')
+        assert response.headers['cache-control'] == 'no-store'
+        assert response.text == "window.IMINT_LCLU_CONFIG = {apiBase: ''};\n"
+        assert client.get('/v1/lclu').status_code == 200
+    assert public.read_text() == configured
+
+
 def test_prepare_warms_the_newest_request_outside_the_job_queue(api, monkeypatch):
     gates = {0: (threading.Event(), threading.Event()), 3: (threading.Event(), threading.Event())}
     async def run():
@@ -287,9 +304,35 @@ def test_prepare_endpoint_validates_like_a_map_request(api):
             assert client.post('/v1/lclu/prepare', json={**REQUEST, **changes}).status_code == 422
 
 
+def test_storage_limit_rejects_new_map_but_keeps_fixed_inputs_and_downloads(api, monkeypatch):
+    from imint.inference.lclu_storage import MAP_BYTES, STORAGE_MESSAGE
+
+    async def run():
+        async with api.server.lifespan(api.server.app):
+            service = install(api, monkeypatch)
+            request = api.server.LcluRequest(**REQUEST)
+            first = await api.server.submit_lclu(request)
+            await asyncio.gather(*tuple(api.server._pending_jobs))
+            assert (await api.server.get_job(first.job_id)).status == 'success'
+            service.storage.max_bytes = service.storage.used_bytes() + MAP_BYTES - 1
+            new = api.server.LcluRequest(**{**REQUEST, 'year':2023})
+            # Fixed qualified bundles already exist and require no allocation.
+            assert await api.server.prepare_lclu(new) == {'state': 'queued'}
+            await asyncio.gather(*tuple(api.server._pending_jobs))
+            rejected = await api.server.submit_lclu(new)
+            await asyncio.gather(*tuple(api.server._pending_jobs))
+            result = await api.server.get_job(rejected.job_id)
+            assert result.status == 'failed' and result.error == STORAGE_MESSAGE
+            assert service.model.calls == 1
+            assert (await api.server.submit_lclu(request)).job_id == first.job_id
+            download = await api.server.lclu_file(first.job_id, 'classification.tif')
+            assert Path(download.path).is_file()
+
+    asyncio.run(run())
+
+
 def test_a_warmed_place_skips_preparation_in_the_map_request(api, monkeypatch):
     """End to end through RepositorySources: the warm-up's input is the job's input."""
-    import subprocess
     import time
     from imint.inference.lclu import AUX_NAMES, EMBEDDING, Grid, LcluService, public_identity, write_json
     from imint.inference.lclu_sources import RepositorySources
@@ -318,7 +361,7 @@ def test_a_warmed_place_skips_preparation_in_the_map_request(api, monkeypatch):
             'source_config': public_identity(file_identity(config)),
             'auxiliary_provenance': {'vpp': {'year': year, 'season': 1,
                                              'index': {'sha256': 'a'*64, 'size': 1}, 'files': []}}})
-    monkeypatch.setattr(subprocess, 'run', preparation)
+    monkeypatch.setattr('imint.inference.lclu_sources.run_preparation', preparation)
     class Model:
         contract = {'synthetic': True}
         def predict(self, path, record):
@@ -333,13 +376,25 @@ def test_a_warmed_place_skips_preparation_in_the_map_request(api, monkeypatch):
     async def run():
         async with api.server.lifespan(api.server.app):
             sources = RepositorySources({'config': file_identity(config), 'python': 'python3.12',
-                                         'timeout_seconds': 30}, api.tmp, api.tmp/'cache')
+                                         'timeout_seconds': 30}, api.tmp, api.tmp/'artifacts')
             monkeypatch.setattr(api.server, '_lclu_service',
                                 LcluService(Model(), sources, api.tmp/'artifacts'))
             req = lambda year: api.server.LcluRequest(**{**REQUEST, 'year': year})
+            from imint.inference.lclu_storage import STORAGE_MESSAGE
+            maximum = sources.storage.max_bytes
+            sources.storage.max_bytes = 1
+            with pytest.raises(api.server.HTTPException) as blocked:
+                await api.server.prepare_lclu(req(2023))
+            assert blocked.value.status_code == 503 and blocked.value.detail == STORAGE_MESSAGE
+            assert not api.server._lclu_warm_tasks
+            sources.storage.max_bytes = maximum
             cold = await finished((await api.server.submit_lclu(req(2023))).job_id)
             await api.server.prepare_lclu(req(2024))
             await api.server._lclu_warm_tasks["place"]
+            sources.storage.max_bytes = 1
+            assert await api.server.prepare_lclu(req(2024)) == {'state': 'queued'}
+            await api.server._lclu_warm_tasks["place"]
+            sources.storage.max_bytes = maximum
             warm = await finished((await api.server.submit_lclu(req(2024))).job_id)
             return cold, warm
     cold, warm = asyncio.run(run())

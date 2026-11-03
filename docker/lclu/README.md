@@ -1,4 +1,12 @@
-# Private Stockholm and Kiruna LCLU demo
+# LCLU demo runtime and showcase release
+
+The current municipality campaign covers the ten largest municipalities and
+Kiruna tätort for inventoried TESSERA years 2017–2025. It reuses an existing
+694 GiB PVC. The initial two-area deployment examples and costs below are
+historical; use the release preparation steps below for the current campaign.
+Preparation, model qualification and public publication are separate steps.
+
+## Initial two-area demo
 
 Temporary, single-worker TESSERA R4 inference for public clicks inside Stockholm
 municipality and Kiruna tätort (SCB 2023 boundary). The map is 504×504 pixels at 10 m; each input has 512×512 pixels.
@@ -112,8 +120,51 @@ resident R4 model routes each request to its exact region and year.
 `source_ready_original_bytes`; only `source_ready` area-years are staged and
 each is qualified with one real R4 prediction before serving, so a year
 without HR-VPP is absent rather than substituted. The volume must hold the
-retained originals plus COGs (the renderer requires `N` GiB ≥ 2.3·B + 6 GiB);
-expand the existing PVC before creating the Job.
+retained originals plus COGs (the renderer requires `N` GiB ≥ 2.3·B + 10 GiB).
+The existing 694 GiB campaign volume meets that bound; no expansion is needed
+for this release.
+
+Serving inputs, results and retained diagnostics share an 8 GiB budget
+(`IMINT_LCLU_STORAGE_MAX_BYTES`) and require 2 GiB of estimated filesystem
+free space (`IMINT_LCLU_STORAGE_MIN_FREE_BYTES`). Writers reserve their
+allowance before starting; all regions and warm-up/map workers share the
+guard. Native inputs are bounded before compression; preparation metadata
+and child diagnostics are each capped at 1 MiB. One failure log is retained
+per input key. Admission uses a startup byte count updated by each writer,
+without recursively scanning the cache on every request.
+
+When space is needed, the service reclaims the least recently used prepared
+inputs and failure logs. A lease protects each input through its last model
+read. Finished map artifacts are retained; their result sidecars persist a
+request-to-result lookup so maps still open after input eviction and process
+restart. Hash and source-configuration checks still apply. After acquiring
+its exclusive output-root lock, startup removes abandoned `.preparing-*`
+and `.pending-*` directories before reconciling the budget. No source COGs,
+reference data or qualification inputs are evicted.
+
+If retained results, active leases or the filesystem reserve leave too little
+space even after reclamation, new warm-ups return 503 and new map jobs fail
+with a Swedish storage message. Existing prepared keys and verified map files
+remain readable. This bounds the staged-COG campaign's serving cache, separately
+from source staging; remote-prefetch logs are outside this contract and that
+path is disabled by the staged COG inventory. This release serves only LCLU:
+the public ingress excludes `/v1/analyze`; do not run a mixed general-analysis
+workload in its output root. The byte counter covers the declared LCLU writers,
+while the live filesystem free-space check also observes other PVC consumers.
+CephFS can report writes and deletions late. Each admission samples free space
+once, credits completed evictions and retains completed write debits across
+requests. Lower observations made while no writer is active reduce that
+estimate; later higher observations do not restore the allowance until restart.
+This can conservatively refuse work after other consumers free space or a stale
+post-deletion observation. During active writes, lower observations affect only
+that admission so their bytes are not debited again on completion. This is a
+single-process guard, not a filesystem quota for other PVC writers. Eviction
+renames an input to `.preparing-*` before deletion, so interrupted cleanup cannot
+leave a partial directory that looks prepared.
+If retained maps themselves
+fill the budget, preserve/export the results and prepare a separately approved
+release with sufficient capacity; do not delete inputs or shared source trees
+by hand to repair a live service.
 
 Staging takes hours, so the campaign runs beside the two-area demo on the same
 volume (Tobias 2026-10-30: no downtime). It keeps its own manifest, process
@@ -129,7 +180,68 @@ expand the PVC, create r8, wait until it serves, move the 8788 port-forward
 and stop r7. Each step is skipped when already done, so it is re-run after an
 interruption; it stops before changing anything if an upstream Job failed.
 
-## Start, access and stop
+## Prepare a public showcase release
+
+Start with a fresh, hash-bound Job proposal from `render_job.py` using
+`--reuse-volume --isolate-campaign`, a versioned Job name, the existing
+campaign byte budget and a deadline within the remaining approval. An
+isolated release writes to `/work/releases/<job-name>` and reuses verified
+COGs and DEM from `/work/campaign/shared`; it has its own VPP metadata
+snapshots, prepared inputs, manifests, results and API lock. Keep
+`/work/campaign/shared` after retiring r8: the release's verified COG records
+still reference those files by absolute path. The running
+campaign's source and configuration remain immutable. Recipe bootstrap also
+installs its system libraries under that release root, so it cannot overwrite
+libraries loaded by the running service. The hash-addressed Python environment
+is reused once its READY marker exists.
+
+The r9 proposal reuses the completed r8 inventory. A later release that adds
+sources needs an explicit predecessor-cache plan; this launcher does not scan
+arbitrary older release directories.
+
+Keep concurrent compute within its existing approval. When replacing r8,
+wait until it is ready and retire the older two-area r7 service before
+starting r9, so the new release does not add a third reserved worker. Keep
+r8 serving until the new release passes acceptance and traffic is switched.
+
+```sh
+python docker/lclu/render_showcase.py \
+  --job-manifest <job-proposal.json> \
+  --api-host <confirmed-api-hostname> \
+  --showcase-origin https://tobiasedman.github.io \
+  --showcase-origin https://digitalearth.se \
+  --output <release-directory>
+kubectl --context icekube -n prithvi-training-default apply \
+  --server-side --dry-run=server \
+  -f <release-directory>/job-with-origins.json \
+  -f <release-directory>/routing.json
+```
+
+The renderer adds exact CORS origins, a Service selecting only the proposed
+Job and an nginx TLS Ingress using the namespace's `letsencrypt-prod` Issuer.
+It exposes only annual-map routes and assets. Source hashes, compute, storage
+and expiry are preserved. The commands above create no resources; the
+generated `release.json` records file hashes and outstanding release gates.
+
+After all usable area/year pairs are qualified, run the acceptance audit in
+the serving environment and retain its output:
+
+```sh
+python scripts/verify_lclu_campaign.py \
+  --campaign config/lclu/municipalities.json \
+  --work /work/releases/<job-name> \
+  --api http://127.0.0.1:8000 > campaign-acceptance.json
+```
+
+The audit must pass, including explicit source gaps, before switching traffic.
+Verify real Stockholm and Kiruna results in the browser: class clicks, NMD
+legend, full opacity and slider, sharp zoom to at least 15, GeoTIFF download,
+mobile layout and showcase navigation. Verify DNS, TLS and CORS from the
+actual showcase origin. Publish the generated `lclu-config.js` as
+`docs/js/lclu-config.js` only after these checks. A successful dry-run alone
+does not prove public reachability or a working map.
+
+## Initial deployment: start, access and stop
 
 Actual creation requires the operator's explicit approval for the demo scope.
 The completed short metadata preflight was a separate, smaller approved test.

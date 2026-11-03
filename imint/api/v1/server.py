@@ -37,9 +37,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.exceptions import RequestValidationError
 
+from imint.inference.lclu_storage import STORAGE_MESSAGE, StorageBudget, StorageLimitError
 from imint.api.v1.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -139,6 +140,7 @@ async def lifespan(app: FastAPI):
         _lclu_service = None
         if manifest := os.environ.get("IMINT_LCLU_MANIFEST"):
             from imint.inference.lclu import LcluService
+            await asyncio.to_thread(StorageBudget.cleanup_staging, root)
             _lclu_service = await asyncio.to_thread(LcluService.from_manifest, Path(manifest), root)
         _accepting_jobs = True
         try:
@@ -583,8 +585,11 @@ async def _run_job_async(job_id: str) -> None:
         job["success"] = False
         job["phase"] = "failed"
         # Source errors may contain private mount paths or signed remote URLs.
-        job["error"] = ("Årskartan kunde inte skapas. Operatören kan kontrollera serverloggen."
-                        if job.get("kind") == "lclu" else f"{type(e).__name__}: {e}")
+        if job.get("kind") == "lclu":
+            job["error"] = (STORAGE_MESSAGE if isinstance(e, StorageLimitError) else
+                            "Årskartan kunde inte skapas. Operatören kan kontrollera serverloggen.")
+        else:
+            job["error"] = f"{type(e).__name__}: {e}"
         logger.exception("job %s crashed", job_id)
 
     await _put_job(job_id, job)
@@ -713,6 +718,10 @@ async def prepare_lclu(req: LcluRequest):
         _lclu_service.key(grid, req.year)   # exact year and qualified source, as for a map
     except InputUnavailable as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    try:
+        await asyncio.to_thread(_lclu_service.sources.check_preparation, grid, req.year)
+    except StorageLimitError:
+        raise HTTPException(status_code=503, detail=STORAGE_MESSAGE) from None
     _queue_warm('place', grid, req.year)
     return {'state': 'queued'}
 
@@ -861,7 +870,7 @@ async def lclu_page():
     for name, relative in _LCLU_ASSETS.items():
         page = page.replace('src="'+relative+'"', 'src="/lclu-assets/'+name+'"')
         page = page.replace('href="'+relative, 'href="/lclu-assets/'+name)
-    page = page.replace('href="index.html"', 'href="https://digitalearth.se/"')
+    page = page.replace('href="index.html"', 'href="https://digitalearth.se/case/"')
     return HTMLResponse(page)
 
 
@@ -869,4 +878,9 @@ async def lclu_page():
 async def lclu_asset(name: str):
     if name not in _LCLU_ASSETS:
         raise HTTPException(status_code=404)
+    if name == 'lclu-config.js':
+        # The API-hosted page uses its own origin, including a local tunnel.
+        # Only static hosting needs the public address from the docs config.
+        return Response("window.IMINT_LCLU_CONFIG = {apiBase: ''};\n",
+                        media_type='application/javascript', headers={'Cache-Control': 'no-store'})
     return FileResponse(_WEB_ROOT / _LCLU_ASSETS[name])

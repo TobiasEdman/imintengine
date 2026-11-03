@@ -23,6 +23,7 @@ from imint.inference.lclu import (
     validate_bundle, verify_file, write_json,
 )
 from scripts.cache_predict import atomic_write, file_identity, contract_pin
+from imint.inference.lclu_storage import PREPARATION_ARRAY_BYTES, PREPARATION_METADATA_BYTES
 
 
 def verify_source_file(record: dict, base: Path, receipts: Path) -> Path:
@@ -555,6 +556,9 @@ def prepare(config_path: Path, grid: Grid, year: int, output: Path):
               'easting': np.int32(grid.east), 'northing': np.int32(grid.north)}
     if set(AUX_NAMES) - arrays.keys():
         raise ValueError('Missing R4 auxiliaries')
+    if (len(arrays) > 32 or any(a.dtype.hasobject for a in arrays.values())
+            or sum(a.nbytes for a in arrays.values()) > PREPARATION_ARRAY_BYTES):
+        raise ValueError('Prepared arrays exceed the native input storage allowance')
     output.mkdir(parents=True, exist_ok=True)
     path = output / 'input.npz'
     atomic_write(path, lambda stream: np.savez_compressed(stream, **arrays))
@@ -562,13 +566,17 @@ def prepare(config_path: Path, grid: Grid, year: int, output: Path):
     validate_bundle(path, record, grid, year)
     if public_identity(file_identity(config_path)) != public_identity(config_identity):
         raise ValueError('Source configuration changed during preparation')
-    write_json(output / 'entry.json', {
+    entry = {
         'year': year, 'center_3006': [grid.east, grid.north], 'public_area': True,
         'input': record, 'embedding': EMBEDDING,
         'source_config': public_identity(config_identity),
         'auxiliary_provenance': provenance,
         'embedding_provenance': emb_provenance,
-    })
+    }
+    data = json.dumps(entry, ensure_ascii=False, indent=2, allow_nan=False).encode() + b'\n'
+    if len(data) > PREPARATION_METADATA_BYTES:
+        raise ValueError('Preparation metadata exceeds its storage allowance')
+    atomic_write(output / 'entry.json', lambda stream: stream.write(data))
 
 
 def main():

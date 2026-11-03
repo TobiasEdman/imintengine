@@ -25,7 +25,7 @@ from imint.data.wekeo_vpp import _bounds_overlap, _VPP_PRODUCT_TYPES
 from imint.inference.lclu import EMBEDDING, Grid, public_identity, verify_file, write_json
 from imint.inference.lclu_cog import convert_block
 from imint.training.copernicus_dem import _get_cog_urls
-from scripts.cache_predict import file_identity
+from scripts.cache_predict import contract_pin, file_identity
 from scripts.prepare_lclu import prepare, verify_aux_metadata, verify_source_file
 
 # A transient public-source failure is retried before it stops a campaign: one
@@ -114,6 +114,38 @@ def cached_block(row: dict, roots: tuple[Path, ...], receipts: Path) -> dict | N
     return None
 
 
+def snapshot_vpp(index_path: Path, selected: dict, snapshots: Path) -> Path:
+    """Pin a reader-compatible index without copying the shared VPP rasters.
+
+    The prefetch index grows as other areas/years arrive. Serving must retain
+    its selected metadata, while the existing per-file hashes still reject
+    any changed or replaced raster behind the links.
+    """
+    source = index_path.parent.resolve()
+    if not selected or any(Path(name).name != name or not name.endswith('.tif')
+                           for name in selected):
+        raise ValueError('Expected VPP raster basenames in the selected index')
+    targets = {name: (source / name).resolve(strict=True) for name in selected}
+    if any(not path.is_file() for path in targets.values()):
+        raise ValueError('Selected VPP source is not a file')
+    root = snapshots / contract_pin({'source': str(source), 'index': selected})
+    root.mkdir(parents=True, exist_ok=True)
+    for name, target in targets.items():
+        link = root / name
+        try:
+            link.symlink_to(target)
+        except FileExistsError:
+            if not link.is_symlink() or link.resolve(strict=True) != target:
+                raise ValueError('VPP snapshot link differs from its source') from None
+    frozen = root / 'index.json'
+    if frozen.exists():
+        if json.loads(frozen.read_text()) != selected:
+            raise ValueError('VPP snapshot metadata changed')
+    else:
+        write_json(frozen, selected)
+    return frozen
+
+
 def stage(scope_path: Path, year: int, data: Path, root: Path, *,
           shared_root: Path | None = None, max_blocks: int = 32,
           max_original_bytes: int = 3_000_000_000,
@@ -134,6 +166,7 @@ def stage(scope_path: Path, year: int, data: Path, root: Path, *,
     wgs = transform_bounds('EPSG:3006', 'EPSG:4326', *bounds, densify_pts=41)
     index_path = data / 'vpp_wekeo/index.json'
     selected = select_vpp(json.loads(index_path.read_text()), year, wgs)
+    index_path = snapshot_vpp(index_path, selected, shared / 'vpp')
     print(f'Exact {year} VPP: {len(selected)} files; TESSERA: {len(rows)} blocks / {budget} bytes', flush=True)
     skg = data / 'skg_open'
     config = {'version': 1, 'embedding': EMBEDDING, 'identity_cache': str(receipts),
@@ -144,7 +177,7 @@ def stage(scope_path: Path, year: int, data: Path, root: Path, *,
     config['skg_vrts'] = [{**file_identity(p), 'path': str(p.relative_to(skg))} for p in vrts]
     verify_aux_metadata(config, root)
     for name in selected:
-        record = file_identity(index_path.parent/name)
+        record = file_identity((index_path.parent/name).resolve(strict=True))
         config['vpp_files'][name] = public_identity(record)
         verify_source_file(record, root, receipts)
     config['dem_sources'] = []

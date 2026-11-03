@@ -183,8 +183,10 @@ def test_resume_requires_space_only_for_missing_blocks(tmp_path, monkeypatch):
     np.testing.assert_array_equal(np.load(prediction),np.ones((504,504),np.uint8))
 
 
-def test_campaign_launch_keeps_running_demo_manifest_and_api_lock(tmp_path, monkeypatch):
+@pytest.mark.parametrize('isolated', [False, True])
+def test_campaign_launch_keeps_running_demo_manifest_and_api_lock(tmp_path, monkeypatch, isolated):
     import os
+    import fcntl
     import scripts.stage_lclu_campaign as campaign_module
     spec = importlib.util.spec_from_file_location(
         'lclu_run', Path(__file__).resolve().parents[2] / 'docker/lclu/run.py')
@@ -196,9 +198,16 @@ def test_campaign_launch_keeps_running_demo_manifest_and_api_lock(tmp_path, monk
     running = work / 'demo' / 'serving.json'
     running.parent.mkdir(parents=True)
     running.write_text('{"running": "r7"}')
-    monkeypatch.setattr(campaign_module, 'stage_campaign',
-                        lambda *a, **k: {'campaign': {'sha256': 'c' * 64}, 'preparations': []})
+    calls = []
+    def stage(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {'campaign': {'sha256': 'c' * 64}, 'preparations': []}
+    monkeypatch.setattr(campaign_module, 'stage_campaign', stage)
     monkeypatch.setenv('LCLU_CAMPAIGN', 'municipalities')
+    if isolated:
+        monkeypatch.setenv('LCLU_CAMPAIGN_RELEASE', 'lclu-stockholm-0124-r9')
+    else:
+        monkeypatch.delenv('LCLU_CAMPAIGN_RELEASE', raising=False)
     monkeypatch.setenv('LCLU_YEARS', '2017,2024')
     monkeypatch.setenv('LCLU_MAX_ORIGINAL_BYTES', '1')
     monkeypatch.setenv('LCLU_IMAGE', 'python@sha256:' + '0' * 64)
@@ -213,13 +222,81 @@ def test_campaign_launch_keeps_running_demo_manifest_and_api_lock(tmp_path, monk
     def fake_execv(*_):
         raise Served
     monkeypatch.setattr(run.os, 'execv', fake_execv)
-    with pytest.raises(Served):
-        run.main(source, work, tmp_path / 'data')
-    assert running.read_text() == '{"running": "r7"}'
+    base = work/'releases/lclu-stockholm-0124-r9' if isolated else work/'campaign'
+    old = work/'campaign' if isolated else work
+    old_manifest = old/'demo/serving.json'
+    old_manifest.parent.mkdir(parents=True, exist_ok=True)
+    old_manifest.write_text('{"running": "previous"}')
+    old_results = old/'results'
+    old_results.mkdir()
+    old_lock = old_results/'.api-worker.lock'
+    with old_lock.open('w') as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(Served):
+            run.main(source, work, tmp_path / 'data')
+        results = Path(os.environ['IMINT_API_OUTPUT_DIR'])
+        results.mkdir()
+        with (results/'.api-worker.lock').open('w') as next_lock:
+            fcntl.flock(next_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with old_lock.open('a') as duplicate:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(duplicate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert old_manifest.read_text() == '{"running": "previous"}'
+    assert calls[0][0][3] == base
+    previous = (work/'campaign/shared',) if isolated else ()
+    assert calls[0][1]['reuse_roots'] == (*previous, work/'stockholm', work/'kiruna_tatort')
+    assert running.read_text() == ('{"running": "r7"}' if isolated else '{"running": "previous"}')
     assert not (work / 'demo' / 'MANIFEST.json').exists()
-    assert json.loads((work / 'campaign/demo/serving.json').read_text())['campaign']['sha256'] == 'c' * 64
-    assert json.loads((work / 'campaign/demo/MANIFEST.json').read_text())['run_args']['years'] == [2017, 2024]
-    assert os.environ['IMINT_API_OUTPUT_DIR'] == str(work / 'campaign/results')
-    assert os.environ['IMINT_LCLU_MANIFEST'] == str(work / 'campaign/demo/serving.json')
+    assert json.loads((base / 'demo/serving.json').read_text())['campaign']['sha256'] == 'c' * 64
+    assert json.loads((base / 'demo/MANIFEST.json').read_text())['run_args']['years'] == [2017, 2024]
+    assert os.environ['IMINT_API_OUTPUT_DIR'] == str(base / 'results')
+    assert os.environ['IMINT_LCLU_MANIFEST'] == str(base / 'demo/serving.json')
     monkeypatch.delenv('LCLU_CAMPAIGN')
+    monkeypatch.delenv('LCLU_CAMPAIGN_RELEASE', raising=False)
     assert run.deployment_root(work) == work
+
+
+@pytest.mark.parametrize('release', ['../campaign', '/work/campaign', '', 'r9'])
+def test_isolated_campaign_rejects_invalid_release_names(tmp_path, monkeypatch, release):
+    from docker.lclu.run import deployment_root
+    monkeypatch.setenv('LCLU_CAMPAIGN', 'municipalities')
+    monkeypatch.setenv('LCLU_CAMPAIGN_RELEASE', release)
+    with pytest.raises(ValueError, match='versioned campaign'):
+        deployment_root(tmp_path)
+
+
+def test_isolated_job_requires_campaign_and_preserves_allocation():
+    from docker.lclu.render_job import resources
+    image = 'python@sha256:' + '0'*64
+    with pytest.raises(ValueError, match='isolated release'):
+        resources(image, 2024, isolate_campaign=True)
+    with pytest.raises(ValueError, match='versioned Job'):
+        resources(image, 2024, campaign_years=(2024,), max_original_bytes=100, isolate_campaign=True)
+    normal = resources(image, 2024, job_name='lclu-stockholm-0124-r9', reuse_volume=True,
+                       campaign_years=(2024,), max_original_bytes=100)
+    isolated = resources(image, 2024, job_name='lclu-stockholm-0124-r9', reuse_volume=True,
+                         campaign_years=(2024,), max_original_bytes=100, isolate_campaign=True)
+    release = isolated['items'][0]['spec']['template']['spec']['containers'][0]['env'].pop()
+    assert release == {'name':'LCLU_CAMPAIGN_RELEASE', 'value':'lclu-stockholm-0124-r9'}
+    assert isolated == normal
+
+
+def test_isolated_bootstrap_keeps_old_system_libraries_unchanged(tmp_path, monkeypatch):
+    from docker.lclu.layout import deployment_root, system_runtime_root
+    monkeypatch.setenv('LCLU_CAMPAIGN', 'municipalities')
+    monkeypatch.delenv('LCLU_CAMPAIGN_RELEASE', raising=False)
+    old = system_runtime_root(tmp_path)
+    library = old/'lib/x86_64-linux-gnu/libexpat.so.1'
+    library.parent.mkdir(parents=True)
+    library.write_bytes(b'library used by the existing release')
+    snapshot = (library.read_bytes(), library.stat().st_mtime_ns)
+    monkeypatch.setenv('LCLU_CAMPAIGN_RELEASE', 'lclu-stockholm-0124-r9')
+    new = system_runtime_root(tmp_path)
+    assert new.is_relative_to(deployment_root(tmp_path)) and not new.is_relative_to(old)
+    replacement = new/'lib/x86_64-linux-gnu/libexpat.so.1'
+    replacement.parent.mkdir(parents=True)
+    replacement.write_bytes(b'new release library')
+    assert (library.read_bytes(), library.stat().st_mtime_ns) == snapshot
+    monkeypatch.delenv('LCLU_CAMPAIGN')
+    with pytest.raises(ValueError, match='versioned campaign'):
+        system_runtime_root(tmp_path)

@@ -65,6 +65,7 @@
         }
         .header-nav {
             display: flex;
+            flex-wrap: wrap;
             gap: 6px;
         }
         .theme-tab {
@@ -93,6 +94,7 @@
         /* ── Sub-tabs (nested within a parent tab) ────────────────── */
         .sub-tab-nav {
             display: flex;
+            flex-wrap: wrap;
             gap: 6px;
             padding: 16px 20px 12px;
         }
@@ -504,6 +506,7 @@
             .map-grid { grid-template-columns: 1fr; }
             .charts-grid { grid-template-columns: 1fr; }
             .header { padding: 16px; }
+            .tab-description code { overflow-wrap: anywhere; }
         }
 
         /* ── Lede / hint / methods disclosure (showcase-copy rewrite) ──
