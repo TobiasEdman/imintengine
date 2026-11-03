@@ -285,7 +285,7 @@ The engine code is untouched.
 | **Prithvi-EO-2.0** | IBM/NASA | Apache 2.0 | LULC segmentation backbone (300M params) |
 | **CoastSeg SegFormer** | Vos et al. | GPL-3.0 | Shoreline classification (weights only) |
 | **YOLO11s** | Ultralytics | AGPL-3.0 | Object & vessel detection |
-| **COT MLP5** | Pirinen / RISE | TBD | Cloud optical thickness |
+| **COT MLP5** | Pirinen / RISE | Apache 2.0 | Cloud optical thickness |
 | **PIB Grazing** | RISE | TBD | Grazing activity classification |
 
 ---
@@ -318,5 +318,5 @@ Notable third-party obligations:
 - **YOLO11s** (Ultralytics): AGPL-3.0 — commercial closed-source use
   requires an Enterprise license
 - **Prithvi-EO** (IBM/NASA): Apache 2.0
-- **COT MLP5** (Pirinen et al. / RISE): license TBD
+- **COT MLP5** (Pirinen et al. / RISE): Apache 2.0
 - **Sjokort S-57** (Sjofartsverket): academic use only via SLU GET
