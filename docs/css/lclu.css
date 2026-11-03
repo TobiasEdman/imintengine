@@ -32,3 +32,28 @@ main{max-width:1500px;margin:auto;padding:32px}.intro{max-width:830px;margin-bot
 .year-chip{padding:4px 10px;font-size:12px;border-radius:999px;background:#f3f5f4;color:var(--muted);border:1px solid var(--line)}
 .year-chip[aria-pressed=true]{background:var(--mint);color:var(--forest);border-color:var(--forest)}
 #session label{display:flex;justify-content:space-between;font-size:12px}#opacity{width:100%;accent-color:var(--forest)}
+
+/* How the map is made (#sa-skapas) and how well it agrees with field data (#hur-val). */
+.page-section{margin:40px 0;padding-top:28px;border-top:1px solid var(--line)}
+.page-section h2{font-size:clamp(22px,2.4vw,30px);letter-spacing:-.6px;line-height:1.25;margin-bottom:10px}
+.page-section h3{font-size:15px;color:var(--forest);margin:26px 0 12px}
+.section-lede{max-width:830px;color:var(--muted);font-size:16px;line-height:1.6}
+/* Example layers: three per row, two below 850 px (also on phones, to keep the page short). */
+.layer-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;max-width:940px}
+.layer-grid.pair{grid-template-columns:repeat(2,minmax(0,1fr));max-width:626px}
+.layer{margin:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+.layer img{display:block;width:100%;height:auto;aspect-ratio:1;object-fit:cover;image-rendering:pixelated;background:#f0f4f1}
+.layer figcaption{padding:10px 12px;font-size:13px;line-height:1.4;display:grid;gap:2px}
+.layer figcaption span,.layer-note span{color:var(--muted);font-size:12px}
+.layer-note{border:1px dashed #c4cec8;border-radius:10px;padding:14px;display:grid;gap:6px;align-content:start;font-size:13px;line-height:1.4}
+.layer-colours{max-width:830px;margin-top:14px;font-size:13px;line-height:1.5;color:var(--muted)}
+.page-section>details.methods{max-width:830px;margin-top:22px;padding-top:14px;border-top:1px solid var(--line)}
+.example-legend{list-style:none;display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 4px;font-size:13px;line-height:1.4;color:#374151}
+.example-legend li{display:flex;align-items:center;gap:6px}
+/* Field validation: styles.css summary cards and tab-intro, aligned with the rest of the page. */
+#hur-val .summary-section{padding:16px 0 8px;max-width:940px}
+#hur-val .tab-intro{max-width:830px;margin:0;padding:16px 0 0;text-align:left}
+#hur-val .tab-intro .lede,#hur-val .tab-intro details.methods{margin-left:0}
+.study-steps{margin:6px 0 0 20px;font-size:15px;line-height:1.55;color:#374151}.study-steps li{margin:8px 0}
+@media(max-width:850px){.layer-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.layer-note{grid-column:1/-1}}
+@media(max-width:480px){.page-section{margin:28px 0}.layer-grid{gap:10px}.layer figcaption{padding:8px}#hur-val .tab-intro .lede{font-size:17px}}

@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css?v=5">
   <link rel="stylesheet" href="css/leaflet.css">
-  <link rel="stylesheet" href="css/lclu.css?v=2">
+  <link rel="stylesheet" href="css/lclu.css?v=3">
   <script defer src="js/vendor/leaflet.min.js"></script>
   <script defer src="js/lclu-config.js"></script>
   <script defer src="js/lclu.js?v=2"></script>
@@ -15,7 +15,7 @@
 <body>
 <header class="header">
   <div class="header-left"><div><h1><span>IMINT</span> / Årskarta</h1><p>Digital Earth Sweden</p></div></div>
-  <nav class="header-nav" aria-label="Showcase"><a class="theme-tab" href="index.html">← Showcase</a><span class="theme-tab active">Årskarta · TESSERA R4</span></nav>
+  <nav class="header-nav" aria-label="Showcase"><a class="theme-tab" href="index.html">← Showcase</a><span class="theme-tab active">🗺️ Marktäcke</span></nav>
 </header>
 <main>
   <section class="intro"><p class="eyebrow" id="area-title">SVERIGE / HISTORISKA ÅR</p><h2>Markanvändning och marktäcke 2017&#8288;–&#8288;2024.</h2>
@@ -64,6 +64,162 @@
       <p class="operator-note">Interaktiv demo · befintlig TESSERA R4-modell.</p>
     </aside>
   </div>
+  <section class="page-section" id="sa-skapas">
+    <p class="eyebrow">SÅ SKAPAS DIN ÅRSKARTA</p>
+    <h2>Från satellitdata till markklass</h2>
+    <p class="section-lede">Varje årskarta klassas av TESSERA R4 i 10 meters upplösning. Modellen läser två sorters indata:
+      sådant som följer det valda året och fasta stödlager som delas mellan åren. Exemplet nedan är en ruta på cirka
+      5 × 5 km i ett skogs- och odlingslandskap; den ingår inte i utvärderingsmängden.</p>
+    <h3>1 · Följer det valda året</h3>
+    <div class="layer-grid">
+      <figure class="layer"><img src="showcase/nfi_validation/tessera_embedding.png" alt="TESSERA-embedding för exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>TESSERA-embedding</strong><span>Årlig sammanfattning av Sentinel-1 och -2</span></figcaption></figure>
+      <figure class="layer"><img src="showcase/nfi_validation/vpp_length.png" alt="Växtsäsongens längd i exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>Växtsäsongens längd</strong><span>HR-VPP, Copernicus</span></figcaption></figure>
+      <figure class="layer"><img src="showcase/nfi_validation/rgb.png" alt="Sentinel-2-sommarbild av exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>Sentinel-2</strong><span>Sommarbild, endast för visning</span></figcaption></figure>
+    </div>
+    <h3>2 · Fasta stödlager</h3>
+    <div class="layer-grid">
+      <figure class="layer"><img src="showcase/nfi_validation/dem.png" alt="Höjdmodell för exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>Höjdmodell</strong><span>Copernicus DEM</span></figcaption></figure>
+      <figure class="layer"><img src="showcase/nfi_validation/height.png" alt="Trädhöjd i exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>Trädhöjd</strong><span>Skogsstyrelsen</span></figcaption></figure>
+      <div class="layer-note"><strong>Också med</strong><span>Skogliga grunddata och markfukt (Skogsstyrelsen, SLU). De
+        delas mellan åren och är inte observationer från det valda året.</span></div>
+    </div>
+    <h3>3 · Vad modellen lärde sig av</h3>
+    <div class="layer-grid">
+      <figure class="layer"><img src="showcase/nfi_validation/training_label.png" alt="Träningsetikett för exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>Träningsetikett</strong><span>NMD2023 + jordbruksskiften + avverkningar</span></figcaption></figure>
+      <figure class="layer"><img src="showcase/nfi_validation/lpis.png" alt="Jordbruksskiften i exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>Jordbruksskiften</strong><span>Jordbruksverket, LPIS</span></figcaption></figure>
+      <figure class="layer"><img src="showcase/nfi_validation/harvest.png" alt="Utförda avverkningar i exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>Utförda avverkningar</strong><span>Skogsstyrelsen</span></figcaption></figure>
+    </div>
+    <h3>4 · Resultatet</h3>
+    <div class="layer-grid pair">
+      <figure class="layer"><img src="showcase/nfi_validation/tessera_r4.png" alt="TESSERA R4:s karta över exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>TESSERA R4</strong><span>Samma modell som skapar din årskarta</span></figcaption></figure>
+      <figure class="layer"><img src="showcase/nfi_validation/nmd2023.png" alt="NMD2023 över exempelrutan" width="504" height="504" loading="lazy">
+        <figcaption><strong>NMD2023</strong><span>Naturvårdsverket, som jämförelse</span></figcaption></figure>
+    </div>
+    <p class="layer-colours">Exemplets klassfärger följer träningsschemat. Din årskarta använder NMD 2023:s färger där klasserna
+      motsvarar varandra, som i teckenförklaringen längre ner.</p>
+    <details class="methods">
+      <summary>Visa datakällor och färgförklaring</summary>
+      <p>Alla lager täcker modellens fönster på 504 × 504 pixlar. Höjdmodell, trädhöjd och växtsäsongens längd har en
+        färgskala från 2:a–98:e percentilen i rutan; där värdet 0 betyder att inget finns (inga träd, ingen växtsäsong) är
+        pixeln genomskinlig. Lagrens ursprung: <a href="showcase/nfi_validation/MANIFEST.json">MANIFEST.json</a>.</p>
+      <h4>TESSERA-embedding</h4>
+      <p>TESSERA sammanfattar ett års satellitobservationer per pixel i 128 tal. Bilden visar de tre första
+        huvudkomponenterna som färg: områden med samma färg har liknande signatur över året. TESSERA R4 bygger på dessa
+        embeddings.
+        <br><em>Källa: <a href="https://pypi.org/project/geotessera/" target="_blank" rel="noopener">geotessera</a></em></p>
+      <h4>Växtsäsongens längd</h4>
+      <p>Antal dagar mellan växtsäsongens start och slut enligt Copernicus HR-VPP, som bygger på Sentinel-2. Fenologin
+        används på två sätt: som hjälpkanaler och, för modeller som läser Sentinel-2-bilder, för att välja datum för de
+        tre växtsäsongsbilderna i varje ruta. Där ingen växtsäsong finns (t.ex. vatten) eller data saknas är pixeln
+        genomskinlig.
+        <br><em>Källa: <a href="https://land.copernicus.eu/" target="_blank" rel="noopener">Copernicus Land Monitoring Service, HR-VPP</a></em></p>
+      <ul class="example-legend" aria-label="Växtsäsongens längd"><li><i class="swatch" style="background:#440154"></i>60 dagar</li><li><i class="swatch" style="background:#3B528B"></i>105 dagar</li><li><i class="swatch" style="background:#21918C"></i>150 dagar</li><li><i class="swatch" style="background:#5EC962"></i>195 dagar</li><li><i class="swatch" style="background:#FDE725"></i>240 dagar</li></ul>
+      <h4>Sentinel-2</h4>
+      <p>Satellitbilden är en Sentinel-2-sommarbild med kontraststräckning för visning; den svarta kilen nere till höger
+        saknar data just det datumet, och modellerna använder flera datum.
+        <br><em>Källa: ESA Copernicus Sentinel-2</em></p>
+      <h4>Höjdmodell</h4>
+      <p>Terränghöjd över havet från Copernicus DEM (30 m), inläst på rutans 10 m-rutnät. Den är en av modellernas
+        hjälpkanaler.
+        <br><em>Källa: <a href="https://spacedata.copernicus.eu/" target="_blank" rel="noopener">Copernicus DEM GLO-30</a></em></p>
+      <ul class="example-legend" aria-label="Höjd över havet"><li><i class="swatch" style="background:#FFFFE5"></i>30 m</li><li><i class="swatch" style="background:#FEE390"></i>52.5 m</li><li><i class="swatch" style="background:#FE9829"></i>75 m</li><li><i class="swatch" style="background:#CB4B02"></i>97.5 m</li><li><i class="swatch" style="background:#662506"></i>120 m</li></ul>
+      <h4>Trädhöjd</h4>
+      <p>Trädhöjd ur Skogsstyrelsens laserskanningsbaserade skogsdata. Tillsammans med virkesvolym, grundyta och diameter
+        från samma källa är den en hjälpkanal. Där värdet är 0 (inga träd eller inga data) är pixeln genomskinlig.
+        <br><em>Källa: <a href="https://www.skogsstyrelsen.se/" target="_blank" rel="noopener">Skogsstyrelsen</a>, öppna geodata</em></p>
+      <ul class="example-legend" aria-label="Trädhöjd"><li><i class="swatch" style="background:#FFFFE5"></i>0 m</li><li><i class="swatch" style="background:#D9F0A3"></i>7.5 m</li><li><i class="swatch" style="background:#77C679"></i>15 m</li><li><i class="swatch" style="background:#228343"></i>22.5 m</li><li><i class="swatch" style="background:#004529"></i>30 m</li></ul>
+      <h4>Skogliga grunddata och markfukt</h4>
+      <p>Virkesvolym, grundyta och diameter från Skogsstyrelsen och markfuktighet från SLU:s markfuktighetskarta är också
+        hjälpkanaler. De delas mellan åren och visas inte i exemplet.
+        <br><em>Källa: <a href="https://www.skogsstyrelsen.se/" target="_blank" rel="noopener">Skogsstyrelsen</a>; SLU Markfuktighetskarta</em></p>
+      <h4>Träningsetikett</h4>
+      <p>Etiketten modellerna tränas mot på nivå 2: NMD2023 som bas, med grödor från jordbruksskiftena och avverkningar
+        ovanpå. Nivå 1 använder samma uppbyggnad med NMD2018 som bas; nivåerna beskrivs under metoden längre ner. Pixlar
+        utan etikett är genomskinliga. Färgerna är desamma som för TESSERA R4.</p>
+      <h4>Jordbruksskiften (LPIS)</h4>
+      <p>Grödor på jordbruksskiften från Jordbruksverkets register, samma år som satellitbilderna. Grödkoderna slås ihop
+        till de grödklasser modellerna lär sig. Alla grödklasser i träningsetiketten kommer härifrån; resten av bilden är
+        genomskinlig.
+        <br><em>Källa: <a href="https://jordbruksverket.se/" target="_blank" rel="noopener">Jordbruksverket</a>, LPIS</em></p>
+      <ul class="example-legend" aria-label="Grödor (LPIS)"><li><i class="swatch" style="background:#D48217"></i>Korn</li><li><i class="swatch" style="background:#2DB45A"></i>Oljeväxter</li><li><i class="swatch" style="background:#64C864"></i>Slåttervall</li><li><i class="swatch" style="background:#50A03C"></i>Bete</li><li><i class="swatch" style="background:#B45028"></i>Potatis</li><li><i class="swatch" style="background:#8CB432"></i>Trindsäd</li><li><i class="swatch" style="background:#BE9650"></i>Råg</li></ul>
+      <h4>Utförda avverkningar</h4>
+      <p>Avverkningar som Skogsstyrelsen registrerat som utförda under rutans år eller de fem åren innan. Där NMD visar
+        skog blir de klassen hygge i träningsetiketten; annars behåller pixeln sin klass.
+        <br><em>Källa: <a href="https://www.skogsstyrelsen.se/" target="_blank" rel="noopener">Skogsstyrelsen</a></em></p>
+      <ul class="example-legend" aria-label="Avverkningar"><li><i class="swatch" style="background:#00CED1"></i>utförd avverkning, rutans år eller de fem åren innan</li></ul>
+      <h4>TESSERA R4</h4>
+      <p>Modellkartan är den slutliga, fältkalibrerade modellens fulla klassutdata — fler klasser än de fem som utvärderas.</p>
+      <ul class="example-legend" aria-label="Klassfärger i träningsetiketten och TESSERA R4"><li><i class="swatch" style="background:#006400"></i>Tallskog</li><li><i class="swatch" style="background:#228B22"></i>Granskog</li><li><i class="swatch" style="background:#32CD32"></i>Lövskog</li><li><i class="swatch" style="background:#3CB371"></i>Blandskog</li><li><i class="swatch" style="background:#2E4F2E"></i>Sumpskog</li><li><i class="swatch" style="background:#A0C878"></i>Tillfälligt ej skog</li><li><i class="swatch" style="background:#00CED1"></i>Hygge</li><li><i class="swatch" style="background:#8B5A2B"></i>Våtmark</li><li><i class="swatch" style="background:#D2B48C"></i>Öppen mark</li><li><i class="swatch" style="background:#ABC8A6"></i>Buskdominerad mark</li><li><i class="swatch" style="background:#CDAA66"></i>Risdominerad mark</li><li><i class="swatch" style="background:#FFD27E"></i>Gräsdominerad mark</li><li><i class="swatch" style="background:#E0E0E0"></i>Öppen mark utan vegetation</li><li><i class="swatch" style="background:#E6B422"></i>Vete</li><li><i class="swatch" style="background:#D48217"></i>Korn</li><li><i class="swatch" style="background:#FFFF64"></i>Havre</li><li><i class="swatch" style="background:#BE9650"></i>Råg</li><li><i class="swatch" style="background:#2DB45A"></i>Oljeväxter</li><li><i class="swatch" style="background:#8CB432"></i>Trindsäd</li><li><i class="swatch" style="background:#DCC800"></i>Majs</li><li><i class="swatch" style="background:#64C864"></i>Slåttervall</li><li><i class="swatch" style="background:#50A03C"></i>Bete</li><li><i class="swatch" style="background:#B45028"></i>Potatis</li><li><i class="swatch" style="background:#C864C8"></i>Sockerbetor</li><li><i class="swatch" style="background:#FF0000"></i>Bebyggelse</li><li><i class="swatch" style="background:#0000FF"></i>Vatten</li></ul>
+      <h4>NMD2023</h4>
+      <p>Naturvårdsverkets Nationella Marktäckedata 2023 i showcasens NMD-färger. NMD2023:s nyare koder (finindelad öppen
+        våtmark och öppen mark, låg fjällskog, torvtäkt) visas som närmaste NMD2018-klass.
+        <br><em>Källa: <a href="https://www.naturvardsverket.se/verktyg-och-tjanster/kartor-och-karttjanster/nationella-marktackedata/" target="_blank" rel="noopener">Naturvårdsverket, Nationellt Marktäckedata (NMD)</a></em></p>
+      <ul class="example-legend" aria-label="NMD2023"><li><i class="swatch" style="background:#006400"></i>Tallskog</li><li><i class="swatch" style="background:#228B22"></i>Granskog</li><li><i class="swatch" style="background:#32CD32"></i>Lövskog</li><li><i class="swatch" style="background:#3CB371"></i>Blandskog</li><li><i class="swatch" style="background:#90EE90"></i>Temp. ej skog</li><li><i class="swatch" style="background:#2E4F2E"></i>Sumpsk. tall</li><li><i class="swatch" style="background:#3A5F3A"></i>Sumpsk. gran</li><li><i class="swatch" style="background:#4A7F4A"></i>Sumpsk. löv</li><li><i class="swatch" style="background:#5A8F5A"></i>Sumpsk. bland</li><li><i class="swatch" style="background:#7AAF7A"></i>Sumpsk. temp</li><li><i class="swatch" style="background:#8B5A2B"></i>Öpp. våtmark</li><li><i class="swatch" style="background:#FFD700"></i>Åkermark</li><li><i class="swatch" style="background:#C8AD7F"></i>Öpp. mark bar</li><li><i class="swatch" style="background:#D2B48C"></i>Öpp. mark veg.</li><li><i class="swatch" style="background:#FF0000"></i>Byggnader</li><li><i class="swatch" style="background:#FF4500"></i>Infrastruktur</li><li><i class="swatch" style="background:#FF6347"></i>Vägar</li><li><i class="swatch" style="background:#0000FF"></i>Sjöar</li><li><i class="swatch" style="background:#1E90FF"></i>Hav</li></ul>
+    </details>
+  </section>
+  <section class="page-section" id="hur-val">
+    <p class="eyebrow">HUR VÄL STÄMMER KARTAN? · FÖRHANDSVISNING</p>
+    <h2>Fältvalidering mot Riksskogstaxeringen</h2>
+    <div class="summary-section">
+      <div class="summary-card"><h4>Fältdata</h4><div class="value">5 194 provyte-år</div><div class="detail">742 per år, 2018–2024</div></div>
+      <div class="summary-card"><h4>Utvärderingsmängd</h4><div class="value">Förseglad</div><div class="detail">låst med SHA-256 innan modellerna kördes</div></div>
+      <div class="summary-card"><h4>Jämförelse</h4><div class="value">Samma provytor</div><div class="detail">modeller, NMD2018 och NMD2023 parvis</div></div>
+      <div class="summary-card"><h4>Statistik</h4><div class="value">Bestämd i förväg</div><div class="detail">50 km-block, korrigerad för multipla jämförelser</div></div>
+    </div>
+    <div class="tab-intro">
+      <p class="lede">Hur väl stämmer marktäckekartor med vad som faktiskt finns på marken? Vi har jämfört modellernas kartor
+        och Naturvårdsverkets NMD med Riksskogstaxeringens provytor från sju inventeringsår. I stora drag: både
+        Prithvi-EO-2.0 och TESSERA stämmer oftare med fältbedömningen än NMD2023 — men bara när de tränas med
+        fältkalibrerade etiketter. Exempelrutan ovan är samma typ av ruta men ingår inte i utvärderingen.</p>
+      <details class="methods">
+        <summary>Visa metod och datakällor</summary>
+        <h4>Utvärderingsdesign</h4>
+        <p>742 provyte-år per år 2018–2024 valdes med ett seedat, dokumenterat urval och låstes med en SHA-256-hash innan
+          någon modell kördes; poängsättningen kontrollerar hashen innan den räknar. Modellerna, NMD2018 och NMD2023
+          jämförs parvis på samma provytor. Måttet är överensstämmelse i fem klasser — tallskog, granskog, lövskog,
+          blandskog och övrigt (inklusive icke-skog). Osäkerheten skattas över oberoende 50 km-block och korrigeras för
+          det totala antalet jämförelser. De provyte-år vars data tränade den fältkalibrerade läraren är uteslutna ur
+          utvärderingen.</p>
+        <h4>Studiens fyra steg</h4>
+        <p>Studien bygger på öppna data; undantaget är Riksskogstaxeringens provytor, vars lägen är skyddade. Vilka indata
+          en modell får beror på modellen.</p>
+        <ol class="study-steps">
+          <li><strong>Indata.</strong> Satellitbilder: fyra Sentinel-2-bilder per ruta och år (hösten året innan och tre
+            bilder under växtsäsongen, tidsatta efter rutans fenologi); Sentinel-1-radar för de modeller som använder
+            radar. Hjälpkanaler: höjdmodell; trädhöjd, virkesvolym, grundyta och diameter; markfuktighet; växtsäsongens
+            start, slut, längd samt max- och minvärde. TESSERA: förberäknade årliga embeddings, 128 tal per pixel.
+            <br><em>Källor: ESA Copernicus Sentinel-2 och Sentinel-1; Copernicus DEM GLO-30; Skogsstyrelsen; SLU
+            Markfuktighetskarta; Copernicus HR-VPP; TESSERA (geotessera)</em></li>
+          <li><strong>Etiketter.</strong> NMD2018 respektive NMD2023 som bas, med jordbruksgrödor och utförda avverkningar
+            ovanpå.
+            <br><em>Källor: Naturvårdsverket; Jordbruksverket (LPIS); Skogsstyrelsen</em></li>
+          <li><strong>Träning i fyra nivåer.</strong> (1) NMD2018-etiketter, (2) NMD2023-etiketter, (3) dessutom
+            fältkalibrerade skogsetiketter från en lärare tränad mot NFI-provytor, (4) dessutom trädslagsandelar.
+            <br><em>Källor: Riksskogstaxeringen (SLU); NMD2023:s tilläggsskikt Trädslag</em></li>
+          <li><strong>Utvärdering.</strong> 742 provyte-år per år 2018–2024, låsta innan modellerna kördes; jämförelse med
+            NMD2018 och NMD2023 på samma provytor.
+            <br><em>Källa: Riksskogstaxeringen (SLU)</em></li>
+        </ol>
+        <h4>Att tänka på</h4>
+        <p>Måttet är femklassig överensstämmelse över alla provytor; det visar inte ensamt att modellerna skiljer trädslag
+          bättre inom skog. Studien omfattar fler grundmodeller än de två som nämns här. Provytornas lägen är skyddade och
+          publiceras inte.
+          <br><em>Designen är dokumenterad öppet:
+          <a href="https://github.com/TobiasEdman/imintengine/blob/main/docs/experiments/nfi_multiyear_freeze_2026-10-27.md" target="_blank" rel="noopener">frysningen</a>,
+          <a href="https://github.com/TobiasEdman/imintengine/blob/main/docs/experiments/nfi_inference_run_2026-10-27.md" target="_blank" rel="noopener">modellkörningen</a> och
+          <a href="https://github.com/TobiasEdman/imintengine/blob/main/k8s/nfi-scoring-job.yaml" target="_blank" rel="noopener">poängsättningsjobbet</a>.</em></p>
+      </details>
+    </div>
+  </section>
   <section class="testimonial"><h3>Vad betyder året?</h3><p id="historical-note">Året gäller TESSERA och HR-VPP. Trädhöjd, skogliga grunddata, markfukt och DEM är fasta stödlager som delas mellan åren.</p>
     <p>Genomskinliga pixlar saknar användbara indata. Svart är modellklassen bakgrund (0). Modellens klassning är en skattning.</p>
   </section>
