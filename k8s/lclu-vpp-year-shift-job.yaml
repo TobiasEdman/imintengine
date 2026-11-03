@@ -80,7 +80,7 @@ spec:
             - -c
             - |
               set -eu
-              SHA=__SOURCE_COMMIT__
+              SHA=1ceba706ca4ed5d92950c11232909c66b3f218c9
               echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "FATAL: pin SHA to a commit"; exit 1; }
               cd /source
               git init -q .
