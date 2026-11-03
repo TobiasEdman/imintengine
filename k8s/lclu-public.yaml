@@ -1,11 +1,11 @@
 # Public annual land-cover API for the static showcase page (task 0131).
 #
 # docs/lclu.html on GitHub Pages calls https://lclu.icedc.se (docs/js/lclu-config.js).
-# The serving pod is the municipality campaign Job lclu-stockholm-0124-r9
-# (11 areas x 2017-2024, R4 qualified per area-year): the first deployment
-# carrying the runtime storage budget, which refuses new warm-ups and maps
-# before the demo volume fills. r8 has no such budget and is never exposed;
-# until r9 exists this Service has no endpoints.
+# The serving pod is the municipality campaign Job lclu-stockholm-0124-r10
+# (11 areas x 2017-2024, R4 qualified per area-year), built from main 1c7fd1a
+# with the runtime storage budget, which refuses new warm-ups and maps before
+# the demo volume fills. It replaces r9 (00f03145), which lacks the admission
+# fixes of #127. r8 has no storage budget and is never exposed.
 # The API is unauthenticated, so this exposes only what the page needs:
 #   * only the /v1/lclu prefix (catalogue, availability, map jobs, files,
 #     pixel, prepare, prefetch); every other API route stays cluster-internal;
@@ -27,7 +27,7 @@ metadata:
 spec:
   # job-name, not app: r7 and r8 carry the same app label.
   selector:
-    job-name: lclu-stockholm-0124-r9
+    job-name: lclu-stockholm-0124-r10
   ports:
     - { name: http, port: 8000, targetPort: 8000, protocol: TCP }
 ---

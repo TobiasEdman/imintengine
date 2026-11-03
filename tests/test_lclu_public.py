@@ -3,7 +3,7 @@
 The API behind it is unauthenticated, so the manifest is the boundary: one host,
 only the /v1/lclu prefix, CORS for the exact showcase origin, a rate limit, and
 a Service pinned to the serving Job rather than to a label r7 and r8 share.
-Only the Job carrying the runtime storage budget (r9) may be exposed: r8 has
+Only the Job carrying the runtime storage budget (r10) may be exposed: r8 has
 none, and a stream of distinct requests could fill the demo volume.
 """
 import re
@@ -43,7 +43,7 @@ def test_cors_allows_exactly_the_showcase_origin_and_requests_are_bounded():
 def test_service_is_pinned_to_the_serving_job_and_matches_the_backend():
     docs = documents()
     service, backend = docs["Service"], docs["Ingress"]["spec"]["rules"][0]["http"]["paths"][0]["backend"]
-    assert service["spec"]["selector"] == {"job-name": "lclu-stockholm-0124-r9"}
+    assert service["spec"]["selector"] == {"job-name": "lclu-stockholm-0124-r10"}
     assert backend["service"]["name"] == service["metadata"]["name"]
     assert backend["service"]["port"]["number"] == service["spec"]["ports"][0]["port"] == 8000
 

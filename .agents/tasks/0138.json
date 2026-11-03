@@ -1,0 +1,13 @@
+{
+  "id": "0138",
+  "subject": "Switch the public annual-map service and the 2024 batch to r10",
+  "description": "On Tobias's go (2026-11-03) the serving release lclu-stockholm-0124-r10 was created from main 1c7fd1a (bundle 3daa6e67), with deadline 2026-11-20T11:20:47Z. It passed the acceptance audit (88 qualified, 0 errors, live catalogue passed) and served a first real map; its inference pin is 1bbba0a5. Scope: k8s/lclu-public.yaml and tests/test_lclu_public.py select r10 instead of r9; k8s/lclu-coverage-2024-job.yaml runs against r10 with SHA 1c7fd1a and PIN 1bbba0a5 instead of placeholders. Applying the Service change and retiring r9 each need Tobias's separate go; the batch runs only on his go. Not in scope: running the batch, deleting r9. Review: Codex.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/lclu-r10-switch",
+  "created_at": "2026-11-03T14:12:00Z",
+  "updated_at": "2026-11-03T14:11:10Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-03T14:11:10Z"
+}
