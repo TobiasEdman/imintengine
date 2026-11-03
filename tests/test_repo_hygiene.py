@@ -16,7 +16,9 @@ Båda körs lokalt via pytest och i CI på varje PR.
 """
 from __future__ import annotations
 
+import hashlib
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -205,14 +207,8 @@ def test_every_docker_run_has_a_dockerfile() -> None:
     )
 
 
-def test_no_latest_tag_in_dockerfiles() -> None:
-    """Dockerfiles must not use ``FROM x:latest`` — pin to explicit version.
-
-    ``:latest`` makes builds non-reproducible: the same Dockerfile produces
-    different images on different days. Pin to ``FROM mundialis/esa-snap:13.0.0``,
-    ``FROM python:3.11.9-slim-bookworm``, etc.
-    """
-    # Använd git-tracked Dockerfiles, inte rglob (.venv-sr/ vandring → 15+ s).
+def _tracked_dockerfiles() -> list[Path]:
+    """Git-tracked Dockerfiles; not rglob (walking .venv-sr/ costs 15+ s)."""
     import subprocess
     try:
         result = subprocess.run(
@@ -223,13 +219,18 @@ def test_no_latest_tag_in_dockerfiles() -> None:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
             FileNotFoundError):
         dockerfiles = list(REPO.rglob("Dockerfile*"))
-    dockerfiles = [
-        f for f in dockerfiles
-        if not any(part in str(f) for part in SKIP_PARTS)
-    ]
+    return [f for f in dockerfiles if not any(part in str(f) for part in SKIP_PARTS)]
 
+
+def test_no_latest_tag_in_dockerfiles() -> None:
+    """Dockerfiles must not use ``FROM x:latest`` — pin to explicit version.
+
+    ``:latest`` makes builds non-reproducible: the same Dockerfile produces
+    different images on different days. Pin to ``FROM mundialis/esa-snap:13.0.0``,
+    ``FROM python:3.11.9-slim-bookworm``, etc.
+    """
     violations: list[tuple[Path, int, str]] = []
-    for f in dockerfiles:
+    for f in _tracked_dockerfiles():
         try:
             for lineno, line in enumerate(f.read_text().splitlines(), start=1):
                 if line.strip().upper().startswith("FROM ") and ":latest" in line:
@@ -566,3 +567,72 @@ def test_every_aux_pass_job_refuses_a_reader_blind_to_recorded_gaps() -> None:
                     jobs.append((path.name, "skg_open.tradhojd_gaps(" in script and "county_mask" in script
                                  and "--max-missing-share" in script))
     assert jobs and all(ok for _, ok in jobs), jobs
+
+
+# ── Licensing: code Apache-2.0, data CC0 (#136) ─────────────────────────────
+
+# sha256 of https://www.apache.org/licenses/LICENSE-2.0.txt, unmodified. The
+# copyright statement lives in NOTICE and README, not in the appendix.
+_APACHE_2_0_SHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+_OCI_LICENSES = re.compile(r"org\.opencontainers\.image\.licenses\s*=\s*([^\s\"']+)")
+
+
+def _project() -> dict:
+    return tomllib.loads((REPO / "pyproject.toml").read_text())["project"]
+
+
+def _copy_sources_by_stage(dockerfile: Path) -> list[set[str]]:
+    """Build-context paths each stage COPYs; ``COPY --from`` is not context."""
+    text = re.sub(r"\\[ \t]*\n", " ", dockerfile.read_text())
+    stages: list[set[str]] = [set()]
+    for words in (line.split() for line in text.splitlines()):
+        if not words:
+            continue
+        if words[0].upper() == "FROM":
+            stages.append(set())
+        elif words[0].upper() == "COPY" and not any(w.startswith("--from") for w in words):
+            stages[-1].update(w.removeprefix("./") for w in words[1:-1] if not w.startswith("--"))
+    return stages
+
+
+def test_license_is_the_canonical_apache_2_0_text() -> None:
+    digest = hashlib.sha256((REPO / "LICENSE").read_bytes()).hexdigest()
+    assert digest == _APACHE_2_0_SHA256, (
+        f"LICENSE sha256 {digest} is not the canonical Apache License 2.0 "
+        "text; restore it verbatim and keep the copyright line in NOTICE."
+    )
+
+
+def test_pyproject_license_is_apache_2_0() -> None:
+    assert _project()["license"] == "Apache-2.0"
+
+
+def test_oci_image_license_labels_are_apache_2_0() -> None:
+    labels = [
+        (path.name, value)
+        for path in sorted((REPO / ".github" / "workflows").iterdir())
+        if path.suffix in {".yml", ".yaml"}
+        for value in _OCI_LICENSES.findall(path.read_text())
+    ]
+    assert labels and all(value == "Apache-2.0" for _, value in labels), labels
+
+
+def test_every_pyproject_license_file_exists() -> None:
+    missing = [name for name in _project()["license-files"] if not (REPO / name).is_file()]
+    assert not missing, f"pyproject license-files missing from the repo: {missing}"
+
+
+def test_dockerfile_stages_copying_license_copy_every_license_file() -> None:
+    """The images pip-install the package from a minimal COPYed context, and
+    setuptools fails on any license-files entry absent from it. A stage that
+    COPYs LICENSE must COPY every license-files entry."""
+    required = set(_project()["license-files"])
+    checked, gaps = 0, []
+    for dockerfile in _tracked_dockerfiles():
+        for stage, sources in enumerate(_copy_sources_by_stage(dockerfile)):
+            if "LICENSE" in sources:
+                checked += 1
+                if not required <= sources:
+                    gaps.append((str(dockerfile.relative_to(REPO)), stage, sorted(required - sources)))
+    assert checked, "no Dockerfile stage COPYs LICENSE; the guard checks nothing"
+    assert not gaps, f"(Dockerfile, FROM-stage, missing license-files): {gaps}"

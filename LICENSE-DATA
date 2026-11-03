@@ -7,6 +7,11 @@ repository. The source code is licensed separately under the Apache
 License, Version 2.0 (see LICENSE). The License section of README.md
 says which material is which.
 
+Exception: the narration voice in the showcase films
+(docs/showcase/films/, docs/films.html) is a synthetic voice clone and
+is not covered by CC0 1.0; it may not be extracted, reused, or used to
+train or prompt voice models.
+
 Third-party material keeps its own license; see THIRD_PARTY_LICENSES.md.
 
 This work is published from: Sweden.
