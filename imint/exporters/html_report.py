@@ -3053,9 +3053,9 @@ def save_tabbed_report(
                 </tr>
                 <tr>
                     <td>COT MLP5 ensemble (molndetektering)</td>
-                    <td><span class="license-badge badge-restricted">Ej klargjord</span></td>
+                    <td><span class="license-badge badge-open">Apache 2.0</span></td>
                     <td>Aleksis Pirinen / RISE</td>
-                    <td>Pirinen et al., 2024. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" style="color:#171717;" target="_blank">GitHub</a> &mdash; kommersiell licens ej bekr\u00e4ftad</td>
+                    <td>Pirinen et al., 2024. <a href="https://github.com/DigitalEarthSweden/ml-cloud-opt-thick" style="color:#171717;" target="_blank">GitHub</a></td>
                 </tr>
                 <tr>
                     <td>pib-ml-grazing CNN-biLSTM (betesanalys)</td>
