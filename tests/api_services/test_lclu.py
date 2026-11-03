@@ -211,6 +211,15 @@ def test_showcase_cross_origin_submission_poll_and_download(api, monkeypatch):
         assert 'access-control-allow-origin' not in client.get('/v1/lclu',headers={'Origin':'https://untrusted.example'}).headers
 
 
+def test_page_script_uses_only_elements_the_page_has():
+    import re
+    root=Path(__file__).resolve().parents[2]/'docs'
+    used=set(re.findall(r"\$\('([\w-]+)'\)",(root/'js/lclu.js').read_text()))
+    present=set(re.findall(r'\bid="([\w-]+)"',(root/'lclu.html').read_text()))
+    assert {'year','year-ticks','session','session-list','create-label'} <= used
+    assert used <= present, sorted(used - present)
+
+
 def test_showcase_assets_work_for_static_and_api_hosting(api):
     import re
     root=Path(__file__).resolve().parents[2]/'docs'

@@ -1,0 +1,13 @@
+{
+  "id": "0133",
+  "subject": "Keep created annual maps for the session and add a draggable year timeline",
+  "description": "Tobias asked on 2026-11-03 for two changes to the annual-map page (docs/lclu.html): maps a viewer creates stay on the map for the browser session (\"l\u00e5t de kartor man skapat ligga kvar under sessionen\"), and a year timeline the viewer can drag (\"skapa en tidsaxel som man kan dra i\"). Scope: docs/js/lclu.js, docs/lclu.html, docs/css/lclu.css and a page test. Created maps are kept in a session list (show, hide, remove) and restored from sessionStorage after a reload; the year dropdown becomes a range timeline over the candidate years that swaps at once to a map already made at that place, warms other years while dragging and creates the year on release. At the chosen place the map always shows the timeline's year or nothing. Pixel inspection reads the topmost visible map. Not in scope: server or API changes, the 2024 wall-to-wall layer (separate task), redeploying r9. Review: Codex.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/lclu-session-maps",
+  "created_at": "2026-11-03T08:52:00Z",
+  "updated_at": "2026-11-03T08:49:53Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-03T08:49:53Z"
+}

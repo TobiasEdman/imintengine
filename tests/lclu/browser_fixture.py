@@ -77,9 +77,7 @@ def main(argv=None):
             yield
     server.app.router.lifespan_context=life
     # Replace only the test page endpoint; production code has no synthetic switch.
-    page=(Path(__file__).resolve().parents[2]/'docs/lclu.html').read_text()
-    for name, target in server._LCLU_ASSETS.items():
-        page = page.replace('src="'+target+'"', 'src="/lclu-assets/'+name+'"').replace('href="'+target, 'href="/lclu-assets/'+name)
+    page=server._api_hosted_page()
     page=page.replace('<body>','<body><div style="position:sticky;top:0;z-index:2000;background:#cff8e4;padding:10px;text-align:center;font-weight:700">SYNTHETIC DEMO · RANDOM WEIGHTS · NOT AN R4 CLASSIFICATION</div>')
     page=page.replace('Interaktiv demo · befintlig TESSERA R4-modell.',
                       'Syntetisk demo · båda åren använder samma testmönster, ingen historisk förändring visas.')
