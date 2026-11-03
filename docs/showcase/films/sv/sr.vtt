@@ -1,13 +1,13 @@
 WEBVTT
 
-00:00:00.450 --> 00:00:10.370
+00:00:00.450 --> 00:00:09.890
 Kan satellitbilder se skarpare ut? Det här Stockholmsexemplet jämför en Sentinel-2-bild med 10 meters pixlar med finare pixelrutnät i resultaten.
 
-00:00:11.490 --> 00:00:19.010
+00:00:11.010 --> 00:00:18.530
 Bikubisk interpolation och SEN2SR skapar resultat med 2,5 meters pixlar från samma indata.
 
-00:00:20.130 --> 00:00:28.290
+00:00:19.650 --> 00:00:27.810
 LDSR-S2 ger en annan visuell rekonstruktion. Ett skarpare utseende bevisar inte att detaljer har återskapats korrekt.
 
-00:00:29.410 --> 00:00:37.090
+00:00:28.930 --> 00:00:36.610
 Skillnadskartan mäter spektral förändring, inte om resultatet är korrekt. Kontrollera detaljer mot oberoende bilder.

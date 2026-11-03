@@ -1,13 +1,13 @@
 WEBVTT
 
-00:00:00.450 --> 00:00:09.090
+00:00:00.450 --> 00:00:08.770
 Can satellite images look sharper? This Stockholm example compares a 10-metre Sentinel-2 image with finer output grids.
 
-00:00:10.210 --> 00:00:17.890
+00:00:09.890 --> 00:00:17.570
 Bicubic interpolation and SEN2SR produce 2.5-metre output pixels from the same input.
 
-00:00:19.010 --> 00:00:27.170
+00:00:18.690 --> 00:00:26.850
 LDSR-S2 adds a different visual reconstruction. Sharper appearance is not proof of recovered detail.
 
-00:00:28.290 --> 00:00:36.770
+00:00:27.970 --> 00:00:36.450
 The difference map measures spectral change, not factual correctness. Validate details against independent imagery.
