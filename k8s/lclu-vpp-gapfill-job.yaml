@@ -54,7 +54,7 @@ spec:
             - |
               set -uo pipefail
               export PYTHONUNBUFFERED=1
-              SRC_SHA=45d6687a160746043aea3a5aa66d1225d2125b5a
+              SRC_SHA=254bcc792821a584b51d3375684a2ac0d88c8dd0
               AUDIT=/data/audits/lclu-vpp-gapfill-0128
               echo "=== LCLU VPP gap-fill (task 0128) at ${SRC_SHA}: $(date -u) ==="
 

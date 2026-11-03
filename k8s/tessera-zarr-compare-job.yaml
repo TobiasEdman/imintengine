@@ -35,7 +35,7 @@ spec:
             - |
               set -euo pipefail
               export PYTHONUNBUFFERED=1
-              SHA=df3cd7cd675dce4bed51225912edf0353622a070
+              SHA=254bcc792821a584b51d3375684a2ac0d88c8dd0
               echo "=== tessera-zarr-compare — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
               pip install --quiet --no-cache-dir numpy rasterio pyproj shapely \
