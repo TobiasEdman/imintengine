@@ -14,14 +14,14 @@
      "mp4": "showcase/films/en/marine-leisure.mp4",
      "vtt": "showcase/films/en/marine-leisure.vtt",
      "poster": "showcase/films/en/marine-leisure.webp",
-     "seconds": 32.0,
+     "seconds": 30.04,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/marine-leisure.mp4",
      "vtt": "showcase/films/sv/marine-leisure.vtt",
      "poster": "showcase/films/sv/marine-leisure.webp",
-     "seconds": 29.04,
+     "seconds": 29.0,
      "youtube": null
     }
    }
@@ -38,14 +38,14 @@
      "mp4": "showcase/films/en/marine-commercial.mp4",
      "vtt": "showcase/films/en/marine-commercial.vtt",
      "poster": "showcase/films/en/marine-commercial.webp",
-     "seconds": 32.0,
+     "seconds": 31.68,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/marine-commercial.mp4",
      "vtt": "showcase/films/sv/marine-commercial.vtt",
      "poster": "showcase/films/sv/marine-commercial.webp",
-     "seconds": 29.88,
+     "seconds": 29.2,
      "youtube": null
     }
    }
@@ -62,14 +62,14 @@
      "mp4": "showcase/films/en/marine-radar-skagen.mp4",
      "vtt": "showcase/films/en/marine-radar-skagen.vtt",
      "poster": "showcase/films/en/marine-radar-skagen.webp",
-     "seconds": 32.76,
+     "seconds": 30.84,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/marine-radar-skagen.mp4",
      "vtt": "showcase/films/sv/marine-radar-skagen.vtt",
      "poster": "showcase/films/sv/marine-radar-skagen.webp",
-     "seconds": 30.64,
+     "seconds": 29.52,
      "youtube": null
     }
    }
@@ -86,14 +86,14 @@
      "mp4": "showcase/films/en/marine-radar-oresund.mp4",
      "vtt": "showcase/films/en/marine-radar-oresund.vtt",
      "poster": "showcase/films/en/marine-radar-oresund.webp",
-     "seconds": 33.76,
+     "seconds": 33.6,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/marine-radar-oresund.mp4",
      "vtt": "showcase/films/sv/marine-radar-oresund.vtt",
      "poster": "showcase/films/sv/marine-radar-oresund.webp",
-     "seconds": 32.8,
+     "seconds": 31.36,
      "youtube": null
     }
    }
@@ -110,14 +110,14 @@
      "mp4": "showcase/films/en/kustlinje.mp4",
      "vtt": "showcase/films/en/kustlinje.vtt",
      "poster": "showcase/films/en/kustlinje.webp",
-     "seconds": 33.72,
+     "seconds": 32.12,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/kustlinje.mp4",
      "vtt": "showcase/films/sv/kustlinje.vtt",
      "poster": "showcase/films/sv/kustlinje.webp",
-     "seconds": 31.44,
+     "seconds": 31.92,
      "youtube": null
     }
    }
@@ -134,14 +134,14 @@
      "mp4": "showcase/films/en/vegetationskant.mp4",
      "vtt": "showcase/films/en/vegetationskant.vtt",
      "poster": "showcase/films/en/vegetationskant.webp",
-     "seconds": 35.36,
+     "seconds": 33.76,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/vegetationskant.mp4",
      "vtt": "showcase/films/sv/vegetationskant.vtt",
      "poster": "showcase/films/sv/vegetationskant.webp",
-     "seconds": 30.36,
+     "seconds": 30.68,
      "youtube": null
     }
    }
@@ -158,14 +158,14 @@
      "mp4": "showcase/films/en/water-quality-bohuslan.mp4",
      "vtt": "showcase/films/en/water-quality-bohuslan.vtt",
      "poster": "showcase/films/en/water-quality-bohuslan.webp",
-     "seconds": 38.72,
+     "seconds": 36.32,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/water-quality-bohuslan.mp4",
      "vtt": "showcase/films/sv/water-quality-bohuslan.vtt",
      "poster": "showcase/films/sv/water-quality-bohuslan.webp",
-     "seconds": 32.76,
+     "seconds": 31.16,
      "youtube": null
     }
    }
@@ -182,14 +182,14 @@
      "mp4": "showcase/films/en/water-quality-lilla-karlso.mp4",
      "vtt": "showcase/films/en/water-quality-lilla-karlso.vtt",
      "poster": "showcase/films/en/water-quality-lilla-karlso.webp",
-     "seconds": 32.12,
+     "seconds": 31.96,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/water-quality-lilla-karlso.mp4",
      "vtt": "showcase/films/sv/water-quality-lilla-karlso.vtt",
      "poster": "showcase/films/sv/water-quality-lilla-karlso.webp",
-     "seconds": 31.64,
+     "seconds": 31.96,
      "youtube": null
     }
    }
@@ -206,14 +206,14 @@
      "mp4": "showcase/films/en/sr.mp4",
      "vtt": "showcase/films/en/sr.vtt",
      "poster": "showcase/films/en/sr.webp",
-     "seconds": 37.44,
+     "seconds": 37.12,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/sr.mp4",
      "vtt": "showcase/films/sv/sr.vtt",
      "poster": "showcase/films/sv/sr.webp",
-     "seconds": 37.76,
+     "seconds": 37.28,
      "youtube": null
     }
    }
@@ -230,14 +230,14 @@
      "mp4": "showcase/films/en/aircraft-parallax.mp4",
      "vtt": "showcase/films/en/aircraft-parallax.vtt",
      "poster": "showcase/films/en/aircraft-parallax.webp",
-     "seconds": 35.48,
+     "seconds": 32.92,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/aircraft-parallax.mp4",
      "vtt": "showcase/films/sv/aircraft-parallax.vtt",
      "poster": "showcase/films/sv/aircraft-parallax.webp",
-     "seconds": 34.68,
+     "seconds": 33.72,
      "youtube": null
     }
    }
@@ -278,14 +278,14 @@
      "mp4": "showcase/films/en/era5-strategies.mp4",
      "vtt": "showcase/films/en/era5-strategies.vtt",
      "poster": "showcase/films/en/era5-strategies.webp",
-     "seconds": 35.68,
+     "seconds": 33.44,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/era5-strategies.mp4",
      "vtt": "showcase/films/sv/era5-strategies.vtt",
      "poster": "showcase/films/sv/era5-strategies.webp",
-     "seconds": 34.56,
+     "seconds": 35.04,
      "youtube": null
     }
    }
@@ -326,14 +326,14 @@
      "mp4": "showcase/films/en/wetland-pirinen.mp4",
      "vtt": "showcase/films/en/wetland-pirinen.vtt",
      "poster": "showcase/films/en/wetland-pirinen.webp",
-     "seconds": 34.84,
+     "seconds": 32.28,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/wetland-pirinen.mp4",
      "vtt": "showcase/films/sv/wetland-pirinen.vtt",
      "poster": "showcase/films/sv/wetland-pirinen.webp",
-     "seconds": 31.12,
+     "seconds": 31.76,
      "youtube": null
     }
    }
@@ -350,14 +350,14 @@
      "mp4": "showcase/films/en/fire.mp4",
      "vtt": "showcase/films/en/fire.vtt",
      "poster": "showcase/films/en/fire.webp",
-     "seconds": 32.88,
+     "seconds": 32.4,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/fire.mp4",
      "vtt": "showcase/films/sv/fire.vtt",
      "poster": "showcase/films/sv/fire.webp",
-     "seconds": 31.64,
+     "seconds": 31.8,
      "youtube": null
     }
    }
@@ -374,14 +374,14 @@
      "mp4": "showcase/films/en/grazing.mp4",
      "vtt": "showcase/films/en/grazing.vtt",
      "poster": "showcase/films/en/grazing.webp",
-     "seconds": 36.92,
+     "seconds": 36.28,
      "youtube": null
     },
     "sv": {
      "mp4": "showcase/films/sv/grazing.mp4",
      "vtt": "showcase/films/sv/grazing.vtt",
      "poster": "showcase/films/sv/grazing.webp",
-     "seconds": 34.16,
+     "seconds": 34.48,
      "youtube": null
     }
    }

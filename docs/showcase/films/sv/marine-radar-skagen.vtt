@@ -1,13 +1,13 @@
 WEBVTT
 
-00:00:00.450 --> 00:00:08.770
+00:00:00.450 --> 00:00:07.650
 Radarobservationer nära Skagen. Sentinel-1 registrerar radarreflektioner från ankringsplatsen, även genom moln och i mörker.
 
-00:00:09.890 --> 00:00:14.850
+00:00:08.770 --> 00:00:13.730
 Modellen använder aktuella och tidigare radarobservationer från samma omloppsbana.
 
-00:00:16.890 --> 00:00:22.970
+00:00:15.770 --> 00:00:21.850
 Det visade rutnätet innehåller också nio kandidater med lägre modellpoäng. Ingen har matchats mot AIS.
 
-00:00:24.090 --> 00:00:29.370
+00:00:22.970 --> 00:00:28.250
 Bilden är inte terrängkorrigerad. Förutsagda fartygsegenskaper och positioner behöver valideras.
