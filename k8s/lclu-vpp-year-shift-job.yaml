@@ -1,0 +1,158 @@
+# HR-VPP year-shift control (approved by Tobias 2026-11-03): how much does an
+# annual map change if year y is classified with HR-VPP y-1? 2025 maps would
+# have to use HR-VPP 2024, because HR-VPP 2025 is not published.
+#
+# lclu-vpp-year-shift: 4 parallel pods. Pod i runs every 4th (area, year)
+# pair of r10's demo areas x 2019-2024
+# (scripts/compare_vpp_year_shift.py run --shard i --num-shards 4). Per pair:
+# the service-prepared input for (catalogue location, y), and the same input
+# with only its five HR-VPP layers replaced by year y-1's, read by
+# prepare_aux under r10's qualified y-1 source. Each pair checks by hashing
+# that only HR-VPP differs, then classifies with r10's R4 and its serving
+# manifest. A pair without a qualified y or y-1 source, or without usable
+# y-1 HR-VPP, is recorded as missing, never filled from another year. This is
+# map-to-map consistency on demo areas, not accuracy.
+#
+# Writes: /work/experiments/vpp-year-shift/$RUN only (pairs/, summary.json,
+# summary.md; private, operator-side), plus source-verification receipts in
+# r10's identity cache (/work/releases/lclu-stockholm-0124-r10/shared/receipts)
+# whenever a receipt's file snapshot differs from this pod's view. The
+# receipt caveat and pre-gate of k8s/lclu-coverage-2024-job.yaml
+# (docs/plans/lclu_2024_coverage.md) apply unchanged: if that pre-gate found
+# st_dev differing across nodes, uncomment the podAffinity below. The script
+# holds no lock, budget or input cache of the live service, refuses any output
+# root overlapping a --live-root, and deletes every prepared input after
+# each pair.
+#
+# Storage: per pod at most one prepared input, one shifted input and one
+# HR-VPP read (3 x 256 MiB allowance). The free-space reserve (6 GiB) is r10's
+# 2 GiB plus 4 x 768 MiB plus headroom, so the batch stops writing before the
+# live API starts refusing maps.
+#
+# Compute: 66 pairs x ~23 s x 2 / 4 pods ~ 13 min, plus model load per pod.
+# A failed pair fails the Job (backoffLimit 0); recreate it to resume with
+# the same RUN: verified pairs are skipped. A changed manifest or identity
+# needs a new RUN.
+#
+# The Job runs r10's frozen inference code and runtime:
+#   SHA  __SOURCE_COMMIT__ until the commit carrying
+#        scripts/compare_vpp_year_shift.py is pinned; the init container
+#        refuses to run before then. Its identity-hashed files equal r10's
+#        source 1c7fd1a (tests/lclu/test_vpp_year_shift.py checks this).
+#   PIN  r10's inference pin, as in k8s/lclu-coverage-2024-job.yaml. The
+#        script refuses to run if its own identity differs.
+#
+#   kubectl --context icekube -n prithvi-training-default apply --dry-run=server -f k8s/lclu-vpp-year-shift-job.yaml
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/lclu-vpp-year-shift-job.yaml
+#   kubectl --context icekube -n prithvi-training-default wait --for=condition=complete --timeout=3h job/lclu-vpp-year-shift
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lclu-vpp-year-shift
+  namespace: prithvi-training-default
+  labels: { app: lclu-vpp-year-shift, purpose: lclu-vpp-year-shift }
+spec:
+  completionMode: Indexed
+  completions: 4
+  parallelism: 4
+  backoffLimit: 0
+  activeDeadlineSeconds: 10800
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: lclu-vpp-year-shift, purpose: lclu-vpp-year-shift }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # Co-located with r10, so source receipts carry the same st_dev as r10's.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { job-name: lclu-stockholm-0124-r10 } }
+              topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: source
+          # alpine/git v2.52.0. The Python base has no git; nothing is installed.
+          image: alpine/git@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              SHA=__SOURCE_COMMIT__
+              echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "FATAL: pin SHA to a commit"; exit 1; }
+              cd /source
+              git init -q .
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git sparse-checkout set imint scripts config docker/lclu
+              git fetch -q --depth 1 --filter=blob:none origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: "1", memory: "512Mi" }
+            limits: { cpu: "1", memory: "512Mi" }
+          volumeMounts:
+            - { name: source, mountPath: /source }
+      containers:
+        - name: compare
+          # The Dockerfile's base: the hash-locked runtime on the volume was
+          # created by this interpreter (docker/lclu/bootstrap.py).
+          image: python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              SHARDS=4
+              RUN=r1
+              PIN=1bbba0a5c092a1bf7bd1458360e392dfd3d6ce0341ca10740d93989ea1c523d6
+              LIVE=/work/releases/lclu-stockholm-0124-r10
+              echo "=== lclu-vpp-year-shift run $RUN shard $JOB_COMPLETION_INDEX/$SHARDS — $(date -u) ==="
+              [[ "$PIN" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: set PIN to r10's inference pin"; exit 1; }
+              cd /source
+              # Reuse r10's hash-locked environment read-only; never install into it.
+              LOCK=$(sha256sum docker/lclu/requirements.lock | cut -d' ' -f1)
+              PY=/work/runtime/$LOCK/bin/python
+              test -f "/work/runtime/$LOCK/READY" || { echo "FATAL: no READY runtime for lock $LOCK"; exit 1; }
+              # Pod-local system library, from r10's verified package when present.
+              mkdir -p /tmp/lclu-system
+              cp "$LIVE"/system/expat-*/*.deb /tmp/lclu-system/ 2> /dev/null || true
+              LD_LIBRARY_PATH=$(python3 docker/lclu/system_runtime.py /tmp/lclu-system)
+              export LD_LIBRARY_PATH PYTHONPATH=/source
+              "$PY" scripts/compare_vpp_year_shift.py run \
+                --run "$RUN" --shard "$JOB_COMPLETION_INDEX" --num-shards "$SHARDS" \
+                --expect-inference-pin "$PIN" \
+                --manifest "$LIVE/demo/serving.json" --output-root /work/experiments/vpp-year-shift \
+                --live-root "$LIVE" --live-root /work/campaign --live-root /work/runtime
+              echo "=== Done: $(date -u) ==="
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+            - { name: OMP_NUM_THREADS, value: "4" }
+            - { name: MKL_NUM_THREADS, value: "4" }
+            - { name: GDAL_CACHEMAX, value: "256" }
+            # The shard's own scratch budget; inputs are deleted after every pair.
+            - { name: IMINT_LCLU_STORAGE_MAX_BYTES, value: "2147483648" }
+            - { name: IMINT_LCLU_STORAGE_MIN_FREE_BYTES, value: "6442450944" }
+          resources:
+            requests: { cpu: "4", memory: "8Gi" }
+            limits: { cpu: "4", memory: "8Gi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: source, mountPath: /source, readOnly: true }
+            - { name: data, mountPath: /data, readOnly: true }
+            - { name: work, mountPath: /work }
+      volumes:
+        - name: source
+          emptyDir: { sizeLimit: 1Gi }
+        - name: data
+          persistentVolumeClaim: { claimName: training-data-cephfs, readOnly: true }
+        - name: work
+          persistentVolumeClaim: { claimName: lclu-stockholm-0124 }
