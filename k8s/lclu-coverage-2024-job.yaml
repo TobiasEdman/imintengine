@@ -1,0 +1,249 @@
+# Heltäckande markslagskarta 2024 (docs/plans/lclu_2024_coverage.md): two Jobs.
+#
+# lclu-coverage-2024: N parallel pods. Pod i runs every N-th runnable window
+# through the live r9 release's annual-map service path
+# (scripts/produce_lclu_coverage.py --shard i --num-shards N): the same
+# serving manifest, R4 checkpoint and qualified sources as an on-demand map.
+# The inference identity must equal PIN (r9's) before any window runs. Each
+# shard writes done/shard-i-of-N.json for run RUN when it finishes.
+# lclu-coverage-2024-mosaic: one small pod; waits for all N markers of RUN,
+# verifies every window and builds the per-area COGs and coverage manifests.
+#
+# Writes: /work/coverage/2024/$RELEASE, plus source-verification receipts in
+# r9's identity cache (/work/releases/lclu-stockholm-0124-r9/shared/receipts)
+# whenever a receipt's file snapshot differs from this pod's view. The plan's
+# receipt pre-gate must pass before the full run. The producer holds no lock,
+# budget or input cache of the live service and refuses any output root
+# inside a --live-root.
+#
+# Compute is CPU x time: 8 pods of 4 CPU take about 35 min for the same
+# CPU-hours as one pod for about 4.5 h. The free-space reserve (6 GiB) is r9's
+# 2 GiB plus 8 x (256 + 64) MiB plus mosaic headroom on the same volume, so the
+# batch stops before the live API starts refusing maps.
+# A failed shard fails the Job (backoffLimit 0); bump RUN in both Jobs and
+# recreate them to resume — verified windows are skipped.
+#
+# Before use, replace in BOTH Jobs (identical values; the scripts refuse the
+# placeholders):
+#   __SOURCE_COMMIT__  the commit carrying scripts/produce_lclu_coverage.py and
+#                      r9's numerical code and requirements.lock;
+#   __INFERENCE_PIN__  contract_pin of 'inference' in any r9 result's
+#                      provenance.json (see the plan).
+# Run the Stockholm seam gate first (--areas 0180, its own RELEASE).
+#
+#   kubectl --context icekube -n prithvi-training-default apply --dry-run=server -f k8s/lclu-coverage-2024-job.yaml
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/lclu-coverage-2024-job.yaml -l purpose=lclu-coverage-2024
+#   kubectl --context icekube -n prithvi-training-default wait --for=condition=complete --timeout=6h job/lclu-coverage-2024
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/lclu-coverage-2024-job.yaml -l purpose=lclu-coverage-2024-mosaic
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lclu-coverage-2024
+  namespace: prithvi-training-default
+  labels: { app: lclu-coverage, purpose: lclu-coverage-2024 }
+spec:
+  completionMode: Indexed
+  completions: 8
+  parallelism: 8
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: lclu-coverage, purpose: lclu-coverage-2024 }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # Option for the receipt pre-gate (see the plan): if a pod on another
+      # node sees a different st_dev for r9's sources, co-locate with r9.
+      # affinity:
+      #   podAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       - labelSelector: { matchLabels: { job-name: lclu-stockholm-0124-r9 } }
+      #         topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: source
+          # alpine/git v2.52.0. The Python base has no git; nothing is installed.
+          image: alpine/git@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              SHA=__SOURCE_COMMIT__
+              echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "FATAL: pin SHA to a commit"; exit 1; }
+              cd /source
+              git init -q .
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git sparse-checkout set imint scripts config docker/lclu
+              git fetch -q --depth 1 --filter=blob:none origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: "1", memory: "512Mi" }
+            limits: { cpu: "1", memory: "512Mi" }
+          volumeMounts:
+            - { name: source, mountPath: /source }
+      containers:
+        - name: produce
+          # The Dockerfile's base: the hash-locked runtime on the volume was
+          # created by this interpreter (docker/lclu/bootstrap.py).
+          image: python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              SHARDS=8
+              RELEASE=r1
+              RUN=1
+              PIN=__INFERENCE_PIN__
+              LIVE=/work/releases/lclu-stockholm-0124-r9
+              echo "=== lclu-coverage-2024 run $RUN shard $JOB_COMPLETION_INDEX/$SHARDS — $(date -u) ==="
+              [[ "$PIN" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: set PIN to r9's inference pin"; exit 1; }
+              cd /source
+              # Reuse r9's hash-locked environment read-only; never install into it.
+              LOCK=$(sha256sum docker/lclu/requirements.lock | cut -d' ' -f1)
+              PY=/work/runtime/$LOCK/bin/python
+              test -f "/work/runtime/$LOCK/READY" || { echo "FATAL: no READY runtime for lock $LOCK"; exit 1; }
+              # Pod-local system library, from r9's verified package when present.
+              mkdir -p /tmp/lclu-system
+              cp "$LIVE"/system/expat-*/*.deb /tmp/lclu-system/ 2> /dev/null || true
+              LD_LIBRARY_PATH=$(python3 docker/lclu/system_runtime.py /tmp/lclu-system)
+              export LD_LIBRARY_PATH PYTHONPATH=/source
+              "$PY" scripts/produce_lclu_coverage.py \
+                --release "$RELEASE" --run-id "$RUN" \
+                --shard "$JOB_COMPLETION_INDEX" --num-shards "$SHARDS" \
+                --expect-inference-pin "$PIN" \
+                --manifest "$LIVE/demo/serving.json" --output-root /work/coverage \
+                --live-root "$LIVE" --live-root /work/campaign --live-root /work/runtime
+              echo "=== Done: $(date -u) ==="
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+            - { name: OMP_NUM_THREADS, value: "4" }
+            - { name: MKL_NUM_THREADS, value: "4" }
+            - { name: GDAL_CACHEMAX, value: "256" }
+            # The shard's own scratch budget: one prepared input and one map
+            # at a time; inputs are deleted after every window.
+            - { name: IMINT_LCLU_STORAGE_MAX_BYTES, value: "2147483648" }
+            - { name: IMINT_LCLU_STORAGE_MIN_FREE_BYTES, value: "6442450944" }
+          resources:
+            requests: { cpu: "4", memory: "8Gi" }
+            limits: { cpu: "4", memory: "8Gi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: source, mountPath: /source, readOnly: true }
+            - { name: data, mountPath: /data, readOnly: true }
+            - { name: work, mountPath: /work }
+      volumes:
+        - name: source
+          emptyDir: { sizeLimit: 1Gi }
+        - name: data
+          persistentVolumeClaim: { claimName: training-data-cephfs, readOnly: true }
+        - name: work
+          persistentVolumeClaim: { claimName: lclu-stockholm-0124 }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lclu-coverage-2024-mosaic
+  namespace: prithvi-training-default
+  labels: { app: lclu-coverage, purpose: lclu-coverage-2024-mosaic }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: lclu-coverage, purpose: lclu-coverage-2024-mosaic }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      initContainers:
+        - name: source
+          # alpine/git v2.52.0. The Python base has no git; nothing is installed.
+          image: alpine/git@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              SHA=__SOURCE_COMMIT__
+              echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "FATAL: pin SHA to a commit"; exit 1; }
+              cd /source
+              git init -q .
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git sparse-checkout set imint scripts config docker/lclu
+              git fetch -q --depth 1 --filter=blob:none origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: "1", memory: "512Mi" }
+            limits: { cpu: "1", memory: "512Mi" }
+          volumeMounts:
+            - { name: source, mountPath: /source }
+      containers:
+        - name: mosaic
+          image: python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              SHARDS=8
+              RELEASE=r1
+              RUN=1
+              PIN=__INFERENCE_PIN__
+              LIVE=/work/releases/lclu-stockholm-0124-r9
+              echo "=== lclu-coverage-2024 mosaic, run $RUN — $(date -u) ==="
+              [[ "$PIN" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: set PIN to r9's inference pin"; exit 1; }
+              cd /source
+              LOCK=$(sha256sum docker/lclu/requirements.lock | cut -d' ' -f1)
+              PY=/work/runtime/$LOCK/bin/python
+              test -f "/work/runtime/$LOCK/READY" || { echo "FATAL: no READY runtime for lock $LOCK"; exit 1; }
+              mkdir -p /tmp/lclu-system
+              cp "$LIVE"/system/expat-*/*.deb /tmp/lclu-system/ 2> /dev/null || true
+              LD_LIBRARY_PATH=$(python3 docker/lclu/system_runtime.py /tmp/lclu-system)
+              export LD_LIBRARY_PATH PYTHONPATH=/source
+              "$PY" scripts/produce_lclu_coverage.py \
+                --release "$RELEASE" --run-id "$RUN" --num-shards "$SHARDS" \
+                --mosaic --wait-seconds 18000 --expect-inference-pin "$PIN" \
+                --manifest "$LIVE/demo/serving.json" --output-root /work/coverage \
+                --live-root "$LIVE" --live-root /work/campaign --live-root /work/runtime
+              echo "=== Done: $(date -u) ==="
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+            - { name: OMP_NUM_THREADS, value: "1" }
+            - { name: GDAL_CACHEMAX, value: "256" }
+            - { name: IMINT_LCLU_STORAGE_MIN_FREE_BYTES, value: "6442450944" }
+          resources:
+            requests: { cpu: "1", memory: "4Gi" }
+            limits: { cpu: "1", memory: "4Gi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: source, mountPath: /source, readOnly: true }
+            - { name: data, mountPath: /data, readOnly: true }
+            - { name: work, mountPath: /work }
+      volumes:
+        - name: source
+          emptyDir: { sizeLimit: 1Gi }
+        - name: data
+          persistentVolumeClaim: { claimName: training-data-cephfs, readOnly: true }
+        - name: work
+          persistentVolumeClaim: { claimName: lclu-stockholm-0124 }
