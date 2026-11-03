@@ -1,34 +1,34 @@
 # Heltäckande markslagskarta 2024 (docs/plans/lclu_2024_coverage.md): two Jobs.
 #
 # lclu-coverage-2024: N parallel pods. Pod i runs every N-th runnable window
-# through the live r9 release's annual-map service path
+# through the live r10 release's annual-map service path
 # (scripts/produce_lclu_coverage.py --shard i --num-shards N): the same
 # serving manifest, R4 checkpoint and qualified sources as an on-demand map.
-# The inference identity must equal PIN (r9's) before any window runs. Each
+# The inference identity must equal PIN (r10's) before any window runs. Each
 # shard writes done/shard-i-of-N.json for run RUN when it finishes.
 # lclu-coverage-2024-mosaic: one small pod; waits for all N markers of RUN,
 # verifies every window and builds the per-area COGs and coverage manifests.
 #
 # Writes: /work/coverage/2024/$RELEASE, plus source-verification receipts in
-# r9's identity cache (/work/releases/lclu-stockholm-0124-r9/shared/receipts)
+# r10's identity cache (/work/releases/lclu-stockholm-0124-r10/shared/receipts)
 # whenever a receipt's file snapshot differs from this pod's view. The plan's
 # receipt pre-gate must pass before the full run. The producer holds no lock,
 # budget or input cache of the live service and refuses any output root
 # inside a --live-root.
 #
 # Compute is CPU x time: 8 pods of 4 CPU take about 35 min for the same
-# CPU-hours as one pod for about 4.5 h. The free-space reserve (6 GiB) is r9's
+# CPU-hours as one pod for about 4.5 h. The free-space reserve (6 GiB) is r10's
 # 2 GiB plus 8 x (256 + 64) MiB plus mosaic headroom on the same volume, so the
 # batch stops before the live API starts refusing maps.
 # A failed shard fails the Job (backoffLimit 0); bump RUN in both Jobs and
 # recreate them to resume — verified windows are skipped.
 #
-# Before use, replace in BOTH Jobs (identical values; the scripts refuse the
-# placeholders):
-#   __SOURCE_COMMIT__  the commit carrying scripts/produce_lclu_coverage.py and
-#                      r9's numerical code and requirements.lock;
-#   __INFERENCE_PIN__  contract_pin of 'inference' in any r9 result's
-#                      provenance.json (see the plan).
+# Both Jobs run the serving release r10's frozen inference code:
+#   SHA  1c7fd1a, r10's source (bundle 3daa6e67), which also carries
+#        scripts/produce_lclu_coverage.py and r10's requirements.lock;
+#   PIN  contract_pin of 'inference' in an r10 result's provenance.json
+#        (first r10 map, Stockholm 2024, 2026-11-03). The producer refuses
+#        to run if its own identity differs.
 # Run the Stockholm seam gate first (--areas 0180, its own RELEASE).
 #
 #   kubectl --context icekube -n prithvi-training-default apply --dry-run=server -f k8s/lclu-coverage-2024-job.yaml
@@ -56,11 +56,11 @@ spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       # Option for the receipt pre-gate (see the plan): if a pod on another
-      # node sees a different st_dev for r9's sources, co-locate with r9.
+      # node sees a different st_dev for r10's sources, co-locate with r10.
       # affinity:
       #   podAffinity:
       #     requiredDuringSchedulingIgnoredDuringExecution:
-      #       - labelSelector: { matchLabels: { job-name: lclu-stockholm-0124-r9 } }
+      #       - labelSelector: { matchLabels: { job-name: lclu-stockholm-0124-r10 } }
       #         topologyKey: kubernetes.io/hostname
       initContainers:
         - name: source
@@ -71,7 +71,7 @@ spec:
             - -c
             - |
               set -eu
-              SHA=__SOURCE_COMMIT__
+              SHA=1c7fd1a8bb8b93fed63f5a8c50f99d127ee67263
               echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "FATAL: pin SHA to a commit"; exit 1; }
               cd /source
               git init -q .
@@ -102,16 +102,16 @@ spec:
               SHARDS=8
               RELEASE=r1
               RUN=1
-              PIN=__INFERENCE_PIN__
-              LIVE=/work/releases/lclu-stockholm-0124-r9
+              PIN=1bbba0a5c092a1bf7bd1458360e392dfd3d6ce0341ca10740d93989ea1c523d6
+              LIVE=/work/releases/lclu-stockholm-0124-r10
               echo "=== lclu-coverage-2024 run $RUN shard $JOB_COMPLETION_INDEX/$SHARDS — $(date -u) ==="
-              [[ "$PIN" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: set PIN to r9's inference pin"; exit 1; }
+              [[ "$PIN" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: set PIN to r10's inference pin"; exit 1; }
               cd /source
-              # Reuse r9's hash-locked environment read-only; never install into it.
+              # Reuse r10's hash-locked environment read-only; never install into it.
               LOCK=$(sha256sum docker/lclu/requirements.lock | cut -d' ' -f1)
               PY=/work/runtime/$LOCK/bin/python
               test -f "/work/runtime/$LOCK/READY" || { echo "FATAL: no READY runtime for lock $LOCK"; exit 1; }
-              # Pod-local system library, from r9's verified package when present.
+              # Pod-local system library, from r10's verified package when present.
               mkdir -p /tmp/lclu-system
               cp "$LIVE"/system/expat-*/*.deb /tmp/lclu-system/ 2> /dev/null || true
               LD_LIBRARY_PATH=$(python3 docker/lclu/system_runtime.py /tmp/lclu-system)
@@ -177,7 +177,7 @@ spec:
             - -c
             - |
               set -eu
-              SHA=__SOURCE_COMMIT__
+              SHA=1c7fd1a8bb8b93fed63f5a8c50f99d127ee67263
               echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "FATAL: pin SHA to a commit"; exit 1; }
               cd /source
               git init -q .
@@ -206,10 +206,10 @@ spec:
               SHARDS=8
               RELEASE=r1
               RUN=1
-              PIN=__INFERENCE_PIN__
-              LIVE=/work/releases/lclu-stockholm-0124-r9
+              PIN=1bbba0a5c092a1bf7bd1458360e392dfd3d6ce0341ca10740d93989ea1c523d6
+              LIVE=/work/releases/lclu-stockholm-0124-r10
               echo "=== lclu-coverage-2024 mosaic, run $RUN — $(date -u) ==="
-              [[ "$PIN" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: set PIN to r9's inference pin"; exit 1; }
+              [[ "$PIN" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: set PIN to r10's inference pin"; exit 1; }
               cd /source
               LOCK=$(sha256sum docker/lclu/requirements.lock | cut -d' ' -f1)
               PY=/work/runtime/$LOCK/bin/python
