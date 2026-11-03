@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Images for the NFI field-validation tab (TAB_CONFIG.nfi_validation).
+"""Example-tile images for the Marktäcke page (docs/lclu.html, #sa-skapas).
 
 One example tile: the Sentinel-2 RGB and one class map per --map, as rendered
 by scripts/ladder_inference_matrix.py, plus NMD2023 from the tile's label

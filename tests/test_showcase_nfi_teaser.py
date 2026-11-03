@@ -1,6 +1,7 @@
-"""The NFI-tab layers share the model window, draw honest scales and name no tile."""
+"""The NFI example layers share the model window, draw honest scales and name no tile."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -15,6 +16,9 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts/showcase_nfi_teaser.py"
+PAGE = REPO / "docs/lclu.html"  # the Marktäcke page that shows the example
+SHOWCASE = REPO / "docs/showcase/nfi_validation"
+UNIFIED = "Klassfärger i träningsetiketten och TESSERA R4"  # the page legend for both class maps
 WATER = (0, 0, 255)  # unified class 10, vatten
 GREEN = (10, 120, 30)
 FULL, WINDOW = 40, 32  # a 4 px ring outside the model window, like 512 → 504
@@ -212,49 +216,56 @@ def test_a_bad_map_name_is_refused_before_any_output_changes(
     assert not (tmp_path / "escaped.png").exists()
 
 
-def _legend(tab_data: str, key: str) -> list[tuple[str, str]]:
-    """Coloured items of LEGENDS[key]: a literal block, or else its assignment line."""
-    block = (re.search(rf"\n    {key}: \[(.*?)\n    \]", tab_data, re.S)
-             or re.search(rf"\nLEGENDS\.{key} = (.*?);\n", tab_data))
-    return re.findall(r"\{color:'([^']+)',label:'([^']+)'\}", block.group(1))
+def _page_legends(page: str) -> dict[str, list[tuple[str, str]]]:
+    """Colour items of each static legend on the page, keyed by its aria-label."""
+    return {label: re.findall(r'<li><i class="swatch" style="background:(#[0-9A-F]{6})"></i>([^<]+)</li>', items)
+            for label, items in re.findall(r'<ul class="example-legend" aria-label="([^"]+)">(.*?)</ul>', page)}
 
 
-def test_published_tab_matches_its_manifest_and_names_no_tile() -> None:
-    tab_data = (REPO / "docs/js/tab-data.js").read_text()
-    index = (REPO / "docs/index.html").read_text()
-    manifest_text = (REPO / "docs/showcase/nfi_validation/MANIFEST.json").read_text()
+def test_published_page_matches_its_manifest_and_names_no_tile() -> None:
+    page = PAGE.read_text()
+    manifest_text = (SHOWCASE / "MANIFEST.json").read_text()
     manifest = json.loads(manifest_text)
-    legend = {label.lower() for _, label in _legend(tab_data, "unified_nfi")}
-    assert set(manifest["map_classes_present"]) <= legend
-    for key, scale in manifest["background_scales"].items():
-        assert _legend(tab_data, f"nfi_{key}") == [(s["color"], s["label"]) for s in scale["legend"]], key
-    config = tab_data[tab_data.index("nfi_validation: {"):tab_data.index("marine_leisure: {")]
-    images = re.findall(r"'(showcase/nfi_validation/[^']+)'", config)
-    assert sorted(Path(p).name for p in images) == sorted(l["file"] for l in manifest["layers"].values())
-    for src in images:
-        assert (REPO / "docs" / src).is_file(), src
-    # Every overlay that can sit on the NMD2023 background shows both legends.
-    assert config.count("legend:['unified_nfi','nmd2023']") == 2
-    for key in ("nfi_dem", "nfi_height", "nfi_vpp_length", "nfi_embedding",
-                "nfi_lpis", "nfi_harvest", "nfi_label"):
-        assert f"legend:['{key}','nmd2023']" in config, key
+    files = {layer["file"]: layer["sha256"] for layer in manifest["layers"].values()}
+    # The published directory is exactly the manifest's layers, byte for byte.
+    assert {p.name for p in SHOWCASE.iterdir()} == set(files) | {"MANIFEST.json"}
+    for name, digest in files.items():
+        assert hashlib.sha256((SHOWCASE / name).read_bytes()).hexdigest() == digest, name
+    # The page shows each manifest layer once; only the second model map is not shown.
+    shown = re.findall(r'src="showcase/nfi_validation/([^"]+)"', page)
+    assert len(shown) == len(set(shown)) and set(shown) == set(files) - {"prithvi600m_r4.png"}
+    legends = _page_legends(page)
+    scales = {"dem": "Höjd över havet", "height": "Trädhöjd", "vpp_length": "Växtsäsongens längd"}
+    assert set(manifest["background_scales"]) == set(scales)
+    for key, label in scales.items():
+        assert legends[label] == [(s["color"], s["label"]) for s in manifest["background_scales"][key]["legend"]], key
+    classes = {name.lower() for _, name in legends[UNIFIED]}
     labels = manifest["label_layers"]
-    lpis_legend = {label.lower() for _, label in _legend(tab_data, "nfi_lpis")}
-    assert lpis_legend == set(labels["lpis"]["classes_present"])
-    assert set(labels["training_label"]["classes_present"]) <= legend
-    for text in (tab_data, index, manifest_text):
-        assert not re.search(r"holdoutval_|nfi20\d\d_", text)
+    assert set(manifest["map_classes_present"]) <= classes
+    assert set(labels["training_label"]["classes_present"]) <= classes
+    assert {name.lower() for _, name in legends["Grödor (LPIS)"]} == set(labels["lpis"]["classes_present"])
+    for path in (PAGE, REPO / "docs/index.html", REPO / "docs/js/tab-data.js", SHOWCASE / "MANIFEST.json"):
+        assert not re.search(r"holdoutval_|nfi20\d\d_", path.read_text()), path
+    # No position either: no degree sign, decimal degrees or SWEREF 99 TM metres
+    # (a hex colour such as #440154 is not a coordinate).
+    assert not re.search(r"°|\b\d{2}\.\d{3,}\b|(?<!#)\b\d{6,7}\b", page)
 
 
-def test_every_inspected_colour_has_a_legend_name() -> None:
-    """Click-to-inspect names a pixel by exact colour; no opaque colour may be unnamed."""
+def test_the_moved_content_is_gone_from_the_showcase_tabs() -> None:
+    index = (REPO / "docs/index.html").read_text()
     tab_data = (REPO / "docs/js/tab-data.js").read_text()
-    config = tab_data[tab_data.index("nfi_validation: {"):tab_data.index("marine_leisure: {")]
-    images = dict(re.findall(r"'(nfi-[a-z]+)':\s*'(showcase/nfi_validation/[^']+)'", config))
-    specs = re.findall(r"\{label:'([^']+)',\s*image:'(nfi-[a-z]+)',\s*legend:'([a-z0-9_]+)'", config)
-    assert len(specs) == 6
-    for label, image, legend_key in specs:
-        names = {colour.upper() for colour, _ in _legend(tab_data, legend_key)}
-        rgba = np.asarray(Image.open(REPO / "docs" / images[image]).convert("RGBA")).reshape(-1, 4)
+    nav = re.search(r'id="tab-lulc">\s*<div class="sub-tab-nav">(.*?)</div>', index, re.S).group(1)
+    assert re.findall(r'<a href="lclu\.html" class="sub-tab">([^<]+)</a>', nav) == ["🌲 Marktäckekartering ↗"]
+    for text in (index, tab_data):
+        assert not re.search(r"nfi_validation|nfi-[a-z]+|unified_nfi|\bnfi_[a-z_]+|nmd2023", text)
+
+
+def test_every_class_colour_on_the_page_has_a_legend_name() -> None:
+    """The example's class images are static; each opaque colour is named in its legend on the page."""
+    legends = _page_legends(PAGE.read_text())
+    for image, label in (("tessera_r4.png", UNIFIED), ("training_label.png", UNIFIED),
+                         ("lpis.png", "Grödor (LPIS)"), ("harvest.png", "Avverkningar"), ("nmd2023.png", "NMD2023")):
+        names = {colour.upper() for colour, _ in legends[label]}
+        rgba = np.asarray(Image.open(SHOWCASE / image).convert("RGBA")).reshape(-1, 4)
         opaque = {"#%02X%02X%02X" % tuple(c[:3]) for c in np.unique(rgba[rgba[:, 3] > 0], axis=0)}
-        assert opaque <= names, (label, sorted(opaque - names))
+        assert opaque <= names, (image, sorted(opaque - names))
