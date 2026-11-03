@@ -2,12 +2,13 @@
   "id": "0135",
   "subject": "Plan and batch producer for Helt\u00e4ckande markslagskarta 2024",
   "description": "Tobias asked on 2026-11-03 for a plan PR and a batch producer, written and tested locally, for a wall-to-wall 2024 land-cover map of the eleven demo areas, labelled \"Helt\u00e4ckande markslagskarta 2024\" (never \"f\u00f6rber\u00e4knad\"). Scope: docs/plans/lclu_2024_coverage.md; scripts/produce_lclu_coverage.py, which runs every window through the same LcluService path as on-demand maps under its own output root, sharded over parallel pods (CPU cost is CPU x time), resumable, with inputs deleted per window, fill windows where the service refuses a lattice cell, a seam statistic and per-area mosaic COGs with a coverage manifest; tests/lclu/test_coverage.py on synthetic windows; k8s/lclu-coverage-2024-job.yaml as an Indexed Job template validated with dry runs only. Not in scope: running anything on the cluster (each step needs Tobias's go), the serving route, the page layer, XYZ tiles, model scores of any kind. Review: Codex.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-coverage-2024-v2",
   "created_at": "2026-11-03T09:40:00Z",
-  "updated_at": "2026-11-03T09:39:34Z",
+  "updated_at": "2026-11-03T12:21:56Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-03T09:39:34Z"
+  "claimed_at": "2026-11-03T09:39:34Z",
+  "completed_at": "2026-11-03T12:21:56Z"
 }
