@@ -2,12 +2,14 @@
   "id": "0143",
   "subject": "License code under Apache-2.0 and data and material under CC0-1.0",
   "description": "Tobias stated on 2026-11-03 that project code is released under Apache 2.0 and data, information and other material under CC0 1.0, with third-party licences unaffected, and asked to change the repository where needed. The repository declared CC0-1.0 for its own code (LICENSE, pyproject.toml, README) and labelled pipeline images MIT. Scope: LICENSE becomes the Apache-2.0 text, the CC0 text moves to LICENSE-CC0, a NOTICE states which files fall under which licence, pyproject.toml declares Apache-2.0, the README licence section and the image labels follow, and a test holds them together. Not in scope: third-party files and their licences, per-file headers, the DES transfer plan. Review: Codex.",
-  "status": "claimed",
+  "status": "abandoned",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/licence-split",
   "created_at": "2026-11-03T20:23:16Z",
-  "updated_at": "2026-11-03T20:23:22Z",
+  "updated_at": "2026-11-03T20:24:02Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-03T20:23:22Z"
+  "claimed_at": "2026-11-03T20:23:22Z",
+  "abandoned_at": "2026-11-03T20:24:02Z",
+  "abandon_reason": "Duplicate of task 0141 / PR #136, which already relicenses code to Apache-2.0 and keeps data CC0"
 }
