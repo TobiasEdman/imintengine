@@ -1,0 +1,165 @@
+"""National coverage audit on a small synthetic 'Sweden' with real file formats."""
+import json
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
+from scripts import audit_lclu_national_coverage as audit
+
+pytest.importorskip("mgrs")
+COUNTIES = audit.SWEDISH_COUNTIES
+GRUNDDATA = ("volym", "grundyta", "medeldiameter")
+
+
+@pytest.fixture
+def inputs(tmp_path):
+    boundary = tmp_path / "sweden.geojson"
+    boundary.write_text(json.dumps({"type": "FeatureCollection", "features": [{
+        "type": "Feature", "properties": {},
+        "geometry": {"type": "Polygon", "coordinates": [[[17.52, 59.81], [17.78, 59.81],
+                                                          [17.78, 59.89], [17.52, 59.89],
+                                                          [17.52, 59.81]]]}}]}))
+    # Registry: 2024 complete; 2023 has one incomplete tile; noise rows are ignored.
+    whole, scales = 128 + 128 * 1000, 128 + 4 * 1000
+    rows = [("1.0", "vultr", 2024, lon, 59.85, whole, scales) for lon in (17.55, 17.65, 17.75)]
+    rows += [("1.0", "vultr", 2023, 17.55, 59.85, whole, scales),
+             ("1.0", "vultr", 2023, 17.65, 59.85, whole, scales),
+             ("1.0", "vultr", 2023, 17.75, 59.85, whole - 5, scales),
+             ("1.1", "cambridge", 2023, 17.75, 59.85, whole, scales),
+             ("1.0", "vultr", 2024, 19.05, 63.85, whole, scales)]
+    names = ["version", "variant", "year", "lon", "lat", "grid_size", "scales_size"]
+    registry = tmp_path / "manifest.parquet"
+    pq.write_table(pa.table({n: [r[i] for r in rows] for i, n in enumerate(names)}), registry)
+    # HR-VPP: every MGRS tile complete for 2024; 2023 lacks MINV.
+    _, sweden_3006 = audit.load_sweden(boundary)
+    tiles = sorted(audit.mgrs_tiles(sweden_3006))
+    vpp = tmp_path / "vpp_wekeo"
+    vpp.mkdir()
+    index = {}
+    for year in (2023, 2024):
+        for tile in tiles:
+            for metric in ("SOSD", "EOSD", "LENGTH", "MAXV", "MINV"):
+                if year == 2023 and metric == "MINV":
+                    continue
+                name = f"VPP_{year}_T{tile}_{metric}_s1.tif"
+                (vpp / name).write_bytes(b"x" * 1000)
+                index[name] = {"metric": metric, "tileId": f"T{tile}", "year": year,
+                               "season": 1, "bounds_4326": [17, 59, 18, 60]}
+    (vpp / "index.json").write_text(json.dumps(index))
+    # SKG mirror: every county present in every layer.
+    skg = tmp_path / "skg_open"
+    manifest = {"derived": {}, "vrt": {}}
+    # Omdrev 3 exists for nine counties only, as in the real mirror.
+    layers = [("markfukt/markfukt_", COUNTIES), ("tradhojd/tradhojd_10m_", COUNTIES),
+              *((f"grunddata/omdrev2/{v}_", COUNTIES) for v in GRUNDDATA),
+              *((f"grunddata/omdrev3/{v}_", COUNTIES[:9]) for v in GRUNDDATA)]
+    for layer, counties in layers:
+        for county in counties:
+            rel = f"{layer}{county}.tif"
+            (skg / rel).parent.mkdir(parents=True, exist_ok=True)
+            (skg / rel).write_bytes(b"x")
+            manifest["derived"][rel] = {"sha256": "0" * 64}
+    manifest["vrt"]["tradhojd/tradhojd_10m.vrt"] = {
+        "sources": [f"tradhojd/tradhojd_10m_{c}.tif" for c in COUNTIES]}
+    for name in GRUNDDATA:
+        for omdrev, counties in ((2, COUNTIES), (3, COUNTIES[:9])):
+            manifest["vrt"][f"grunddata/{name}_omdrev{omdrev}.vrt"] = {
+                "sources": [f"grunddata/omdrev{omdrev}/{name}_{c}.tif" for c in counties]}
+    (skg / "MANIFEST.json").write_text(json.dumps(manifest))
+    return dict(boundary=boundary, registry=registry, vpp_index=vpp / "index.json",
+                skg_manifest=skg / "MANIFEST.json", tiles=tiles, root=tmp_path)
+
+
+def test_audit_counts_each_source_and_names_the_ready_years(inputs):
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2023, 2024])
+    assert report["tessera"]["2024"] == {"expected_tiles": 3, "present": 3, "incomplete": 0,
+                                         "missing": 0, "missing_listed": []}
+    assert report["tessera"]["2023"]["present"] == 2 and report["tessera"]["2023"]["incomplete"] == 1
+    assert report["tessera"]["2023"]["missing_listed"] == ["17.75_59.85"]
+    assert report["hr_vpp"]["years"]["2024"]["missing"] == 0
+    assert report["hr_vpp"]["years"]["2023"]["missing"] == len(inputs["tiles"])
+    assert report["hr_vpp"]["gapfill_bytes_at_cached_mean"] == len(inputs["tiles"]) * 5 * 1000
+    assert all(not layer["missing"] for layer in report["static_aux"].values())
+    assert set(report["static_aux"]) == {"markfukt", "tradhojd", *GRUNDDATA}
+    assert report["static_aux"]["volym"]["by_omdrev"] == {"2": sorted(COUNTIES),
+                                                          "3": sorted(COUNTIES[:9])}
+    assert report["ready_years"] == ["2024"]
+    assert set(report["inputs"]) == {"boundary", "registry", "vpp_index", "skg_manifest"}
+
+
+def test_a_county_missing_from_one_layer_blocks_every_year(inputs):
+    manifest = json.loads(inputs["skg_manifest"].read_text())
+    (inputs["skg_manifest"].parent / "markfukt/markfukt_09.tif").unlink()
+    inputs["skg_manifest"].write_text(json.dumps(manifest))
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["static_aux"]["markfukt"]["missing"] == ["09"]
+    assert report["ready_years"] == []
+
+
+def test_a_county_counts_when_any_scanning_round_has_it(inputs):
+    """Omdrev 3 covering nine counties must not block; a county no round has must."""
+    skg = inputs["skg_manifest"].parent
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["ready_years"] == ["2024"]
+    # A county only omdrev 3 has is still covered...
+    (skg / f"grunddata/omdrev2/medeldiameter_{COUNTIES[0]}.tif").unlink()
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["static_aux"]["medeldiameter"]["missing"] == []
+    assert COUNTIES[0] not in report["static_aux"]["medeldiameter"]["by_omdrev"]["2"]
+    # ...one no round has blocks every year, and so does a variable with no round at all.
+    (skg / f"grunddata/omdrev3/medeldiameter_{COUNTIES[0]}.tif").unlink()
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["static_aux"]["medeldiameter"]["missing"] == [COUNTIES[0]]
+    assert report["ready_years"] == []
+    manifest = json.loads(inputs["skg_manifest"].read_text())
+    for omdrev in (2, 3):
+        del manifest["vrt"][f"grunddata/grundyta_omdrev{omdrev}.vrt"]
+    inputs["skg_manifest"].write_text(json.dumps(manifest))
+    report = audit.audit(inputs["boundary"], inputs["registry"], inputs["vpp_index"],
+                         inputs["skg_manifest"], [2024])
+    assert report["static_aux"]["grundyta"] == {"present": [], "missing": sorted(COUNTIES),
+                                                "by_omdrev": {}}
+
+
+def test_cli_writes_the_report_and_a_summary(inputs, capsys):
+    out = inputs["root"] / "out" / "report.json"
+    assert audit.main(["--boundary", str(inputs["boundary"]), "--registry", str(inputs["registry"]),
+                       "--vpp-index", str(inputs["vpp_index"]), "--skg-manifest",
+                       str(inputs["skg_manifest"]), "--years", "2023", "2024",
+                       "--report", str(out)]) == 0
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary["ready_years"] == ["2024"] and summary["tessera_missing"] == {"2023": 1, "2024": 0}
+    assert json.loads(out.read_text())["years"] == [2023, 2024]
+
+
+def test_job_pins_the_audit_it_runs():
+    import re
+    import subprocess
+    from pathlib import Path
+
+    yaml = pytest.importorskip("yaml")
+    root = Path(__file__).resolve().parents[2]
+    job = yaml.safe_load((root / "k8s/lclu-national-coverage-job.yaml").read_text())
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    script = container["command"][-1]
+    assert "@sha256:" in container["image"]
+    assert 'test "$(git rev-parse HEAD)" = "$SHA"' in script
+    assert "python3 scripts/audit_lclu_national_coverage.py" in script
+    assert "numberMatched" in script and "registry differs from the campaign pin" in script
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+    sha = re.search(r"SHA=([0-9a-f]{40})", script)[1]
+    git = ["git", "-C", str(root)]
+    if subprocess.run([*git, "cat-file", "-e", sha], capture_output=True).returncode:
+        pytest.skip(f"{sha} not in this clone")
+    assert subprocess.run([*git, "merge-base", "--is-ancestor", sha, "HEAD"]).returncode == 0
+    changed = subprocess.run([*git, "diff", "--name-only", sha, "HEAD", "--",
+                              "scripts/audit_lclu_national_coverage.py",
+                              "scripts/inventory_lclu_demo.py"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert changed == [], f"bump SHA in k8s/lclu-national-coverage-job.yaml; changed: {changed}"

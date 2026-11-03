@@ -8,8 +8,8 @@ Instead of just reporting "40% change", we can say "change occurred in
 NMD 2018 Basskikt class codes:
     111      Tallskog (pine forest)
     112      Granskog (spruce forest)
-    113      Lövskog (deciduous forest)
-    114      Barrblandskog (mixed coniferous)
+    113      Barrblandskog (mixed coniferous: pine and spruce)
+    114      Lövblandad barrskog (coniferous with deciduous admixture)
     115      Triviallövskog (trivial deciduous: birch, aspen, alder)
     116      Ädellövskog (noble deciduous: oak, beech, elm)
     117      Triviallövskog med ädellövinslag (trivial+noble deciduous)
@@ -54,13 +54,16 @@ NMD_LEVEL1 = {
 NMD_LEVEL2 = {
     "forest_pine": {111},
     "forest_spruce": {112},
-    "forest_deciduous": {113, 115, 116, 117},  # 115=triviallöv, 116=ädellöv, 117=mixed
-    "forest_mixed": {114},
+    # 113 is barrblandskog (pine/spruce), not deciduous. It landed here through
+    # an early mislabel and is kept for label-space compatibility until the
+    # IM-023 schema decision (docs/experiments/class-separability/README.md).
+    "forest_deciduous": {113, 115, 116, 117},  # 115=triviallöv, 116=ädellöv, 117=triviallöv m. ädellövinslag
+    "forest_mixed": {114},                      # 114=lövblandad barrskog
     "forest_temp_non_forest": {118},            # only clearcuts/young regen
     "forest_wetland_pine": {121},
     "forest_wetland_spruce": {122},
-    "forest_wetland_deciduous": {123, 125, 126, 127},  # 125-127 = wetland deciduous subtypes
-    "forest_wetland_mixed": {124},
+    "forest_wetland_deciduous": {123, 125, 126, 127},  # 123=barrblandskog (see 113 above); 125-127 = wetland deciduous subtypes
+    "forest_wetland_mixed": {124},                      # 124=lövblandad barrskog på våtmark
     "forest_wetland_temp": {128},               # only wetland clearcuts
     "open_wetland": {2},
     "cropland": {3},

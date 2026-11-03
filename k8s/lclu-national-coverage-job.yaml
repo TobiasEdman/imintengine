@@ -1,0 +1,103 @@
+# National coverage audit for the annual-map service (IM-026, package 3 of
+# docs/plans/lclu_national_service.md). Read-only on the training PVC.
+#
+# 1. Sweden: SCB RegSO 2025 for the whole country (the campaign's boundary
+#    source without its municipality filter); refuses a truncated response.
+# 2. TESSERA registry: the v1 manifest.parquet, checked against the sha256
+#    the campaign pins (config/lclu/municipalities.json).
+# 3. scripts/audit_lclu_national_coverage.py against /data/vpp_wekeo and
+#    /data/skg_open.
+# Writes only /data/lclu_national_coverage/<UTC time>/ (boundary, registry
+# receipt, report.json). Needs HTTPS to geodata.scb.se and data.source.coop.
+# No CDSE processing units, no GPU.
+#
+#   kubectl create --dry-run=server -f k8s/lclu-national-coverage-job.yaml
+#   kubectl create -f k8s/lclu-national-coverage-job.yaml
+#   kubectl -n prithvi-training-default logs -f job/lclu-national-coverage
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lclu-national-coverage
+  namespace: prithvi-training-default
+  labels: { app: ops, purpose: lclu-national-coverage }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 3600
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: ops, purpose: lclu-national-coverage }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: audit
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              SHA=254bcc792821a584b51d3375684a2ac0d88c8dd0
+              echo "=== lclu-national-coverage — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git curl > /dev/null 2>&1
+              pip install --quiet --no-cache-dir numpy rasterio pyproj shapely pyarrow mgrs
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+              OUT=/data/lclu_national_coverage/$(date -u +%Y%m%dT%H%M%SZ)
+              mkdir -p "$OUT"
+
+              echo "=== 1/3 Sweden boundary (SCB RegSO 2025) ==="
+              curl -sSf --retry 4 -o "$OUT/sweden.geojson" \
+                "https://geodata.scb.se/geoserver/stat/wfs?service=wfs&version=2.0.0&request=GetFeature&typeNames=stat%3ARegSO_2025&outputFormat=application%2Fjson&srsName=urn%3Aogc%3Adef%3Acrs%3AOGC%3A1.3%3ACRS84&count=10000&propertyName=regsokod%2Csp_geometry"
+              python3 - "$OUT/sweden.geojson" <<'PY'
+              import json, sys
+              data = json.load(open(sys.argv[1]))
+              matched, returned = data.get("numberMatched"), data.get("numberReturned")
+              print(f"RegSO features: {len(data['features'])} (matched {matched}, returned {returned})")
+              if matched is None or matched != returned or returned != len(data["features"]):
+                  sys.exit("FATAL: truncated or unverifiable boundary response")
+              PY
+
+              echo "=== 2/3 TESSERA registry ==="
+              curl -sSf --retry 4 -o "$OUT/manifest.parquet" \
+                https://data.source.coop/tessera/tessera/npy/v1/manifest.parquet
+              python3 - "$OUT/manifest.parquet" <<'PY'
+              import hashlib, json, sys
+              pinned = json.load(open("config/lclu/municipalities.json"))["registry"]["sha256"]
+              actual = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest()
+              print(f"registry sha256 {actual}")
+              if actual != pinned:
+                  sys.exit(f"FATAL: registry differs from the campaign pin {pinned}")
+              PY
+
+              echo "=== 3/3 audit ==="
+              python3 scripts/audit_lclu_national_coverage.py \
+                --boundary "$OUT/sweden.geojson" \
+                --registry "$OUT/manifest.parquet" \
+                --vpp-index /data/vpp_wekeo/index.json \
+                --skg-manifest /data/skg_open/MANIFEST.json \
+                --report "$OUT/report.json"
+              rm -f "$OUT/manifest.parquet"   # 212 MB public file; its hash is in the report
+              echo "report: $OUT/report.json"
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: training-data-cephfs }

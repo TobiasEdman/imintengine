@@ -43,6 +43,38 @@ _RETRY_DELAY_S = 3.0
 
 # ── Public API ───────────────────────────────────────────────────────────
 
+
+def read_dem_window(
+    sources: list[str | Path], west: float, south: float, east: float, north: float,
+    *, size_px: int,
+) -> np.ndarray:
+    """Strict GLO-30 read for serving from prequalified, pinned local COGs.
+
+    Preserve true zero elevation; fail on missing sources or uncovered pixels.
+    Unlike the campaign fetcher's offshore fallback, missing DEM must not be
+    silently interpreted as sea level in an interactive classification.
+    """
+    import rasterio
+    from rasterio.transform import from_bounds
+    from rasterio.vrt import WarpedVRT
+    from rasterio.enums import Resampling
+
+    transform = from_bounds(west, south, east, north, size_px, size_px)
+    result = np.full((size_px, size_px), np.nan, np.float32)
+    for path in sources:
+        with rasterio.open(path) as source:
+            if source.crs is None or source.count != 1:
+                raise ValueError("DEM source must be a georeferenced single-band raster")
+            with WarpedVRT(source, crs="EPSG:3006", transform=transform,
+                           width=size_px, height=size_px, resampling=Resampling.bilinear,
+                           dtype="float32", nodata=np.nan) as vrt:
+                values = vrt.read(1, masked=True).filled(np.nan)
+        take = np.isnan(result) & np.isfinite(values)
+        result[take] = values[take]
+    if not np.isfinite(result).all():
+        raise ValueError("Pinned DEM sources do not cover the complete input window")
+    return np.maximum(result, 0)
+
 def fetch_dem_tile(
     west: float,
     south: float,

@@ -1,0 +1,28 @@
+{
+  "default_opacity": 1,
+  "slider_test_opacity": 0.01,
+  "slider_restored": 1,
+  "image_rendering": "pixelated",
+  "zoom": 15,
+  "overlay_native_size": [
+    526,
+    527
+  ],
+  "source_changes": [
+    "docs/css/lclu.css",
+    "docs/js/lclu.js",
+    "docs/lclu.html"
+  ],
+  "result_job": "030266ed-9d21-44b7-8172-53b6e4af8edc",
+  "status": "live_verified",
+  "url": "http://127.0.0.1:8788/lclu",
+  "active_job": "lclu-stockholm-0124-r4",
+  "archive_sha256": "c5620e26843d322deed3114f682c7d519a4ea3d0ef0346244fbb59f7753244af",
+  "actual_expiry_utc": "2026-10-30T12:44:47+00:00",
+  "live_zoom": 15,
+  "live_opacity": 1,
+  "live_image_rendering": "pixelated",
+  "classification_sha256": "23445353b93c6e654357992368eb3ec068eace6e530d2ed3d1d14455ba10089c",
+  "classification_unchanged": true,
+  "independent_review": "No actionable findings"
+}

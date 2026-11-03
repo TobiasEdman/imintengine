@@ -1,0 +1,562 @@
+{
+  "areas": [
+    {
+      "area": "kiruna",
+      "job_id": "9cca40c0-0a70-4bff-8caf-e75b0c706598",
+      "seconds": 20.387215416005347,
+      "native_pixels_unchanged": 254016,
+      "native_band_sha256": "e7ca5df7844ad7200b9b4a0cb0421d69a93b32c4a91c7b18b9f2683791985493",
+      "classes_clicked": [
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 493,
+          "class_id": 1,
+          "name": "Tallskog på fastmark",
+          "color": "#6d8b05",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 167,
+          "class_id": 2,
+          "name": "Granskog på fastmark",
+          "color": "#2c5f00",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 6,
+          "class_id": 3,
+          "name": "Lövskog / barrblandskog",
+          "color": "#4be600",
+          "nodata": false,
+          "note": "Sammanslagen modellklass. Aktuell klassmappning omfattar lövskog, barrblandskog och låg fjällskog på fastmark. Färg från NMD triviallövskog."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 149,
+          "class_id": 4,
+          "name": "Lövblandad barrskog på fastmark",
+          "color": "#38a800",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 0,
+          "class_id": 5,
+          "name": "Skog på våtmark",
+          "color": "#588b54",
+          "nodata": false,
+          "note": "Sammanslagna skogstyper på våtmark, även temporärt ej skog och låg fjällskog. Färg från NMD tallskog på våtmark."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 256,
+          "col": 411,
+          "class_id": 6,
+          "name": "Temporärt ej skog på fastmark",
+          "color": "#cdcd66",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 105,
+          "class_id": 7,
+          "name": "Öppen våtmark",
+          "color": "#c29cd5",
+          "nodata": false,
+          "note": "Våtmarkens underklasser är sammanslagna; färg från NMD öppen våtmark."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 414,
+          "class_id": 9,
+          "name": "Exploaterad mark",
+          "color": "#e24549",
+          "nodata": false,
+          "note": "Byggnader, övrig exploaterad mark och väg/järnväg är sammanslagna. Färg från NMD exploaterad mark, ej byggnad eller väg/järnväg."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 467,
+          "class_id": 10,
+          "name": "Sjö, vattendrag och hav",
+          "color": "#6699cc",
+          "nodata": false,
+          "note": "Sjöar, vattendrag och hav är sammanslagna. Färg från NMD sjö och vattendrag."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 355,
+          "col": 61,
+          "class_id": 12,
+          "name": "korn",
+          "color": "#d48217",
+          "nodata": false,
+          "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 392,
+          "col": 278,
+          "class_id": 15,
+          "name": "slåttervall",
+          "color": "#64c864",
+          "nodata": false,
+          "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 8,
+          "class_id": 24,
+          "name": "buskdominerad mark",
+          "color": "#abc8a6",
+          "nodata": false,
+          "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 16,
+          "class_id": 25,
+          "name": "risdominerad mark",
+          "color": "#cdaa66",
+          "nodata": false,
+          "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 260,
+          "class_id": 26,
+          "name": "gräsdominerad mark",
+          "color": "#ffd27e",
+          "nodata": false,
+          "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 391,
+          "class_id": 27,
+          "name": "öppen mark utan vegetation",
+          "color": "#e0e0e0",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        }
+      ],
+      "overlay_palette_matches": true
+    },
+    {
+      "area": "stockholm",
+      "job_id": "252f7fe8-6dba-454b-bea5-238031954d08",
+      "seconds": 31.890950625005644,
+      "native_pixels_unchanged": 254016,
+      "native_band_sha256": "ec04a71f67b32bc6f7ebcdc96948872e3bbe4df2c8d39d7829e58e5e3ca1eafc",
+      "classes_clicked": [
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 20,
+          "class_id": 1,
+          "name": "Tallskog på fastmark",
+          "color": "#6d8b05",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 167,
+          "col": 22,
+          "class_id": 2,
+          "name": "Granskog på fastmark",
+          "color": "#2c5f00",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 2,
+          "class_id": 3,
+          "name": "Lövskog / barrblandskog",
+          "color": "#4be600",
+          "nodata": false,
+          "note": "Sammanslagen modellklass. Aktuell klassmappning omfattar lövskog, barrblandskog och låg fjällskog på fastmark. Färg från NMD triviallövskog."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 305,
+          "class_id": 4,
+          "name": "Lövblandad barrskog på fastmark",
+          "color": "#38a800",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 146,
+          "col": 0,
+          "class_id": 5,
+          "name": "Skog på våtmark",
+          "color": "#588b54",
+          "nodata": false,
+          "note": "Sammanslagna skogstyper på våtmark, även temporärt ej skog och låg fjällskog. Färg från NMD tallskog på våtmark."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 489,
+          "col": 126,
+          "class_id": 7,
+          "name": "Öppen våtmark",
+          "color": "#c29cd5",
+          "nodata": false,
+          "note": "Våtmarkens underklasser är sammanslagna; färg från NMD öppen våtmark."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 22,
+          "class_id": 9,
+          "name": "Exploaterad mark",
+          "color": "#e24549",
+          "nodata": false,
+          "note": "Byggnader, övrig exploaterad mark och väg/järnväg är sammanslagna. Färg från NMD exploaterad mark, ej byggnad eller väg/järnväg."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 99,
+          "class_id": 10,
+          "name": "Sjö, vattendrag och hav",
+          "color": "#6699cc",
+          "nodata": false,
+          "note": "Sjöar, vattendrag och hav är sammanslagna. Färg från NMD sjö och vattendrag."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 18,
+          "col": 335,
+          "class_id": 15,
+          "name": "slåttervall",
+          "color": "#64c864",
+          "nodata": false,
+          "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 16,
+          "col": 336,
+          "class_id": 16,
+          "name": "bete",
+          "color": "#50a03c",
+          "nodata": false,
+          "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 34,
+          "class_id": 24,
+          "name": "buskdominerad mark",
+          "color": "#abc8a6",
+          "nodata": false,
+          "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 18,
+          "class_id": 25,
+          "name": "risdominerad mark",
+          "color": "#cdaa66",
+          "nodata": false,
+          "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 0,
+          "class_id": 26,
+          "name": "gräsdominerad mark",
+          "color": "#ffd27e",
+          "nodata": false,
+          "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 0,
+          "col": 108,
+          "class_id": 27,
+          "name": "öppen mark utan vegetation",
+          "color": "#e0e0e0",
+          "nodata": false,
+          "note": "Benämning och färg enligt NMD 2023."
+        },
+        {
+          "inside": true,
+          "year": 2024,
+          "row": 182,
+          "col": 501,
+          "class_id": 255,
+          "name": "Data saknas",
+          "color": null,
+          "nodata": true,
+          "note": "Ingen klassning där användbara indata saknas."
+        }
+      ],
+      "overlay_palette_matches": true
+    }
+  ],
+  "legend": [
+    {
+      "id": 0,
+      "name": "bakgrund",
+      "color": "#000000",
+      "note": "Modellens bakgrundsklass; skiljs från pixlar där data saknas."
+    },
+    {
+      "id": 1,
+      "name": "Tallskog på fastmark",
+      "color": "#6d8b05",
+      "note": "Benämning och färg enligt NMD 2023.",
+      "nmd_swatch": 111
+    },
+    {
+      "id": 2,
+      "name": "Granskog på fastmark",
+      "color": "#2c5f00",
+      "note": "Benämning och färg enligt NMD 2023.",
+      "nmd_swatch": 112
+    },
+    {
+      "id": 3,
+      "name": "Lövskog / barrblandskog",
+      "color": "#4be600",
+      "note": "Sammanslagen modellklass. Aktuell klassmappning omfattar lövskog, barrblandskog och låg fjällskog på fastmark. Färg från NMD triviallövskog.",
+      "nmd_swatch": 115
+    },
+    {
+      "id": 4,
+      "name": "Lövblandad barrskog på fastmark",
+      "color": "#38a800",
+      "note": "Benämning och färg enligt NMD 2023.",
+      "nmd_swatch": 114
+    },
+    {
+      "id": 5,
+      "name": "Skog på våtmark",
+      "color": "#588b54",
+      "note": "Sammanslagna skogstyper på våtmark, även temporärt ej skog och låg fjällskog. Färg från NMD tallskog på våtmark.",
+      "nmd_swatch": 121
+    },
+    {
+      "id": 6,
+      "name": "Temporärt ej skog på fastmark",
+      "color": "#cdcd66",
+      "note": "Benämning och färg enligt NMD 2023.",
+      "nmd_swatch": 118
+    },
+    {
+      "id": 7,
+      "name": "Öppen våtmark",
+      "color": "#c29cd5",
+      "note": "Våtmarkens underklasser är sammanslagna; färg från NMD öppen våtmark.",
+      "nmd_swatch": 200
+    },
+    {
+      "id": 8,
+      "name": "Öppen mark (sammanslagen)",
+      "color": "#d2b48c",
+      "note": "Bred modellklass med öppen mark, träda samt glaciär och varaktigt snöfält. Ingen entydig NMD-motsvarighet; egen färg."
+    },
+    {
+      "id": 9,
+      "name": "Exploaterad mark",
+      "color": "#e24549",
+      "note": "Byggnader, övrig exploaterad mark och väg/järnväg är sammanslagna. Färg från NMD exploaterad mark, ej byggnad eller väg/järnväg.",
+      "nmd_swatch": 52
+    },
+    {
+      "id": 10,
+      "name": "Sjö, vattendrag och hav",
+      "color": "#6699cc",
+      "note": "Sjöar, vattendrag och hav är sammanslagna. Färg från NMD sjö och vattendrag.",
+      "nmd_swatch": 61
+    },
+    {
+      "id": 11,
+      "name": "vete",
+      "color": "#e6b422",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 12,
+      "name": "korn",
+      "color": "#d48217",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 13,
+      "name": "havre",
+      "color": "#ffff64",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 14,
+      "name": "oljeväxter",
+      "color": "#2db45a",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 15,
+      "name": "slåttervall",
+      "color": "#64c864",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 16,
+      "name": "bete",
+      "color": "#50a03c",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 17,
+      "name": "potatis",
+      "color": "#b45028",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 18,
+      "name": "sockerbetor",
+      "color": "#c864c8",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 19,
+      "name": "trindsäd",
+      "color": "#8cb432",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 20,
+      "name": "råg",
+      "color": "#be9650",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 21,
+      "name": "majs",
+      "color": "#dcc800",
+      "note": "Modellens tillägg från LPIS jordbruksdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 22,
+      "name": "hygge",
+      "color": "#00ced1",
+      "note": "Modellens tillägg från SKS avverkningsdata; egen färg, ingen separat NMD-klass."
+    },
+    {
+      "id": 23,
+      "name": "Exploaterad mark, torvtäkt",
+      "color": "#8c1964",
+      "note": "Benämning och färg enligt NMD 2023.",
+      "nmd_swatch": 54
+    },
+    {
+      "id": 24,
+      "name": "buskdominerad mark",
+      "color": "#abc8a6",
+      "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp.",
+      "nmd_swatch": 4212
+    },
+    {
+      "id": 25,
+      "name": "risdominerad mark",
+      "color": "#cdaa66",
+      "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp.",
+      "nmd_swatch": 4222
+    },
+    {
+      "id": 26,
+      "name": "gräsdominerad mark",
+      "color": "#ffd27e",
+      "note": "Fuktighetsvarianter är sammanslagna. Färg från NMD:s friska vegetationstyp.",
+      "nmd_swatch": 4232
+    },
+    {
+      "id": 27,
+      "name": "öppen mark utan vegetation",
+      "color": "#e0e0e0",
+      "note": "Benämning och färg enligt NMD 2023.",
+      "nmd_swatch": 411
+    },
+    {
+      "id": 255,
+      "name": "Data saknas",
+      "color": null,
+      "note": "Ingen klassning där användbara indata saknas."
+    }
+  ],
+  "browser": {
+    "url": "http://127.0.0.1:8788/lclu",
+    "area": "Kiruna tätort",
+    "job_id": "a399c84d-7ca7-4d78-bc31-69588a3cc956",
+    "zoom": 15,
+    "opacity": 100,
+    "image_rendering": "pixelated",
+    "popup_class": "Buskdominerad mark",
+    "overlay_retained": true,
+    "legend_entries": 29,
+    "accessible_class_notes": 29,
+    "legend_visually_checked": true
+  },
+  "review": "Independent reviewer: no actionable findings; targeted tests passed.",
+  "tests": "161 passed in 27.15s; node --check docs/js/lclu.js; git diff --check",
+  "job": "lclu-stockholm-0124-r6",
+  "archive_sha256": "d36c27894b1461767e958c8dfe427d2901f5e9a58116c347894ddd0275dda6d4",
+  "expires_at": "2026-10-30T12:40:48+00:00"
+}

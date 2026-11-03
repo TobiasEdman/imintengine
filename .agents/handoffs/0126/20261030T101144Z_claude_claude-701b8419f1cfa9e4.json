@@ -1,0 +1,63 @@
+{
+  "active_goal": "Kiruna tätort as second demo area, 100% opaque pixelated overlay, native pixel inspector and NMD-pinned legend for the annual LCLU map (follow-up to 0124).",
+  "active_rules": [
+    "Demo first: IM-024 delivered with the existing verified R4 model and current class schema; demo does not wait for IM-023 [Tobias 2026-10-29]",
+    "No serving-weight, class-ID or schema mutation without explicit approval [task 0127/0128 scope]",
+    "Approved demo budget 4 CPU / 8 GiB / 20 GiB cache; extending expiry or resources needs explicit approval [task 0126]",
+    "Never restart jobs that discard finished work without asking [CLAUDE.md]",
+    "k8s: kubectl apply --dry-run=server before any real submit [CLAUDE.md]"
+  ],
+  "blockers": [
+    "Claim owned by te-codex-lclu-01a186a8; agentic-task complete verifies owner and runtime",
+    "Live demo expiry 2026-10-30 12:40:48 UTC; cluster access (icekube) only from Tobias Mac"
+  ],
+  "changed_paths": [
+    "config/lclu/kiruna_tatort.json",
+    "docker/lclu/Dockerfile",
+    "docker/lclu/README.md",
+    "docker/lclu/bootstrap.py",
+    "docker/lclu/build.py",
+    "docker/lclu/run.py",
+    "docs/backlog.md",
+    "docs/css/lclu.css",
+    "docs/js/lclu.js",
+    "docs/lclu-service.md",
+    "docs/lclu.html",
+    "docs/verification/lclu-service/NMD2023bas_v2_1.qml",
+    "docs/verification/lclu-service/kiruna.json",
+    "docs/verification/lclu-service/nmd-legend.md",
+    "docs/verification/lclu-service/pixel-nmd.json",
+    "docs/verification/lclu-service/pytest-kiruna.txt",
+    "docs/verification/lclu-service/pytest-pixel-nmd.txt",
+    "docs/verification/lclu-service/ui-r4.json",
+    "docs/verification/lclu-service/verification.md",
+    "imint/api/v1/server.py",
+    "imint/inference/lclu.py",
+    "imint/inference/lclu_legend.py",
+    "imint/inference/lclu_sources.py",
+    "tests/api_services/test_lclu.py",
+    "tests/lclu/test_legend.py",
+    "tests/lclu/test_service.py",
+    "tests/lclu/test_sources.py",
+    "tests/lclu/test_staging.py"
+  ],
+  "commit": "f5def517a1c95cbc3ef1a32fdadc65301b0a62bb",
+  "created_at": "2026-10-30T10:11:44Z",
+  "current_state": "Codex (claim te-codex-lclu-01a186a8) finished the work and ran live r6 (Job lclu-stockholm-0124-r6, expiry 2026-10-30 12:40:48 UTC) but ran out of budget before committing. Tobias pushed the dirty worktree as snapshot f0e87387 (agent/te/claude/takeover-lclu-annual-service). Claude committed it unchanged as 743496b3 on claude/upbeat-goldberg-bnbbux; tree equals the snapshot. The legend in this commit ('Lövskog / barrblandskog') was later superseded by 0128 and is what the live r6 demo still shows. The claim ref still names the Codex agent; completing it needs that identity or an explicit abandon/reclaim decision.",
+  "next_steps": [
+    "Decide with Tobias whether 0126 is completed as-is (its scope is delivered) or folded into 0128",
+    "Complete or abandon the claim with the owning identity (agentic-task complete/abandon) once decided",
+    "Redeploy the demo from 0128 so the corrected legend replaces the r6 one"
+  ],
+  "off_limits": [
+    "Running r6 Job and its caches until Tobias decides",
+    "Stockholm cache under the demo volume"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-701b8419f1cfa9e4",
+  "target": null,
+  "task_id": "0126",
+  "verification": "Consolidated at f5def517a1c95cbc3ef1a32fdadc65301b0a62bb: pytest tests/lclu tests/api_services tests/test_forest_separability.py -> 187 passed; tests/test_repo_hygiene.py tests/test_schema.py -> 46 passed, 1 skipped; node --check on docs/js. Receipt: docs/verification/lclu-service/pytest-takeover.txt"
+}

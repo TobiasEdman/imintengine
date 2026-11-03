@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from imint.tile_grid import bounds_from_center
+
 
 @dataclass(frozen=True)
 class TileConfig:
@@ -71,22 +73,7 @@ class TileConfig:
             ValueError: if ``size_px`` is odd, which makes ``half_m`` half a
                 pixel off the ``gsd_m`` lattice.
         """
-        gsd = int(self.gsd_m)
-        h = self.half_m
-        if h % gsd:
-            raise ValueError(
-                f"TileConfig(size_px={self.size_px}, gsd_m={self.gsd_m}): "
-                f"half_m={h} is not a multiple of gsd={gsd} — size_px must be "
-                f"even for national-lattice alignment."
-            )
-        cx = round(east / gsd) * gsd
-        cy = round(north / gsd) * gsd
-        return {
-            "west":  cx - h,
-            "east":  cx + h,
-            "south": cy - h,
-            "north": cy + h,
-        }
+        return bounds_from_center(east, north, self.size_px, self.gsd_m)
 
     def assert_bbox_matches(self, bbox: dict) -> None:
         """Raise ``ValueError`` when bbox extent disagrees with tile size.

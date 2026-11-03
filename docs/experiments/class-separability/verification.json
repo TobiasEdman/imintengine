@@ -1,0 +1,45 @@
+{
+  "task": "0127",
+  "date": "2026-10-29",
+  "status": "bounded_diagnostic_complete",
+  "tests": {
+    "command": "python -m pytest tests/test_forest_separability.py -q",
+    "passed": 10
+  },
+  "real_run": {
+    "source_bundle_sha256": "efa5a190fe17ee10455823a98d0485dce2f9cf9210407701c64a23e51779f4fb",
+    "image": "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:921aed5400857ae48eec8214007add39e9f0543f518e5d042af893562370d86d",
+    "cpu": 2,
+    "memory_gib": 4,
+    "gpu": 0,
+    "second_attempt_deadline_seconds": 1050,
+    "exit_status": 0,
+    "feature_year": 2022,
+    "reference_year": 2023,
+    "reference": "fixed NMD2023 raw113 versus115\u2013117",
+    "scope": "historical development locations; new probe spatially cross-validated",
+    "private_result_policy": "Only location-free aggregate metrics and integrity hashes retained locally; feature arrays, label arrays, tile identifiers and coordinates not exported.",
+    "sealed_holdout": "not read or scored",
+    "verification": [
+      "feature and shard hashes verified in cluster",
+      "nonempty expected sample count and128-dimensional finite features",
+      "24distinct development tiles",
+      "both classes present in every train/test fold",
+      "no5km train-test distance violations",
+      "known distillation head stamp consistent across all sampled sidecars"
+    ],
+    "started_at": "2026-10-29T16:32:07Z",
+    "completed_at": "2026-10-29T16:38:33Z",
+    "job_succeeded": 1
+  },
+  "limits": [
+    "Not unseen-area R4 accuracy",
+    "NMD agreement is not independent field accuracy",
+    "Interior-only sample excludes immediate class boundaries",
+    "One-year feature/reference gap",
+    "Does not test barrblandskog against tallskog, granskog or lovblandad barrskog",
+    "Historical training sidecar byte identity cannot be reconstructed fully from saved checkpoint metadata"
+  ],
+  "implementation_commit": "pending explicit user approval",
+  "resource_cleanup": "both probe jobs and their ConfigMaps removed; running-source locks removed"
+}

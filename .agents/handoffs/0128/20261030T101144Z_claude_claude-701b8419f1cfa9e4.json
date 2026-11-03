@@ -1,0 +1,66 @@
+{
+  "active_goal": "IM-024: annual LCLU maps for the ten largest municipalities and all published TESSERA years, extending the 0126 demo; keep the NMD-aligned legend.",
+  "active_rules": [
+    "Demo first: IM-024 delivered with the existing verified R4 model and current class schema; demo does not wait for IM-023 [Tobias 2026-10-29]",
+    "No serving-weight, class-ID or schema mutation without explicit approval [task 0127/0128 scope]",
+    "Approved demo budget 4 CPU / 8 GiB / 20 GiB cache; extending expiry or resources needs explicit approval [task 0126]",
+    "Never restart jobs that discard finished work without asking [CLAUDE.md]",
+    "k8s: kubectl apply --dry-run=server before any real submit [CLAUDE.md]"
+  ],
+  "blockers": [
+    "Cluster steps need icekube credentials, available only on Tobias Mac (Remote Control not attached)",
+    "Claim owned by te-codex-demo-0128"
+  ],
+  "changed_paths": [
+    "config/lclu/municipalities.json",
+    "docker/lclu/bootstrap.py",
+    "docker/lclu/build.py",
+    "docker/lclu/render_job.py",
+    "docker/lclu/run.py",
+    "docs/backlog.md",
+    "docs/css/lclu.css",
+    "docs/index.html",
+    "docs/js/app.js",
+    "docs/js/lclu-config.js",
+    "docs/js/lclu.js",
+    "docs/lclu.html",
+    "docs/verification/lclu-service/campaign-inventory.json",
+    "docs/verification/lclu-service/campaign-preflight.json",
+    "docs/verification/lclu-service/campaign-smoke.json",
+    "docs/verification/lclu-service/nmd-legend.md",
+    "imint/api/v1/lclu_cors.py",
+    "imint/api/v1/schemas.py",
+    "imint/api/v1/server.py",
+    "imint/inference/lclu.py",
+    "imint/inference/lclu_legend.py",
+    "imint/inference/lclu_sources.py",
+    "scripts/inventory_lclu_demo.py",
+    "scripts/stage_lclu_campaign.py",
+    "scripts/stage_lclu_demo.py",
+    "tests/api_services/test_lclu.py",
+    "tests/lclu/browser_fixture.py",
+    "tests/lclu/test_campaign.py",
+    "tests/lclu/test_legend.py"
+  ],
+  "commit": "f5def517a1c95cbc3ef1a32fdadc65301b0a62bb",
+  "created_at": "2026-10-30T10:11:44Z",
+  "current_state": "Codex (claim te-codex-demo-0128) built inventory/staging/catalogue/CORS and the corrected forest legend (Lövskog / Blandskog with field-refinement note) but did not commit. Snapshot 05efa0c9 committed unchanged as 3368d5a5. Backlog IM-024 checklist: TESSERA inventory done (2017-2025 registry); coverage matrix, compact COGs and parity, sizing and ICE cost, area/year selector and API catalogue, full matrix verification remain. Receipts campaign-inventory/preflight/smoke.json cover 2024.",
+  "next_steps": [
+    "Deploy the 0128 build to replace live r6 (needs icekube; dry-run=server first; preserve caches and approved budget)",
+    "Build the municipality x year coverage matrix for TESSERA and HR-VPP with inventory_lclu_demo.py",
+    "Prepare and parity-check compact TESSERA COGs per qualified cell; deduplicate shared blocks",
+    "Size storage/runtime and update the ICE cost basis before widening the deployment",
+    "Enable each municipality/year in the selector only after source and model verification"
+  ],
+  "off_limits": [
+    "Live r6 Job until the replacement is verified",
+    "Sealed NFI holdout"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-701b8419f1cfa9e4",
+  "target": null,
+  "task_id": "0128",
+  "verification": "Consolidated at f5def517a1c95cbc3ef1a32fdadc65301b0a62bb: pytest tests/lclu tests/api_services tests/test_forest_separability.py -> 187 passed; tests/test_repo_hygiene.py tests/test_schema.py -> 46 passed, 1 skipped; node --check on docs/js. Receipt: docs/verification/lclu-service/pytest-takeover.txt"
+}
