@@ -2,12 +2,13 @@
   "id": "0134",
   "subject": "Showcase films: Swedish place-name pronunciation in scene 1 (sv + en)",
   "description": "Tobias read the 22 place names of the 16 showcase films in Swedish (2026-11-03) and chose, from auditions, to use them for both languages: scene 1 of 15 films per language is re-narrated with his place-name readings as continuation prompts (sv-B: place-name prompt + Swedish narrator reference; en-B: George sentence + place-name prompt + British reference). This replaces the 30 affected MP4s, captions and posters under docs/showcase/films and updates MANIFEST.json to the new media commit. No player or page code changes. Review: Codex.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/showcase-placenames",
   "created_at": "2026-11-03T09:04:30Z",
-  "updated_at": "2026-11-03T09:04:34Z",
+  "updated_at": "2026-11-03T10:10:59Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-03T09:04:34Z"
+  "claimed_at": "2026-11-03T09:04:34Z",
+  "completed_at": "2026-11-03T10:10:59Z"
 }
