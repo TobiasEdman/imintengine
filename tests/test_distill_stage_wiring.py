@@ -11,7 +11,8 @@ distill-stage scripts predate the six-backbone ladder.
 The consequence is silent, not a crash. ``extract_plot_features.py`` captures
 256-dim features off a wrongly-shaped head, and ``distill_forest_labels.py``
 writes dense sidecars from one — so 2 of the ladder's 6 columns would distil
-garbage while looking healthy. See docs/experiments/ladder_distill_stage.md.
+garbage while looking healthy. See ladder_distill_stage.md (kept privately,
+in the private experiments repo, until the paper).
 
 Asserted at the AST level because exercising the real path needs GPU weights.
 What regresses in practice is the keyword going missing under an edit, and

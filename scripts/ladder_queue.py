@@ -112,7 +112,7 @@ def already_trained(ladder_root: Path, rung: int, model: str) -> bool:
     Job existence alone is NOT the answer: gpu-reaper archives and deletes a
     Job an hour after it finishes, so a completed run looks pending to a
     `kubectl get job` check. Without this the queue resubmits work that is
-    already done — on 2026-08-30 both tessera_r1 (0.5654, 30/30) and
+    already done — on 2026-08-30 both tessera_r1 and
     prithvi600m_r1 had finished and been reaped, and the queue had them
     queued for resubmission.
 

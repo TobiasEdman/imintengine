@@ -3,7 +3,7 @@
 # isolated per-model head/record directories and the split record
 # directory plus isolated source-access evidence/lock roots. Run
 # before PLAN; broad PVC roots stay unchanged.
-# Plan: docs/experiments/ladder_distill_stage.md
+# Plan: ladder_distill_stage.md (private experiments repo, until the paper)
 apiVersion: batch/v1
 kind: Job
 metadata:

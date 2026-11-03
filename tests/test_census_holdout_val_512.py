@@ -35,6 +35,7 @@ def fieldtruth_file(tmp_path_factory) -> Path:
     return _write_fieldtruth_fixture(tmp_path_factory.mktemp("ft"))
 
 def _bbox(cell_x: int, cell_y: int) -> dict:
+    """Fixtures use row 1100, south of Sweden: a holdout name inside Sweden locates a real tile."""
     w, s = cell_x * 5120, cell_y * 5120
     return {"west": w, "south": s, "east": w + 5120, "north": s + 5120}
 
@@ -81,24 +82,24 @@ def data_root(tmp_path: Path) -> Path:
     for sub in ("holdout_val_512", "audits", "nfi", "distill/heads", "unified_v2_512",
                 "unified_v2_512_nfi2024_staging", "ladder_inference", "checkpoints/ladder/clay_r2"):
         (root / sub).mkdir(parents=True)
-    a, b, c = _bbox(100, 1250), _bbox(110, 1250), _bbox(120, 1250)
+    a, b, c = _bbox(100, 1100), _bbox(110, 1100), _bbox(120, 1100)
     hold = root / "holdout_val_512"
-    _tile(hold / "holdoutval_100_1250_2019.npz", a, 2019)                       # complete, unstamped
-    _tile(hold / "holdoutval_110_1250_2022.npz", b, 2022, tessera_zero=True,     # lying flag, no frame,
+    _tile(hold / "holdoutval_100_1100_2019.npz", a, 2019)                       # complete, unstamped
+    _tile(hold / "holdoutval_110_1100_2022.npz", b, 2022, tessera_zero=True,     # lying flag, no frame,
           frame=False, stamped=True, vpp=False, mode=0o600)                      # not world-readable
-    _tile(hold / "holdoutval_120_1250_2019.npz", c, 2019, stamped=True)          # complete, promoted stamp
-    e = _bbox(150, 1250)                                                         # metadata says 2019, dates say 2020
-    _tile(hold / "holdoutval_150_1250_2019.npz", e, 2019, stamped=True,
+    _tile(hold / "holdoutval_120_1100_2019.npz", c, 2019, stamped=True)          # complete, promoted stamp
+    e = _bbox(150, 1100)                                                         # metadata says 2019, dates say 2020
+    _tile(hold / "holdoutval_150_1100_2019.npz", e, 2019, stamped=True,
           dates=["2018-09-10", "2020-06-01", "2020-07-01", "2020-08-01"])
-    with np.load(hold / "holdoutval_150_1250_2019.npz") as d:
+    with np.load(hold / "holdoutval_150_1100_2019.npz") as d:
         arrays = dict(d)
     arrays["year"] = np.array(2019)
-    np.savez(hold / "holdoutval_150_1250_2019.npz", **arrays)
-    manifest = [{"name": "holdoutval_100_1250_2019", "bbox_3006": a, "year": 2019, "source": "lulc"},
-                {"name": "holdoutval_110_1250_2022", "bbox_3006": b, "year": 2022, "source": "lulc"},
-                {"name": "holdoutval_120_1250_2019", "bbox_3006": c, "year": 2019, "source": "lulc"},
-                {"name": "holdoutval_150_1250_2019", "bbox_3006": e, "year": 2019, "source": "lulc"},
-                {"name": "holdoutval_130_1250_2023", "bbox_3006": _bbox(130, 1250), "year": 2023, "source": "lulc"}]
+    np.savez(hold / "holdoutval_150_1100_2019.npz", **arrays)
+    manifest = [{"name": "holdoutval_100_1100_2019", "bbox_3006": a, "year": 2019, "source": "lulc"},
+                {"name": "holdoutval_110_1100_2022", "bbox_3006": b, "year": 2022, "source": "lulc"},
+                {"name": "holdoutval_120_1100_2019", "bbox_3006": c, "year": 2019, "source": "lulc"},
+                {"name": "holdoutval_150_1100_2019", "bbox_3006": e, "year": 2019, "source": "lulc"},
+                {"name": "holdoutval_130_1100_2023", "bbox_3006": _bbox(130, 1100), "year": 2023, "source": "lulc"}]
     (root / "audits/holdout_val_phaseA.json").write_text(json.dumps(manifest))
 
     def inside(bbox, dx=2560, dy=2560):
@@ -128,15 +129,15 @@ def data_root(tmp_path: Path) -> Path:
         (root / f"distill/heads/{model}_r2_split.json").write_text(json.dumps(
             {"train_tiles": ["tile_1_1"], "test_tiles": ["tile_2_2"]}))
     # training cohort: one same-year tile overlapping A, one other-year tile overlapping C
-    np.savez(root / "unified_v2_512/tile_514560_6402560.npz",
+    np.savez(root / "unified_v2_512/tile_514560_5634560.npz",
              bbox_3006=np.array([a["west"] + 2560, a["south"] + 2560, a["east"] + 2560, a["north"] + 2560]),
              year=np.array(2019), spectral=np.zeros((2, 2, 2)))
-    np.savez(root / "unified_v2_512/tile_616960_6402560.npz",
+    np.savez(root / "unified_v2_512/tile_616960_5634560.npz",
              bbox_3006=np.array([c["west"] + 2560, c["south"] + 2560, c["east"] + 2560, c["north"] + 2560]),
              year=np.array(2021), spectral=np.zeros((2, 2, 2)))
-    (root / "unified_v2_512/train.txt").write_text("tile_514560_6402560\n")
-    (root / "unified_v2_512/val.txt").write_text("tile_616960_6402560\n")
-    (root / "ladder_inference/tiles.json").write_text(json.dumps({"tiles": ["holdoutval_100_1250_2019"]}))
+    (root / "unified_v2_512/train.txt").write_text("tile_514560_5634560\n")
+    (root / "unified_v2_512/val.txt").write_text("tile_616960_5634560\n")
+    (root / "ladder_inference/tiles.json").write_text(json.dumps({"tiles": ["holdoutval_100_1100_2019"]}))
     (root / "checkpoints/ladder/clay_r2/training_log.json").write_text(json.dumps({"epochs": []}))
     _tile(root / "unified_v2_512_nfi2024_staging/nfi2024_1_1.npz", _bbox(1, 1), 2024, stamped=True)
     return root
@@ -154,7 +155,7 @@ def test_census_counts_files_keys_flags_and_modalities(data_root, fieldtruth_fil
     report = _run(data_root, fieldtruth_file, tmp_path)
     files = report["files"]
     assert files["present"] == 4 and files["readable"] == 4 and files["unreadable"] == []
-    assert files["admitted"] == 3 and files["quarantined_year_conflict"] == ["holdoutval_150_1250_2019"]
+    assert files["admitted"] == 3 and files["quarantined_year_conflict"] == ["holdoutval_150_1100_2019"]
     assert files["quarantined_by_manifest_year"] == {"2019": 1}
     assert files["not_world_readable"] == 1 and files["not_world_readable_by_year"] == {"2022": 1}
     assert files["planned_but_missing_by_year"] == {"2023": 1}
@@ -215,20 +216,20 @@ def test_never_trained_on_passes_and_reports_footprint_and_visualisation(data_ro
     assert fp["cohort_tiles_with_geometry"] == 2
     assert fp["holdout_tiles_overlapping_same_year_training_tile"] == {"2019": 1}
     assert fp["holdout_tiles_overlapping_any_year_training_tile"] == {"2019": 2}
-    assert fp["excluded_same_year_overlap_names"] == ["holdoutval_100_1250_2019"]
+    assert fp["excluded_same_year_overlap_names"] == ["holdoutval_100_1100_2019"]
     assert [(Path(h["path"]).name, h["class"], h["unaccounted_tile_names"]) for h in p["text_files_mentioning_holdout"]] == [
         ("holdout_val_phaseA.json", "provenance_record", 0), ("tiles.json", "visualisation", 0)]
 
 
 def test_a_holdout_name_in_a_split_file_fails_the_check(data_root, fieldtruth_file, tmp_path):
-    (data_root / "unified_v2_512/val.txt").write_text("tile_616960_6402560\nholdoutval_120_1250_2019\n")
+    (data_root / "unified_v2_512/val.txt").write_text("tile_616960_5634560\nholdoutval_120_1100_2019\n")
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
     assert p["verdict"] == "named_tile_use_detected" and p["named_tile_use_detected"] is True
     assert [Path(x).name for x in p["split_files_naming_holdout_tiles"]] == ["val.txt"]
 
 
 def test_a_malformed_split_file_naming_a_holdout_tile_is_inconclusive(data_root, fieldtruth_file, tmp_path):
-    (data_root / "distill/heads/clay_r2_split.json").write_text('{"train_tiles": ["holdoutval_120_1250_2019",')
+    (data_root / "distill/heads/clay_r2_split.json").write_text('{"train_tiles": ["holdoutval_120_1100_2019",')
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
     assert p["verdict"] == "inconclusive" and p["named_tile_use_detected"] is False
     assert [Path(x).name for x in p["split_files_not_parsed"]] == ["clay_r2_split.json"]
@@ -236,15 +237,15 @@ def test_a_malformed_split_file_naming_a_holdout_tile_is_inconclusive(data_root,
 
 
 def test_training_evidence_found_only_by_text_scan_is_inconclusive(data_root, fieldtruth_file, tmp_path):
-    (data_root / "checkpoints/ladder/clay_r2/notes.md").write_text("trained on holdoutval_120_1250_2019 too\n")
+    (data_root / "checkpoints/ladder/clay_r2/notes.md").write_text("trained on holdoutval_120_1100_2019 too\n")
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
     assert p["verdict"] == "inconclusive"
     assert any("notes.md" in r and "unaccounted" in r for r in p["scan_inconclusive_reasons"])
 
 
 @pytest.mark.parametrize("name, text", [
-    ("notes.txt", "trained on holdoutval_120_1250_2019 too\n"),
-    ("train_config.json", json.dumps({"note": "trained on holdoutval_120_1250_2019 too"})),
+    ("notes.txt", "trained on holdoutval_120_1100_2019 too\n"),
+    ("train_config.json", json.dumps({"note": "trained on holdoutval_120_1100_2019 too"})),
 ])
 def test_a_tile_name_embedded_in_a_parsed_file_stays_inconclusive(data_root, fieldtruth_file, tmp_path, name, text):
     (data_root / "checkpoints/ladder/clay_r2" / name).write_text(text)
@@ -272,7 +273,7 @@ def test_a_holdout_directory_reference_in_training_territory_is_inconclusive(
 
 def test_a_train_tiles_json_under_checkpoints_is_parsed_and_detected(data_root, fieldtruth_file, tmp_path):
     (data_root / "checkpoints/ladder/clay_r2/train_tiles.json").write_text(
-        json.dumps(["tile_a", "holdoutval_120_1250_2019"]))
+        json.dumps(["tile_a", "holdoutval_120_1100_2019"]))
     p = _run(data_root, fieldtruth_file, tmp_path)["provenance"]
     assert p["verdict"] == "named_tile_use_detected"
     assert [Path(x).name for x in p["split_files_naming_holdout_tiles"]] == ["train_tiles.json"]
