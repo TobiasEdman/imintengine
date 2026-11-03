@@ -48,7 +48,7 @@ spec:
             - |
               set -euo pipefail
               export PYTHONUNBUFFERED=1
-              SHA=e60aca4ac408fd9540dedde52d29edc5b56bccfb
+              SHA=a6d36ff08acfee129f9c48457d8f75390aa6f2f9
               echo "=== IM-023 relabel b28 — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git libgdal-dev gdal-bin > /dev/null 2>&1
               pip install --quiet --no-cache-dir torch==2.10.0+cu126 torchvision==0.25.0+cu126 \
