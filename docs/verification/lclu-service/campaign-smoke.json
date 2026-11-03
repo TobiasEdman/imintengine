@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "years": [
+    2024
+  ],
+  "cells": [
+    {
+      "area_id": "0180",
+      "name": "Stockholm",
+      "year": 2024,
+      "status": "qualified",
+      "blocks": 22,
+      "original_bytes": 2034616804,
+      "vpp_missing_metrics": [],
+      "vpp_missing_files": [],
+      "qualification": {
+        "sha256": "6b5f132e277f21f0bb82289ec772d996064847f1142616f9dd9cf92dec731dd6",
+        "size": 7571
+      },
+      "prediction": {
+        "sha256": "799bfb3b31f7f9cb94f890bdaf3fa89b7933ae8d21aa4d3eed6794a66d31908f",
+        "size": 254144
+      },
+      "class_ids": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        9,
+        10,
+        15,
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "area_id": "kiruna_tatort",
+      "name": "Kiruna tätort",
+      "year": 2024,
+      "status": "qualified",
+      "blocks": 9,
+      "original_bytes": 577614636,
+      "vpp_missing_metrics": [],
+      "vpp_missing_files": [],
+      "qualification": {
+        "sha256": "b40a1715605702096f3f3631fc865a90f93985951f0a54cc4bda0baafbf1abfb",
+        "size": 5505
+      },
+      "prediction": {
+        "sha256": "57b555d11f98d98cd34deed19b3e0ecfad1ed62237a9a3be5c29db5152217fe6",
+        "size": 254144
+      },
+      "class_ids": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        9,
+        10,
+        15,
+        24,
+        25,
+        26,
+        27
+      ]
+    }
+  ],
+  "vpp_index": {
+    "sha256": "b1c9aa5c27e90ab383f1d5bf3b63b36d8bcd18df8610f6e0428809392918bde5",
+    "size": 246694
+  },
+  "shared_aux": {
+    "temporal_policy": "shared across all years; no annual duplication",
+    "missing_files": [],
+    "dem": "shared public COG windows, verified during staging"
+  },
+  "source_ready_unique_blocks": 31,
+  "source_ready_original_bytes": 2612231440,
+  "requested_unique_blocks": 31,
+  "requested_original_bytes": 2612231440,
+  "existing_vpp_files": 25,
+  "existing_vpp_bytes": 2504711985,
+  "note": "Metadata and file presence only. Each pair still needs preparation and real model qualification.",
+  "remaining_original_bytes": 0,
+  "required_free_bytes": 746586112,
+  "source_sha256": "4f70e7c244a09adf9bf8392914ffbe2ea44ce3d1bee61a72e97b7ee02e10d2a0",
+  "scope_note": "Real R4 predictions at representative Stockholm and Kiruna tätort windows; not whole-municipality accuracy."
+}

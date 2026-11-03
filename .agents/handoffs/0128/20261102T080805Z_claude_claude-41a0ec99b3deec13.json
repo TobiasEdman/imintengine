@@ -1,0 +1,46 @@
+{
+  "active_goal": "IM-026 national annual map service. Today (2026-11-02): run the three read-only checks on ICE that decide packages 3, 4 and 10 of docs/plans/lclu_national_service.md.",
+  "active_rules": [
+    "kubectl create --dry-run=server before every create [CLAUDE.md]",
+    "No CDSE processing units: the probe uses the STAC catalogue and S3 only; cdse-credentials is not mounted [CLAUDE.md]",
+    "D1-D6 as in docs/plans/lclu_national_service.md [Tobias 2026-11-01]",
+    "No year substitution; nothing national offered before qualification receipts",
+    "sumpskog5 concerns training only and blocks neither the service nor IM-023 [Tobias 2026-11-02]"
+  ],
+  "blockers": [
+    "ICE egress unverified to data.source.coop, geodata.scb.se, gateway.prod.wekeo2.eu, stac.dataspace.copernicus.eu and eodata.dataspace.copernicus.eu; a first-read failure in a job is most likely that",
+    "Cluster steps need Tobias' kubectl (icekube)"
+  ],
+  "changed_paths": [
+    "scripts/audit_lclu_national_coverage.py",
+    "tests/lclu/test_national_coverage.py",
+    "k8s/lclu-national-coverage-job.yaml",
+    "scripts/probe_hrvpp_access.py",
+    "tests/lclu/test_hrvpp_probe.py",
+    "k8s/hrvpp-access-probe-job.yaml",
+    "docs/plans/lclu_national_service.md"
+  ],
+  "commit": "16f5087a5f2be11aad8b4378e81f96a500019d2a",
+  "created_at": "2026-11-02T08:08:05Z",
+  "current_state": "Pushed on claude/upbeat-goldberg-bnbbux at 16f5087a. Since the last handoff: the national coverage audit counts a forestry county as covered when any scanning round has it (omdrev 3 has nine counties only; the old rule would have reported no ready year), job pinned to 7dd444f7; new HR-VPP access probe (scripts/probe_hrvpp_access.py, k8s/hrvpp-access-probe-job.yaml pinned to 26e26b29) tests block layout, Range on the WEkEO download and a CDSE eodata copy, each with pixel parity of a 512x512 window against /data/vpp_wekeo. k8s/tessera-zarr-compare-job.yaml pinned to df3cd7cd. Nothing has run on ICE.",
+  "next_steps": [
+    "Setup: git fetch origin; K='kubectl --context icekube -n prithvi-training-default'; B=origin/claude/upbeat-goldberg-bnbbux; I=origin/agent/te/claude/im023-barrblandskog. Apply job files straight from the branch: git show <branch>:<file> | $K create --dry-run=server -f - && git show <branch>:<file> | $K create -f -",
+    "$K get jobs | grep -E 'lclu-national|hrvpp|tessera-zarr' must print nothing; an existing name means ask Tobias before deleting it",
+    "Optional, Tobias' keys only: $K create secret generic cdse-s3 --from-literal=CDSE_S3_ACCESS_KEY=... --from-literal=CDSE_S3_SECRET_KEY=... (without it the probe stops after the anonymous CDSE catalogue)",
+    "for f in k8s/lclu-national-coverage-job.yaml k8s/hrvpp-access-probe-job.yaml k8s/tessera-zarr-compare-job.yaml; do git show $B:$f | $K create --dry-run=server -f - && git show $B:$f | $K create -f -; done",
+    "Collect: last JSON line of $K logs job/lclu-national-coverage (ready_years, gapfill_bytes, static_missing); the summary JSON line and REPORT_JSON block of job/hrvpp-access-probe (wekeo_range, wekeo_window_equal, cdse_collections, cdse_window_equal); the end of job/tessera-zarr-compare",
+    "Package 4 decision from those: HR-VPP read per window if a windowed source reproduces the cache pixel for pixel, else whole-MGRS gap-fill sized by the audit (D4)"
+  ],
+  "off_limits": [
+    "The running demo deployment and its manifest",
+    "EMBEDDING and the R4 serving contract",
+    "Finished or running cluster jobs: never delete or restart one without Tobias"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-41a0ec99b3deec13",
+  "target": null,
+  "task_id": "0128",
+  "verification": "At 16f5087a: pytest tests/lclu tests/test_wekeo_vpp.py tests/test_package_boundaries.py -> 95 passed, 1 pre-existing failure (imint/inference/lclu.py:31). New audit tests fail on the old audit (ready_years [] instead of ['2024']). Probe tests run GDAL /vsicurl and /vsis3 against local servers; the window-byte estimate was 1,456,837 against 1,473,261 fetched. No kubectl dry-run: no cluster access from the cloud session."
+}

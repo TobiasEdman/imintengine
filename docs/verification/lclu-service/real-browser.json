@@ -1,0 +1,104 @@
+{
+  "real_r4": true,
+  "synthetic": false,
+  "year": 2024,
+  "cpu_threads": 2,
+  "canonical_inference_pixel_parity": true,
+  "compared_pixels": 254016,
+  "valid_pixels": 254016,
+  "canonical_seconds": 3.829828280955553,
+  "checkpoint": {
+    "size": 1596322,
+    "sha256": "1270bb2af88074840020f3b481ed5e98a72f0b7ceb51befac2b8fa4675385668"
+  },
+  "source_preparation": {
+    "year": 2024,
+    "center": [
+      647850,
+      6638770
+    ],
+    "prepare_seconds": 102.52216537296772,
+    "registry": {
+      "sha256": "5f46421442202f68cbe0f5985751b9fd759c07f82270d70fe7e55eeeb0cfc916",
+      "size": 9832
+    },
+    "skg_manifest": {
+      "sha256": "2185d78ca1868ced457b8e8e2e0500673426ce064b15ef569999f4d1b4ac2bec",
+      "size": 233562
+    },
+    "source_config": {
+      "sha256": "161d30bbbf09b72b4f9ce4c3ac8224dc1fa73168b9c48817ffff4f75510c7e1c",
+      "size": 4734
+    }
+  },
+  "regional_registry": {
+    "bounds_4326": [
+      17.59257878661588,
+      59.83614663316011,
+      17.68752997141525,
+      59.883903943983356
+    ],
+    "year": 2024,
+    "margin_degrees": 0.05,
+    "sources": {
+      "manifest.parquet": {
+        "parent": {
+          "sha256": "b7d0717c20f3955b4832ee006aa6d835f18b3a376083f7616205add134246c5a",
+          "size": 212614861
+        },
+        "extract": {
+          "sha256": "5f46421442202f68cbe0f5985751b9fd759c07f82270d70fe7e55eeeb0cfc916",
+          "size": 9832
+        },
+        "rows": 2,
+        "centres": [
+          [
+            17.55,
+            59.85
+          ],
+          [
+            17.65,
+            59.85
+          ]
+        ]
+      },
+      "landmasks.parquet": {
+        "parent": {
+          "sha256": "c9c2a58860a6110bf099a3c19bf73e0dcda1030ba79c1dbc9df230b1397548a4",
+          "size": 19718407
+        },
+        "extract": {
+          "sha256": "ec1dae8c5c3a73f2cc5c95bd74768d2f5bec22dd170329b4a676d875b9bb4a64",
+          "size": 4871
+        },
+        "rows": 2,
+        "centres": [
+          [
+            17.55,
+            59.85
+          ],
+          [
+            17.65,
+            59.85
+          ]
+        ]
+      }
+    }
+  },
+  "api_stage_ms": {
+    "preparation": 2091.0774916410446,
+    "inference": 5063.790207728744,
+    "export": 1604.3160762637854
+  },
+  "quality_validation": "Not performed; execution/parity and source identity only.",
+  "memory_events": "low 0\nhigh 0\nmax 751\noom 0\noom_kill 1\n",
+  "api_job_duration_ms": 8846.741419285536,
+  "downloaded_geotiff_hashes_verified": true,
+  "downloaded_geotiff_geometry_verified": true,
+  "browser_overlay_loaded": true,
+  "public_result_view": "http://127.0.0.1:8786/",
+  "model_weights_exported": false,
+  "cluster_job_completed": true,
+  "cluster_job_removed": true,
+  "remaining_test_pods": 0
+}

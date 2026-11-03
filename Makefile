@@ -19,7 +19,7 @@
         colony-up colony-down colony-logs colony-status colony-submit \
         colony-monitor submit-dry submit-live status \
         train-dev train-test train-prod predict-aux predict-summary \
-        lulc-gallery lulc-showcase lulc-showcase-placeholder \
+        lulc-gallery lulc-showcase lulc-showcase-placeholder lclu-demo lclu-serve \
         vpp-prefetch vpp-submit-dry vpp-submit \
         s2-submit-dry s2-submit s2-submit-all s2-status s2-local \
         vm-setup vm-transfer vm-train vm-status vm-attach vm-logs \
@@ -254,6 +254,12 @@ s2-local:  ## Run S2 Process API fetch locally (ThreadPoolExecutor)
 	$(PYTHON) scripts/submit_s2_jobs.py --local --workers 4
 
 # ── Cleanup ───────────────────────────────────────────────────────────────
+
+lclu-demo:  ## Run local annual-map prototype with labelled synthetic data
+	$(PYTHON) scripts/serve_lclu.py --demo $(ARGS)
+
+lclu-serve:  ## Serve annual maps; pass ARGS="--manifest /path/to/serving.json"
+	$(PYTHON) scripts/serve_lclu.py $(ARGS)
 
 clean:  ## Remove test tiles and cache
 	rm -rf data/test_tiles/

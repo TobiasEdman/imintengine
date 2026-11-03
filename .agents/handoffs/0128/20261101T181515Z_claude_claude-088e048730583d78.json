@@ -1,0 +1,37 @@
+{
+  "active_goal": "Read TESSERA for the LCLU demo from the published Zarr store (geotessera zarr/v1 = dataset 1.0 vultr) instead of whole-tile downloads or staged COGs, after measuring how far it is from the tile values R4 uses.",
+  "active_rules": [
+    "Never mix embedding sources under one identity: Zarr windows carry ZARR_EMBEDDING, never EMBEDDING [repo lesson: 36.6% of cohort values changed at the dl2 retirement, k8s/tessera-promote-v2-job.yaml]",
+    "No serving change before the measurement and Tobias' decision",
+    "Read zarr/v1, not geotessera's default v1.1 (a different run)",
+    "Persist every read to disk; fail loudly on layout changes [CLAUDE.md]"
+  ],
+  "blockers": [
+    "data.source.coop is denied by the cloud session's network policy; the reader is untested against the real store",
+    "Cohort tiles with stored tessera live on the cluster PVC, not on the Mac"
+  ],
+  "changed_paths": [
+    "imint/inference/lclu_zarr.py",
+    "tests/lclu/test_zarr.py"
+  ],
+  "commit": "5f211f5e794fbb615fbe0b7cbcbff301ac91990e",
+  "created_at": "2026-11-01T18:15:15Z",
+  "current_state": "Reader done and pushed on claude/upbeat-goldberg-bnbbux (5f211f5e): native window plus halo per UTM zone (33/34 across 18 E), serving or training merge rule, disk cache, gap vs water, layout checks. Bit-identical to prepare_lclu.assemble_embedding when a tile sits on the zone lattice. Known difference by design of the store: tile origins are rounded to the lattice (2-9 m off-lattice for sampled Swedish tiles, so up to 5 m shift) and overlaps are last-written-wins.",
+  "next_steps": [
+    "On a machine that reaches data.source.coop: open the real store with lclu_zarr.open_store(STORE_URL) and check the layout assumptions (groups utm32-34, embeddings/scales/time/x/y, time = years 2017-2025)",
+    "Write scripts/compare_tessera_zarr.py: for deterministic cohort tiles (tessera from geotessera 0.10.2 v1/vultr), read Zarr with merge='training' and report valid-mask agreement, bit-identical fraction, max/mean abs diff and cosine percentiles; plus coverage (+inf) for the 11 demo areas x 2017-2025",
+    "Run it as a k8s job pinned to a commit and image digest (cluster network must reach data.source.coop), or locally on windows fetched both ways",
+    "Only then decide whether serving accepts ZARR_EMBEDDING (lclu.py, lclu_sources.py, prepare_lclu.py, new parity receipts)"
+  ],
+  "off_limits": [
+    "The running demo deployment and its serving manifest",
+    "EMBEDDING and the R4 serving contract until the measurement is decided"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-088e048730583d78",
+  "target": null,
+  "task_id": "0128",
+  "verification": "At 5f211f5e: pytest tests/lclu tests/test_package_boundaries.py -> 52 passed, 1 pre-existing failure (imint/inference/lclu.py:31, also on the base); tests/lclu/test_zarr.py 7 passed. Not run against the real store."
+}

@@ -1,0 +1,15 @@
+# CPU-only annual TESSERA service; versions from the verified Uppsala runtime.
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+numpy==2.5.4
+scipy==1.18.1
+Pillow==13.0.0
+rasterio==1.5.2
+pyproj==3.8.0
+fastapi==0.119.1
+uvicorn==0.38.0
+PyYAML==6.0.3
+shapely==2.1.2
+requests==2.32.5
+opencv-python-headless==4.13.0.92

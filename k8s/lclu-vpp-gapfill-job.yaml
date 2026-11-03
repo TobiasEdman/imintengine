@@ -1,0 +1,113 @@
+# IM-024 (task 0128): fill the HR-VPP gaps of the municipality × year campaign.
+#
+# Source of truth for what to fetch: docs/verification/lclu-service/vpp-gapfill-plan.json
+# (scripts/plan_lclu_vpp_gapfill.py on Codex's campaign preflight): 133 MGRS × year
+# pairs, 665 COGs, ~74 GB at the cached mean size. Approved by Tobias 2026-10-30
+# for all years 2017–2025.
+#
+# WEkEO HDA only (prefetch_vpp_wekeo.py) — never CDSE PU (CLAUDE.md VPP rule).
+# Idempotent: COGs already in /data/vpp_wekeo are skipped and index.json is kept
+# current, so re-creating the Job after a timeout resumes. Each year runs on its
+# own; a year WEkEO has not published (possibly 2025) fails alone and stays a
+# blocker. Afterwards the campaign preflight is re-run and printed between
+# PREFLIGHT_JSON markers so the coverage matrix can be regenerated from the log.
+#
+#   kubectl --context icekube -n prithvi-training-default create --dry-run=server -f k8s/lclu-vpp-gapfill-job.yaml
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/lclu-vpp-gapfill-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lclu-vpp-gapfill-0128
+  namespace: prithvi-training-default
+  labels:
+    app: lclu-campaign
+    task: "0128"
+    purpose: vpp-gapfill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200   # 12 h; the template's ~20 COGs took well under 1 h
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: lclu-campaign
+        task: "0128"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          command:
+            - bash
+            - -c
+            - |
+              set -uo pipefail
+              export PYTHONUNBUFFERED=1
+              SRC_SHA=45d6687a160746043aea3a5aa66d1225d2125b5a
+              AUDIT=/data/audits/lclu-vpp-gapfill-0128
+              echo "=== LCLU VPP gap-fill (task 0128) at ${SRC_SHA}: $(date -u) ==="
+
+              FREE_GB=$(df -BG --output=avail /data | tail -1 | tr -dc 0-9)
+              echo "free on /data: ${FREE_GB} GB (plan needs ~74 GB)"
+              [ "${FREE_GB}" -ge 100 ] || { echo "ABORT: under 100 GB free"; exit 1; }
+
+              apt-get update -qq && apt-get install -y -qq \
+                git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1 || exit 1
+              pip3 install --quiet --no-cache-dir \
+                numpy rasterio pyproj shapely affine requests hda 2>&1 | tail -3
+
+              mkdir -p /workspace "${AUDIT}" && cd /workspace
+              git init -q imintengine && cd imintengine
+              git fetch -q --depth 1 https://github.com/TobiasEdman/imintengine.git "${SRC_SHA}" || exit 1
+              git checkout -q FETCH_HEAD
+              export PYTHONPATH=/workspace/imintengine
+
+              python3 - <<'PY'
+              import json, subprocess, sys
+              plan = json.load(open('docs/verification/lclu-service/vpp-gapfill-plan.json'))
+              status = {}
+              for year, tiles in plan['pairs_by_year'].items():
+                  print(f'--- {year}: {len(tiles)} MGRS tiles', flush=True)
+                  rc = subprocess.run([sys.executable, 'scripts/prefetch_vpp_wekeo.py',
+                                       '--mgrs-tiles', ','.join(tiles), '--years', year,
+                                       '--dest-dir', '/data/vpp_wekeo']).returncode
+                  status[year] = {'tiles': tiles, 'exit': rc}
+              json.dump(status, open('/data/audits/lclu-vpp-gapfill-0128/prefetch-status.json', 'w'), indent=2)
+              print('PREFETCH_STATUS', json.dumps({y: s['exit'] for y, s in status.items()}), flush=True)
+              PY
+
+              python3 scripts/stage_lclu_campaign.py --campaign config/lclu/municipalities.json \
+                --years 2017 2018 2019 2020 2021 2022 2023 2024 2025 --data /data \
+                --output "${AUDIT}/campaign-preflight.json" || exit 1
+              echo "PREFLIGHT_JSON_BEGIN"
+              cat "${AUDIT}/campaign-preflight.json"
+              echo "PREFLIGHT_JSON_END"
+              echo "=== done: $(date -u) ==="
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs

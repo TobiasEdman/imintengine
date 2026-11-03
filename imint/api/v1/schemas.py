@@ -80,6 +80,26 @@ class AnalyzeResponse(BaseModel):
     )
 
 
+class LcluRequest(BaseModel):
+    """One annual native-grid map; no dates, paths or provider overrides."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    lon: float = Field(ge=10, le=25)
+    lat: float = Field(ge=55, le=70)
+    year: int = Field(ge=2017, le=2025)
+
+
+class LcluPrefetchRequest(BaseModel):
+    """A view or municipality box to warm for one exact year (WGS84 degrees)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    west: float = Field(ge=10, le=25)
+    south: float = Field(ge=55, le=70)
+    east: float = Field(ge=10, le=25)
+    north: float = Field(ge=55, le=70)
+    year: int = Field(ge=2017, le=2025)
+
+
 class AnalyzerSummary(BaseModel):
     """Per-analyzer result summary returned in the job response."""
 
@@ -103,7 +123,7 @@ class JobStatusResponse(BaseModel):
     """GET /v1/jobs/{id} response."""
 
     job_id: str
-    date: str
+    date: str | None = None
     bbox: BBox
     status: JobStatus
     submitted_at: datetime
@@ -114,6 +134,10 @@ class JobStatusResponse(BaseModel):
     analyzers: list[AnalyzerSummary] = Field(default_factory=list)
     summary_path: str | None = None
     error: str | None = None
+    kind: Literal["analysis", "lclu"] = "analysis"
+    year: int | None = None
+    phase: str | None = None
+    result: dict | None = None
 
 
 class AnalyzerInfo(BaseModel):

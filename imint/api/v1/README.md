@@ -50,12 +50,13 @@ a time, including fetching. Shutdown stops admission and drains queued/running
 jobs before releasing the lock. Give the process sufficient shutdown time;
 forced termination can leave partial output and loses in-memory status. There
 is no durable queue, retry, caller cancellation, retention policy, or aggregate
-resource quota. Internal task cancellation before execution records a failed
-terminal result. Cancellation during blocking execution waits for the real
+resource quota. Admission is bounded by `IMINT_API_MAX_JOBS` (default 4,
+range 1–64), counting queued/running work across both routes. Internal task
+cancellation before execution records a failed terminal result. Cancellation during blocking execution waits for the real
 outcome before releasing ownership. The default Kubernetes termination grace
 is only 30 seconds; operators must size shutdown grace and persistent storage
-for their workloads. No finite grace period guarantees draining an unbounded
-queue or a stalled remote service.
+for their workloads. No finite grace period guarantees draining a stalled
+remote service.
 
 POST `/v1/analyze` accepts only `date` and `bbox`. Date must be exact YYYY-MM-DD;
 bbox must be ordered, nonempty WGS84 (EPSG:4326). Antimeridian spans and other
@@ -85,3 +86,8 @@ recorded) and `artifacts` (empty: no engine artifact manifest). The additive
 include arrays, nested statistics and paths, so this API does not pretend that
 each output is a file or embed raster arrays in polling responses. The job's
 `summary_path` continues to identify the engine's persisted summary report.
+
+## Annual LCLU maps
+
+The local `/lclu` page and `/v1/lclu` routes use exact-year TESSERA R4 inputs
+without the DES daily fetch. See [operator setup, source contract and validation](../../../docs/lclu-service.md).

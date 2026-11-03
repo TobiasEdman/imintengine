@@ -1,0 +1,53 @@
+{
+  "active_goal": "IM-026 national annual map service: own copy for our 11 areas, original TESSERA tiles by HTTP range for the rest of Sweden, with click warm-up and view/municipality prefetch.",
+  "active_rules": [
+    "D1 (Tobias 2026-11-01): no 5 m shift; the Zarr store is not used for maps",
+    "One embedding identity (EMBEDDING); remote_tiles pinned to the published v1/vultr root",
+    "D2 own copy only for windows entirely inside our areas; D3 own copy stays on the PVC; D4 audit before HR-VPP storage; D5 200 GB band cache LRU; D6 source and verification status shown on the map",
+    "No year substitution; nothing national offered before qualification receipts"
+  ],
+  "blockers": [
+    "data.source.coop is blocked from the cloud session; ICE egress to it and to geodata.scb.se unverified",
+    "Cluster jobs need Tobias' kubectl (dry-run first)"
+  ],
+  "changed_paths": [
+    "imint/api/v1/server.py",
+    "imint/api/v1/schemas.py",
+    "imint/inference/lclu.py",
+    "imint/inference/lclu_sources.py",
+    "scripts/prepare_lclu.py",
+    "scripts/prefetch_lclu.py",
+    "scripts/audit_lclu_national_coverage.py",
+    "scripts/inventory_lclu_demo.py",
+    "k8s/lclu-national-coverage-job.yaml",
+    "docs/js/lclu.js",
+    "docs/lclu-service.md",
+    "docs/plans/lclu_national_service.md",
+    "docs/backlog.md",
+    "tests/api_services/test_lclu.py",
+    "tests/lclu/test_sources.py",
+    "tests/lclu/test_remote_tiles.py",
+    "tests/lclu/test_national_coverage.py"
+  ],
+  "commit": "efb8a2e1cc92dd46918be6c8a8a52506fde4b77f",
+  "created_at": "2026-11-01T20:12:01Z",
+  "current_state": "Built and pushed on claude/upbeat-goldberg-bnbbux: click warm-up (POST /v1/lclu/prepare, per-key preparation lock), range reads of original tiles (bit-identical to the tile path, 8 parallel band requests, 256-row band cache), national coverage audit script and job, view/municipality prefetch (POST /v1/lclu/prefetch, own worker, LRU budget). Nothing deployed or run in the cluster.",
+  "next_steps": [
+    "Tobias runs k8s/lclu-national-coverage-job.yaml and k8s/tessera-zarr-compare-job.yaml (dry-run first)",
+    "Package 4: HR-VPP national gap-fill sized from the audit (D4)",
+    "Package 5: DEM windows on demand",
+    "Package 6: national region in RegionalSources with the D2 window rule and D6 labels; then prefetch becomes active",
+    "Package 8: qualification receipts per year; package 9: deployment"
+  ],
+  "off_limits": [
+    "The running demo deployment and its manifest",
+    "EMBEDDING and the R4 serving contract"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-088e048730583d78",
+  "target": null,
+  "task_id": "0128",
+  "verification": "At HEAD: pytest tests/lclu tests/api_services tests/test_package_boundaries.py -> 214 passed, 1 pre-existing failure (imint/inference/lclu.py:31). Not deployed; not run against the real public source."
+}

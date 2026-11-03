@@ -1,0 +1,85 @@
+# Can HR-VPP be read per analysis window instead of per whole MGRS file?
+# (IM-026, package 4 of docs/plans/lclu_national_service.md.)
+#
+# scripts/probe_hrvpp_access.py against one product already cached in
+# /data/vpp_wekeo (the reference bytes; default the newest SOSD):
+#   1. layout — tiled? overviews? bytes a 512 × 512 window touches vs the file
+#   2. WEkEO — order the same product on HDA, two ranged GETs (206 + the cached
+#      bytes = Range works), then the centre window through /vsicurl, pixel parity
+#   3. CDSE — anonymous STAC: HR-VPP collections and an item for the same tile
+#      and year (has the 2025 migration happened?). With the optional secret
+#      cdse-s3: walk eodata/CLMS/ for HR-VPP prefixes, look for WEkEO's key
+#      under eodata, and compare the centre window through /vsis3.
+#
+# No CDSE processing units: STAC is a catalogue and S3 is object storage, not
+# Sentinel Hub or openEO; cdse-credentials (the Sentinel Hub client) is not
+# mounted. A WEkEO order downloads nothing by itself; the probe reads 2 × 1 KiB
+# plus one window. Tokens, keys and signed query strings are never printed.
+# Writes only /data/audits/hrvpp-access-probe/<UTC time>/report.json.
+# Needs HTTPS to github.com, pypi.org, gateway.prod.wekeo2.eu (and wherever its
+# downloads redirect), stac.dataspace.copernicus.eu, eodata.dataspace.copernicus.eu.
+#
+# Optional CDSE S3 keys (made in CDSE's S3 key manager, see
+# https://documentation.dataspace.copernicus.eu/APIs/S3.html); without them
+# step 3 stops after the catalogue:
+#   kubectl -n prithvi-training-default create secret generic cdse-s3 \
+#     --from-literal=CDSE_S3_ACCESS_KEY=... --from-literal=CDSE_S3_SECRET_KEY=...
+#
+#   kubectl --context icekube -n prithvi-training-default create --dry-run=server -f k8s/hrvpp-access-probe-job.yaml
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/hrvpp-access-probe-job.yaml
+#   kubectl -n prithvi-training-default logs -f job/hrvpp-access-probe
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hrvpp-access-probe
+  namespace: prithvi-training-default
+  labels: { app: ops, purpose: hrvpp-access-probe }
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: ops, purpose: hrvpp-access-probe }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: probe
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              SHA=26e26b29137d7cc3c10459b8937a44437fec03cb
+              echo "=== hrvpp-access-probe — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir rasterio==1.4.3 hda==2.40 boto3==1.34.0
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+              if [ -n "${CDSE_S3_ACCESS_KEY:-}" ]; then echo "CDSE S3 keys: present"; else echo "CDSE S3 keys: absent (catalogue only)"; fi
+              OUT=/data/audits/hrvpp-access-probe/$(date -u +%Y%m%dT%H%M%SZ)
+              mkdir -p "$OUT"
+              python3 scripts/probe_hrvpp_access.py --vpp-dir /data/vpp_wekeo --report "$OUT/report.json"
+              echo "REPORT_JSON_BEGIN"
+              cat "$OUT/report.json"
+              echo "REPORT_JSON_END"
+              echo "=== Done: $(date -u) ==="
+          envFrom:
+            - secretRef: { name: wekeo-creds }
+            - secretRef: { name: cdse-s3, optional: true }
+          resources:
+            requests: { cpu: "1", memory: "2Gi" }
+            limits: { cpu: "1", memory: "2Gi" }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: training-data-cephfs }

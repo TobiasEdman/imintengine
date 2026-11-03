@@ -1,0 +1,46 @@
+{
+  "active_goal": "IM-023: establish NMD113 grouping history and test mixed-conifer separability on frozen features before any schema or training decision.",
+  "active_rules": [
+    "Demo first: IM-024 delivered with the existing verified R4 model and current class schema; demo does not wait for IM-023 [Tobias 2026-10-29]",
+    "No serving-weight, class-ID or schema mutation without explicit approval [task 0127/0128 scope]",
+    "Approved demo budget 4 CPU / 8 GiB / 20 GiB cache; extending expiry or resources needs explicit approval [task 0126]",
+    "Never restart jobs that discard finished work without asking [CLAUDE.md]",
+    "k8s: kubectl apply --dry-run=server before any real submit [CLAUDE.md]"
+  ],
+  "blockers": [
+    "Running the probe needs the cluster PVC and icekube",
+    "Claim owned by te-codex-class-separation-0127",
+    "Private probe results live on Tobias Mac continuity store"
+  ],
+  "changed_paths": [
+    "docs/experiments/class-separability/README.md",
+    "docs/experiments/class-separability/history-evidence.json",
+    "docs/experiments/class-separability/pytest.txt",
+    "docs/experiments/class-separability/verification.json",
+    "scripts/extract_forest_separability.py",
+    "scripts/probe_forest_separability.py",
+    "scripts/render_forest_separability_job.py",
+    "tests/test_forest_separability.py"
+  ],
+  "commit": "f5def517a1c95cbc3ef1a32fdadc65301b0a62bb",
+  "created_at": "2026-10-30T10:11:45Z",
+  "current_state": "Codex (claim te-codex-class-separation-0127) traced the history (63d8c19, 083459a, df45803, c1ebf94), ran the bounded binary probe (113 vs 115-117; exit 0; 10 tests) and found 0 of 481 interior NMD113 pixels in distilled class 3 or R4 output class 3. Results are private (shared continuity evidence ImintEngine/class-separability-0127/), not in git. Snapshot 12ce90e9 committed unchanged as f5def517.",
+  "next_steps": [
+    "Pre-register a multi-class diagnosis over NMD 111, 112, 113, 114 and 115-117 with separate train/dev areas and temporal sensitivity",
+    "Reconcile class definitions: NFI species-volume rule vs NMD crown cover before using field data as reference",
+    "Correct the mislabelled NMD 113/114/118 names in imint/analyzers/nmd.py and imint/exporters/export.py (labels only)",
+    "Propose an explicit next class schema with matching field/distillation target; no retroactive change to sealed test truth"
+  ],
+  "off_limits": [
+    "Serving model, class IDs and training labels",
+    "Sealed NFI holdout",
+    "Raw features, coordinates or tile names in git"
+  ],
+  "repository_key": "imintengine--f1f36d6b6e87",
+  "schema_version": "1",
+  "source_runtime": "claude",
+  "source_session": "claude-701b8419f1cfa9e4",
+  "target": null,
+  "task_id": "0127",
+  "verification": "Consolidated at f5def517a1c95cbc3ef1a32fdadc65301b0a62bb: pytest tests/lclu tests/api_services tests/test_forest_separability.py -> 187 passed; tests/test_repo_hygiene.py tests/test_schema.py -> 46 passed, 1 skipped; node --check on docs/js. Receipt: docs/verification/lclu-service/pytest-takeover.txt"
+}
