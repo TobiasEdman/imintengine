@@ -302,6 +302,10 @@ Copyright 2026 RISE Research Institutes of Sweden AB
   public domain under **CC0 1.0 Universal** ([LICENSE-DATA](LICENSE-DATA)):
   `docs/` (the whole showcase site, its scripts included), `config/`, data
   files, figures, reports and generated outputs.
+- **Exception, the showcase films:** in `docs/showcase/films/` and `docs/films.html`
+  the images, maps, text and captions are CC0 1.0, but the **narration voice**
+  (a synthetic voice clone) is **not** covered by CC0. It may not be extracted,
+  reused, or used to train or prompt voice models.
 - **Third-party components** (models, data, libraries) keep their own
   licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 - **Earlier versions** of this repository, published under CC0 1.0, remain

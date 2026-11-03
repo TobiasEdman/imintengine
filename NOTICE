@@ -7,3 +7,7 @@ dedicated to the public domain under CC0 1.0 Universal (see
 LICENSE-DATA). The License section of README.md says which material
 is which. Third-party components keep their own licenses; see
 THIRD_PARTY_LICENSES.md.
+
+The narration voice in the showcase films (docs/showcase/films/) is not
+covered by CC0 1.0 and may not be extracted, reused, or used to train or
+prompt voice models.
