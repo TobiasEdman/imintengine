@@ -35,7 +35,7 @@ godkännande och `kubectl create --dry-run=server` först.
 Båda är uppfyllda på grenen: fraktionsrättelsen (R4 tränades med
 `--enable-tradslag-head --lambda-frac 1.0` och en `FractionLoss` som läste
 datasetets positiva mask omvänt) och en pinnad källa. Jobben hämtar exakt
-commit `b9433d57` och kontrollerar den. Imagen är pinnad med digest. Ett test
+den commit som står som `SHA=` i `k8s/im023/` och kontrollerar den. Imagen är pinnad med digest. Ett test
 larmar om omvandlings- eller receptskriptet ändras efter den commit som
 jobben pekar på.
 
