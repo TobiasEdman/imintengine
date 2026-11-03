@@ -1,0 +1,13 @@
+{
+  "id": "0136",
+  "subject": "Retrain TESSERA with barrblandskog as unified class 28 (IM-023)",
+  "description": "Tobias decided on 2026-10-30 that NMD 113 barrblandskog becomes unified class 28 and that TESSERA is retrained first, beside a 28-class control run. On 2026-11-03 he asked that the work land on main without the private forest5 scores that the unreviewed branch agent/te/claude/im023-barrblandskog carries, and that only class 28's class weight is fixed for now. Scope: the 29-class schema with the served R4 pinned to 28 classes, the FractionLoss mask fix, build_labels class 28, the relabel shortcut, the retrain recipe with class 28's weight derived from its frequency, the k8s/im023 jobs and their tests, and the plan in docs/experiments/class-separability/retrain_barrblandskog.md. Not in scope: weights for classes 23-27, the 29-class evaluation path, the sumpskog split, any serving change, scoring against the sealed NFI holdout. Review: Codex.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/im023-barrblandskog-v2",
+  "created_at": "2026-11-03T10:16:20Z",
+  "updated_at": "2026-11-03T10:18:12Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-03T10:18:12Z"
+}

@@ -17,15 +17,14 @@ aligned ≈ 0.3-0.6, misaligned ≈ 0.
 Forestry aux is the canary for the WHOLE aux stack: every aux channel is fetched
 on the same grid via :func:`imint.training.tile_bbox.resolve_fetch_bbox`, so if
 the forestry channels align with the label, dem/markfukt/vpp (fetched at the
-same bbox) do too. Reference is the unified ``label`` (classes 1-6 = forest),
+same bbox) do too. Reference is the unified ``label`` (FOREST_CLASSES = forest),
 read from the NMD raster on the NMD lattice — the canonical grid.
 """
 from __future__ import annotations
 
 import numpy as np
 
-# Unified forest classes — imint.schema.unified_schema._NMD_FOREST.
-_FOREST_CLASSES = (1, 2, 3, 4, 5, 6)
+from imint.schema.unified_schema import FOREST_CLASSES
 # Aux channels physically defined on forest land (the alignment canaries).
 FORESTRY_AUX = ("height", "volume", "basal_area", "diameter")
 
@@ -44,7 +43,7 @@ def forest_mask(npz) -> np.ndarray | None:
     """
     if "label" not in _keys(npz):
         return None
-    return np.isin(np.asarray(npz["label"]), _FOREST_CLASSES)
+    return np.isin(np.asarray(npz["label"]), FOREST_CLASSES)
 
 
 def phi_coefficient(a: np.ndarray, b: np.ndarray) -> float:
