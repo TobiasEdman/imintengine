@@ -71,5 +71,6 @@ cd notebooks
 
 ## License
 
-Notebook content: CC0 1.0 Universal (public domain).
+The notebooks are source code under the Apache License 2.0, like the rest of
+the repository's code; see the [License section of the root README](../README.md#license).
 Dependencies retain their original licenses — see upstream repos.

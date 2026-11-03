@@ -292,15 +292,22 @@ The engine code is untouched.
 
 ## License
 
-Copyright (c) 2024-2025 RISE Research Institutes of Sweden AB
+Copyright 2026 RISE Research Institutes of Sweden AB
 
-The original source code and documentation in this repository are dedicated
-to the public domain under **CC0 1.0 Universal**. See [LICENSE](LICENSE)
-for the full text.
+- **Source code** is licensed under the **Apache License 2.0**
+  ([LICENSE](LICENSE)): `imint/`, `executors/`, `scripts/`, `tests/`,
+  `docker/`, `k8s/`, the notebooks, the code in `demos/`, Dockerfiles and
+  all other code.
+- **Data, documentation and other non-code material** is dedicated to the
+  public domain under **CC0 1.0 Universal** ([LICENSE-DATA](LICENSE-DATA)):
+  `docs/` (the whole showcase site, its scripts included), `config/`, data
+  files, figures, reports and generated outputs.
+- **Third-party components** (models, data, libraries) keep their own
+  licenses; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+- **Earlier versions** of this repository, published under CC0 1.0, remain
+  available under CC0 1.0.
 
-Third-party components (models, data, libraries) retain their original
-licenses. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for
-details. Notable obligations:
+Notable third-party obligations:
 
 - **YOLO11s** (Ultralytics): AGPL-3.0 — commercial closed-source use
   requires an Enterprise license
