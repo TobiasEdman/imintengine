@@ -3,7 +3,9 @@
 
 Invoked by RepositorySources in a time-bounded child process. Source metadata
 and local auxiliary inventories must already be staged; never bulk-prefetches
-auxiliaries, calls DES/CDSE, or silently changes the year.
+auxiliaries, calls DES/CDSE, or silently changes the year. HR-VPP is read for
+the year the explicit lclu.VPP_YEAR_SUBSTITUTIONS table names, which is the map
+year except where that table says otherwise.
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imint.inference.lclu import (
     AUX_NAMES, EMBEDDING, YEARS, Grid, InputUnavailable, public_identity,
-    validate_bundle, verify_file, write_json,
+    validate_bundle, verify_file, vpp_year_for, write_json,
 )
 from scripts.cache_predict import atomic_write, file_identity, contract_pin
 from imint.inference.lclu_storage import PREPARATION_ARRAY_BYTES, PREPARATION_METADATA_BYTES
@@ -378,7 +380,12 @@ def enforce_band_budget(cache: Path, max_bytes: int, grace_s: float = 600) -> di
     return {'bands': len(bands), 'bytes': total - freed, 'removed': removed, 'freed': freed}
 
 
-def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
+def prepare_aux(config: dict, base: Path, grid: Grid, vpp_year: int):
+    """The auxiliary layers, with HR-VPP read for exactly ``vpp_year``.
+
+    The caller resolves ``vpp_year`` from the map year with ``vpp_year_for``;
+    forestry, markfukt and DEM are static and take no year.
+    """
     from imint.data.wekeo_vpp import (fetch_vpp_tiles_local, _bounds_overlap,
                                      _VPP_PRODUCT_TYPES)
     from rasterio.warp import transform_bounds
@@ -397,7 +404,7 @@ def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
     bounds = tuple(b[k] for k in ('west', 'south', 'east', 'north'))
     wgs = transform_bounds('EPSG:3006', 'EPSG:4326', *bounds)
     selected = {name: meta for name, meta in index.items()
-                if meta['year'] == year and meta['season'] == 1
+                if meta['year'] == vpp_year and meta['season'] == 1
                 and _bounds_overlap(meta['bounds_4326'], wgs)}
     if not set(_VPP_PRODUCT_TYPES).issubset({m['metric'] for m in selected.values()}):
         raise InputUnavailable('Exact-year HR-VPP source coverage is incomplete')
@@ -420,7 +427,7 @@ def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
         verify_source_file({'path': relative, 'sha256': record['sha256'],
                             'size': source.stat().st_size}, skg_path.parent, receipts)
     vpp = fetch_vpp_tiles_local(*bounds, size_px=512, vpp_cog_dir=index_path.parent,
-                               year=year, season=1)
+                               year=vpp_year, season=1)
     aux = {'vpp_' + name: value.astype(np.float32) for name, value in vpp.items()}
     if not np.any(aux['vpp_sosd']):
         raise InputUnavailable('No usable exact-year phenology in this window')
@@ -436,7 +443,7 @@ def prepare_aux(config: dict, base: Path, grid: Grid, year: int):
     dem_sources = [verify_source_file(record, base, receipts) for record in config['dem_sources']]
     aux['dem'] = read_dem_window(dem_sources, *bounds, size_px=512)
     provenance = {
-        'vpp': {'year': year, 'season': 1, 'index': public_identity(config['vpp_index']),
+        'vpp': {'year': vpp_year, 'season': 1, 'index': public_identity(config['vpp_index']),
                 'files': vpp_sources, 'source': 'Copernicus HR-VPP via WEkEO local COGs'},
         'forestry': {**skg_provenance, 'temporal_policy': 'latest scan per pixel in fixed release'},
         'markfukt': {'temporal_policy': 'fixed public mirror; differs from retired proxy version'},
@@ -535,8 +542,9 @@ def prepare(config_path: Path, grid: Grid, year: int, output: Path):
     if config['version'] != 1 or config['embedding'] != EMBEDDING:
         raise ValueError('Embedding source must be pinned to GeoTessera 0.10.2 v1/vultr')
     base = config_path.parent
+    vpp_year = vpp_year_for(year)
     # Fail unavailable local auxiliaries before downloading any embedding data.
-    aux, provenance = prepare_aux(config, base, grid, year)
+    aux, provenance = prepare_aux(config, base, grid, vpp_year)
     embedding, valid, emb_provenance = prepare_embedding(config, base, grid, year)
     # The county mask limits a cross-border window to Sweden; it does not infer
     # a class or turn missing data into model class zero.
@@ -551,7 +559,7 @@ def prepare(config_path: Path, grid: Grid, year: int, output: Path):
     verify_county_masks(skg_path, bounds, receipts)
     verify_file(config['skg_manifest'], base)
     arrays = {**aux, 'tessera': embedding, 'valid_embedding': valid,
-              'year': np.int32(year), 'tessera_year': np.int32(year), 'vpp_year': np.int32(year),
+              'year': np.int32(year), 'tessera_year': np.int32(year), 'vpp_year': np.int32(vpp_year),
               'crs': np.array('EPSG:3006'), 'transform': np.array(list(grid.transform())[:6]),
               'easting': np.int32(grid.east), 'northing': np.int32(grid.north)}
     if set(AUX_NAMES) - arrays.keys():

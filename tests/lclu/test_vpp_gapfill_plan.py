@@ -21,13 +21,13 @@ def fake_mgrs(monkeypatch):
 def write_inputs(tmp_path):
     areas = [{'id': 'a', 'bounds_3006': [450000, 6500000, 470000, 6510000]},
              {'id': 'b', 'bounds_3006': [590000, 6600000, 620000, 6610000]}]
-    cells = [{'area_id': 'a', 'name': 'Alfa', 'year': 2019, 'status': 'source_ready',
+    cells = [{'area_id': 'a', 'name': 'Alfa', 'year': 2019, 'vpp_year': 2019, 'status': 'source_ready',
               'vpp_missing_metrics': []},
-             {'area_id': 'a', 'name': 'Alfa', 'year': 2020, 'status': 'missing_vpp',
+             {'area_id': 'a', 'name': 'Alfa', 'year': 2020, 'vpp_year': 2020, 'status': 'missing_vpp',
               'vpp_missing_metrics': ['SOSD']},
-             {'area_id': 'b', 'name': 'Beta', 'year': 2019, 'status': 'missing_vpp',
+             {'area_id': 'b', 'name': 'Beta', 'year': 2019, 'vpp_year': 2019, 'status': 'missing_vpp',
               'vpp_missing_metrics': ['SOSD', 'EOSD']},
-             {'area_id': 'b', 'name': 'Beta', 'year': 2020, 'status': 'missing_vpp',
+             {'area_id': 'b', 'name': 'Beta', 'year': 2020, 'vpp_year': 2020, 'status': 'missing_vpp',
               'vpp_missing_metrics': []}]
     campaign, preflight = tmp_path / 'campaign.json', tmp_path / 'preflight.json'
     campaign.write_text(json.dumps({'areas': areas}))
@@ -62,6 +62,20 @@ def test_plan_lists_only_missing_vpp_pairs_and_writes_to_disk(fake_mgrs, tmp_pat
     assert len(plan['preflight_sha256']) == 64
     table = matrix.read_text()
     assert '| Alfa | ✓ | VPP |' in table and '| Beta | VPP | VPP |' in table
+
+
+def test_a_substituted_year_plans_its_hrvpp_year(fake_mgrs, tmp_path):
+    # A 2025 gap is missing HR-VPP 2024; requesting 2025 from WEkEO would be futile.
+    campaign, preflight = write_inputs(tmp_path)
+    receipt = json.loads(preflight.read_text())
+    receipt['cells'] = [{'area_id': 'a', 'name': 'Alfa', 'year': 2025, 'vpp_year': 2024,
+                         'vpp_year_substituted': True, 'status': 'missing_vpp',
+                         'vpp_missing_metrics': ['MINV']}]
+    preflight.write_text(json.dumps(receipt))
+    plan = gapfill.plan(campaign, preflight)
+    assert plan['pairs_by_year'] == {'2024': ['C4']}
+    assert plan['missing_vpp_cells'][0]['vpp_year'] == 2024
+    assert '--years 2024 ' in plan['prefetch_commands'][0]
 
 
 def test_preflight_area_outside_campaign_fails_closed(fake_mgrs, tmp_path):

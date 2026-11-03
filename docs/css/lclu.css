@@ -19,6 +19,8 @@ main{max-width:1500px;margin:auto;padding:32px}.intro{max-width:830px;margin-bot
 .year-tick.made::before{content:'';position:absolute;top:0;left:50%;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--forest)}
 .year-tick.current{color:var(--forest);font-weight:700}
 .year-tick:disabled{opacity:1;cursor:default}.year-tick.unavailable{color:#b5bcb8;text-decoration:line-through}
+/* A year whose HR-VPP comes from another year; the tick's title and the readout name it. */
+.year-tick.substituted::after{content:'*';position:absolute;top:2px;right:-5px;font-size:10px}
 .timeline-hint{font-size:12px;line-height:1.4;color:var(--muted);margin:6px 0 0}
 /* Maps made this session. */
 #session{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}#session h3{font-size:16px;margin-bottom:6px}
