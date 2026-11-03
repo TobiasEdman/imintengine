@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css?v=5">
   <link rel="stylesheet" href="css/leaflet.css">
-  <link rel="stylesheet" href="css/lclu.css">
+  <link rel="stylesheet" href="css/lclu.css?v=2">
   <script defer src="js/vendor/leaflet.min.js"></script>
   <script defer src="js/lclu-config.js"></script>
   <script defer src="js/lclu.js"></script>
@@ -38,19 +38,28 @@
         <label>Longitud<input id="lon" type="number" step="any" min="10" max="25" value="17.64" required></label>
         <button class="secondary" type="submit">Visa plats</button>
       </form>
-      <label class="year-label" for="year">Tillgängligt år</label>
-      <select id="year" disabled><option value="">Välj plats först</option></select>
-      <button id="create" disabled>Skapa årskarta <span aria-hidden="true">↗</span></button>
+      <div class="timeline">
+        <div class="timeline-head"><label for="year">Tidsaxel</label><output id="year-value" for="year">–</output></div>
+        <input id="year" type="range" min="2017" max="2025" step="1" value="2024" disabled>
+        <div id="year-ticks" class="year-ticks" aria-hidden="true"></div>
+        <p class="timeline-hint">Dra för att byta år. Kartor du redan skapat visas direkt; ett nytt år skapas när du släpper.</p>
+      </div>
+      <button id="create" disabled><span id="create-label">Skapa årskarta</span> <span aria-hidden="true">↗</span></button>
       <div id="status" role="status" aria-live="polite">Kontrollerar tjänsten …</div>
       <progress id="progress" aria-label="Bearbetning" hidden></progress>
       <section id="result" hidden>
         <h3 id="result-title">Årskarta klar</h3>
         <p id="coverage"></p>
         <p id="timing"></p>
-        <p>Klicka på resultatet för att visa markklass. Välj en ny plats utanför resultatet eller med koordinatfälten.</p>
-        <label for="opacity">Kartlagrets synlighet <output id="opacity-value">100 %</output></label>
-        <input id="opacity" type="range" min="0" max="100" value="100">
+        <p>Klicka på en karta för att visa markklass. Klicka utanför kartorna eller använd koordinatfälten för en ny plats.</p>
         <div class="downloads"><a id="download-tif" download>Hämta GeoTIFF ↓</a><a id="download-provenance" download>Datakällor och proveniens ↓</a></div>
+      </section>
+      <section id="session" hidden>
+        <h3>Dina kartor</h3>
+        <p class="session-note">Kartorna ligger kvar under sessionen. Klicka på ett år för att visa eller dölja det.</p>
+        <ul id="session-list"></ul>
+        <label for="opacity">Kartlagrens synlighet <output id="opacity-value">100 %</output></label>
+        <input id="opacity" type="range" min="0" max="100" value="100">
       </section>
       <p class="operator-note">Interaktiv demo · befintlig TESSERA R4-modell.</p>
     </aside>
