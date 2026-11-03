@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:07.810
+Molnmodeller kan ge olika svar. Fyra utvalda scener från Kiruna visar skillnader mellan flera metoder för molndetektering.
+
+00:00:08.930 --> 00:00:16.450
+Panelerna visar RGB, SCL, s2cloudless, OmniCloudMask och DES-modellen för optisk tjocklek.
+
+00:00:17.570 --> 00:00:23.330
+En delvis molnig bild visar hur metoderna reagerar olika på moln, mark och atmosfäriska effekter.
+
+00:00:24.570 --> 00:00:31.290
+Exemplen rangordnar inte metodernas noggrannhet. För s2cloudless har vissa indataband också ersatts i den här jämförelsen.

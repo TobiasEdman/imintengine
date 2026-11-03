@@ -1,5 +1,6 @@
 /* Deployment setting. Empty uses the page's origin (local API/reverse proxy).
- * For the static showcase, set the public HTTPS API base and configure the
- * same showcase origin in IMINT_LCLU_ORIGINS on that API. No secrets here.
+ * The static showcase calls the public annual-map API, which exposes only
+ * /v1/lclu and allows only this showcase's origin (k8s/lclu-public.yaml).
+ * No secrets here.
  */
-window.IMINT_LCLU_CONFIG = {apiBase: ''};
+window.IMINT_LCLU_CONFIG = {apiBase: 'https://lclu.icedc.se'};

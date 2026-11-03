@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:10.210
+One satellite pass, different band times. A thin airborne feature appears differently across Sentinel-2 bands near Öckerö.
+
+00:00:11.330 --> 00:00:19.170
+Detector rows record the scene at different times. Moving and elevated features can shift between bands.
+
+00:00:20.290 --> 00:00:25.090
+The existing band animation makes the differences easier to inspect.
+
+00:00:27.290 --> 00:00:34.810
+The feature and band offsets are observable. Aircraft identity and motion require independent confirmation.

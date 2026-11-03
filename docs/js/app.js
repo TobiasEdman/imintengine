@@ -520,10 +520,11 @@
     }
 
     function bindTabSwitching() {
-        document.querySelectorAll('.theme-tab').forEach(function(tab) {
+        // Only data-tab entries switch panels; plain links (films.html) navigate.
+        document.querySelectorAll('.theme-tab[data-tab]').forEach(function(tab) {
             tab.addEventListener('click', function(e) {
                 e.preventDefault();
-                document.querySelectorAll('.theme-tab').forEach(function(t) { t.classList.remove('active'); });
+                document.querySelectorAll('.theme-tab[data-tab]').forEach(function(t) { t.classList.remove('active'); });
                 this.classList.add('active');
                 var target = this.dataset.tab;
                 document.querySelectorAll('.tab-content').forEach(function(tc) {

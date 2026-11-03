@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.450 --> 00:00:09.730
+Build the evidence for wetland mapping. The Stormyran showcase brings together satellite imagery and supporting landscape layers.
+
+00:00:10.850 --> 00:00:17.250
+Different data products describe the moisture patterns that help characterise wetland environments.
+
+00:00:18.370 --> 00:00:23.810
+Tree height and elevation provide complementary context for habitat research.
+
+00:00:25.370 --> 00:00:34.170
+The showcase reproduces available inputs. It does not run the original habitat model, whose trained weights were not released.
