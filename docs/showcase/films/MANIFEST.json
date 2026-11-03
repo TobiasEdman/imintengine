@@ -8,20 +8,27 @@
    "bin/media build"
   ],
   "synthesis_record": "docs/verification/2026-11-02-own-voice",
-  "runtime_lock": "runtime.lock.json (workspace bundle 26.1024.11018)",
   "exports": {
    "sv": {
-    "git_sha": "eb3e27ef62dcbd8b72a7a8a640f30e4ef4bc1529",
+    "git_sha": "40bb9c08cd9ad90a469cf77827b00714108ef181",
     "dirty": false,
     "series": "showcase-film-series-sv",
-    "exported_at": "2026-11-03T09:42:28Z"
+    "exported_at": "2026-11-03T09:52:08Z"
    },
    "en": {
-    "git_sha": "eb3e27ef62dcbd8b72a7a8a640f30e4ef4bc1529",
+    "git_sha": "40bb9c08cd9ad90a469cf77827b00714108ef181",
     "dirty": false,
     "series": "showcase-film-series",
-    "exported_at": "2026-11-03T09:42:31Z"
+    "exported_at": "2026-11-03T09:52:10Z"
    }
+  },
+  "runtime": {
+   "per_file": "files[].runtime, copied from each build manifest (bundle + node packages)",
+   "workspace_bundles_in_use": [
+    "26.1024.11018",
+    "26.1026.10807"
+   ],
+   "files_without_runtime": []
   }
  },
  "voice": "VoxCPM2 (openbmb/VoxCPM2, voxcpm 2.0.3) clone of Tobias Edman's own consented recording; synthetic",
@@ -38,7 +45,15 @@
    "media_production": "2026-showcase-marine-leisure-sv",
    "media_build": "20261103T093615079420Z-70252cca3f",
    "build_manifest_sha256": "c101d141848512f660e345f0430237c0f4a9ab6e4bea8c98839e12f8f332ffbf",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "marine_commercial",
@@ -50,7 +65,15 @@
    "media_production": "2026-showcase-marine-commercial-sv",
    "media_build": "20261103T093645511426Z-449910084f",
    "build_manifest_sha256": "ba4192b12feb1b036bca4e463b9aaba0a0bcf4668a3d3f1e56a1cdd44c09e9a9",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "marine_radar_skagen",
@@ -62,7 +85,15 @@
    "media_production": "2026-showcase-marine-radar-skagen-sv",
    "media_build": "20261103T093645838012Z-1584a4d026",
    "build_manifest_sha256": "f0d37f603522f984c7838c82780dfa897afc65fda39ffa1cff0cd9a7b2c27ab3",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "marine_radar_oresund",
@@ -74,7 +105,15 @@
    "media_production": "2026-showcase-marine-radar-oresund-sv",
    "media_build": "20261103T093659513806Z-6ea052f466",
    "build_manifest_sha256": "b1385636198a353c9bb52d890c63e2a07d9addbab0c1b5b19259b1260e66f9ae",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "kustlinje",
@@ -86,7 +125,15 @@
    "media_production": "2026-showcase-kustlinje-sv",
    "media_build": "20261103T093708114726Z-1e3d1587ac",
    "build_manifest_sha256": "70ef4941f01ee6f3872607d2fabf025cb57ac40d44ce329f77d5230dd64b3b3e",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "vegetationskant",
@@ -98,7 +145,15 @@
    "media_production": "2026-showcase-vegetationskant-sv",
    "media_build": "20261103T093750147049Z-08662cb78a",
    "build_manifest_sha256": "eaf3722d45e7e3692342aecb156a98df105eb7b88a17b80fc1297e2f48acf127",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "water_quality_bohuslan",
@@ -110,7 +165,15 @@
    "media_production": "2026-showcase-water-quality-bohuslan-sv",
    "media_build": "20261103T093813630116Z-30d6d195ed",
    "build_manifest_sha256": "f28a9e106057ea9498559a39a8fb8c5830724340f05f950e27fc0bb1e18158c7",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "water_quality_lilla_karlso",
@@ -122,7 +185,15 @@
    "media_production": "2026-showcase-water-quality-lilla-karlso-sv",
    "media_build": "20261103T093815561352Z-9d2cdd17ee",
    "build_manifest_sha256": "c29729f2f4c61ebff352996a41f760aacfcb3bfb7dc7317a22b503426cec6380",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "sr",
@@ -134,7 +205,15 @@
    "media_production": "2026-showcase-sr-sv",
    "media_build": "20261103T093816363510Z-de868da474",
    "build_manifest_sha256": "ba8a234f2323a73b21c143436c7e94f15989dd1429d59fd2a9fef234bc2d5b84",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "aircraft_parallax",
@@ -146,7 +225,15 @@
    "media_production": "2026-showcase-aircraft-parallax-sv",
    "media_build": "20261103T093911371692Z-5614088074",
    "build_manifest_sha256": "286cd622a5a3f997195f3fb3a26d8cf5a8d7e4ce0724f332ba439a213c18a4b1",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "coregistration",
@@ -158,7 +245,15 @@
    "media_production": "2026-showcase-coregistration-sv",
    "media_build": "20261102T124804088808Z-45f4ab5f3e",
    "build_manifest_sha256": "394dc161a28c291f49470168e26f9c375973909b7362da67dcb5b3c4eab62832",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1024.11018",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.105",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "era5_strategies",
@@ -170,7 +265,15 @@
    "media_production": "2026-showcase-era5-strategies-sv",
    "media_build": "20261103T093915466888Z-2e7065d035",
    "build_manifest_sha256": "c4be2cb071e9b8a5429df42a9d0fef8f8b66d20782d4490915e03478a9b857b6",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "era5_cloud_models",
@@ -182,7 +285,15 @@
    "media_production": "2026-showcase-era5-cloud-models-sv",
    "media_build": "20261103T093917611975Z-3897faf949",
    "build_manifest_sha256": "90a1e0abcdc9e62c7d007287dc5c72c069b62ac4778652fb8e8ddd5ef7d32570",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "wetland_pirinen",
@@ -194,7 +305,15 @@
    "media_production": "2026-showcase-wetland-pirinen-sv",
    "media_build": "20261103T093959597919Z-abe52c63f3",
    "build_manifest_sha256": "644dae8d976e86025a174fadf9da96a602183b0b6aa63d86c74fe9521b5bcd88",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "fire",
@@ -206,7 +325,15 @@
    "media_production": "2026-showcase-fire-sv",
    "media_build": "20261103T094000463148Z-48e02a8c81",
    "build_manifest_sha256": "bcffc815e5aeb0d3b3b79eafb6c7724d1adf7b934b96014db87dd3339d941a7b",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "grazing",
@@ -218,7 +345,15 @@
    "media_production": "2026-showcase-grazing-sv",
    "media_build": "20261103T094000617230Z-45ebdbaf85",
    "build_manifest_sha256": "500d21607b7193dc87fa838281d0eda67d2409480e2c881db58a67cce80b2f3d",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "marine_leisure",
@@ -230,7 +365,15 @@
    "media_production": "2026-showcase-marine-leisure",
    "media_build": "20261103T093222050214Z-2125263c01",
    "build_manifest_sha256": "7d4c7b2494ed9b6d596354a6915d499198e808833381bd0ab6ddf6c26fc5c972",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "marine_commercial",
@@ -242,7 +385,15 @@
    "media_production": "2026-showcase-marine-commercial",
    "media_build": "20261103T093222113937Z-7bcadd4a46",
    "build_manifest_sha256": "43998861a9c12a0810740072fd969ad2a2d0ed87c367b191bcc33dec9b049d0f",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "marine_radar_skagen",
@@ -254,7 +405,15 @@
    "media_production": "2026-showcase-marine-radar-skagen",
    "media_build": "20261103T093222177999Z-8378ef8046",
    "build_manifest_sha256": "4a401fd77642194476397a9589b4133606c12c192d6b27d26bd90b4c903006f5",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "marine_radar_oresund",
@@ -266,7 +425,15 @@
    "media_production": "2026-showcase-marine-radar-oresund",
    "media_build": "20261103T093222103096Z-1e5cbfd8c1",
    "build_manifest_sha256": "b22e28ae37942ef72a3ec0da0eeecb76644f0248e91450f4de23e73dd8394b97",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "kustlinje",
@@ -278,7 +445,15 @@
    "media_production": "2026-showcase-kustlinje",
    "media_build": "20261103T093335309746Z-4f4b097b5e",
    "build_manifest_sha256": "939267480eca3624cf305e0a9cdbd971a8676b478fe3ea874270b8973077b9a4",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "vegetationskant",
@@ -290,7 +465,15 @@
    "media_production": "2026-showcase-vegetationskant",
    "media_build": "20261103T093336192737Z-1dbb175176",
    "build_manifest_sha256": "e104c2f31b3efa87dbf27c94bc2609316821e9b8d2e883d72f46984402660fb0",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "water_quality_bohuslan",
@@ -302,7 +485,15 @@
    "media_production": "2026-showcase-water-quality-bohuslan",
    "media_build": "20261103T093344773594Z-e05d5de822",
    "build_manifest_sha256": "16437a89c496e96547306022f280d0a678d3d60cf859f3f9968bffa01da8d5b3",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "water_quality_lilla_karlso",
@@ -314,7 +505,15 @@
    "media_production": "2026-showcase-water-quality-lilla-karlso",
    "media_build": "20261103T093358514902Z-9c4730bd7c",
    "build_manifest_sha256": "77186ca6cb9bf61d3fd0e05688d10be6c75cd798c0dc1720a91bceb441f7e736",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "sr",
@@ -326,7 +525,15 @@
    "media_production": "2026-showcase-sr",
    "media_build": "20261103T093443674708Z-23a6b548c5",
    "build_manifest_sha256": "af5b398697e2249ad4e8df60f1d471563db8383c0953a06a65d46b9b22b63b00",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "aircraft_parallax",
@@ -338,7 +545,15 @@
    "media_production": "2026-showcase-aircraft-parallax",
    "media_build": "20261103T093442687816Z-9a2734292c",
    "build_manifest_sha256": "f92a5a705da33b1f6948238b5a6537c11d86910e4232bf884ea1bd471b123705",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "coregistration",
@@ -350,7 +565,15 @@
    "media_production": "2026-showcase-coregistration",
    "media_build": "20261102T133316309082Z-ed64b139f9",
    "build_manifest_sha256": "e9bc2f4fa0256fb447e229089c5b28fbeb6618cc8f4b1759ce16a99503a26e11",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1024.11018",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.105",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "era5_strategies",
@@ -362,7 +585,15 @@
    "media_production": "2026-showcase-era5-strategies",
    "media_build": "20261103T093455542793Z-c6a1db8e7f",
    "build_manifest_sha256": "d885739bce1c7de0a21f392fd43025df84796db75978262fde0f2d3f378b49b2",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "era5_cloud_models",
@@ -374,7 +605,15 @@
    "media_production": "2026-showcase-era5-cloud-models",
    "media_build": "20261103T093528379237Z-4ecc15d31c",
    "build_manifest_sha256": "39c7c2f0c82a00962af05e518acbeac0515f9456ed34ebeb511ebc95ef08bdd0",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "wetland_pirinen",
@@ -386,7 +625,15 @@
    "media_production": "2026-showcase-wetland-pirinen",
    "media_build": "20261103T093555144920Z-e11b380a31",
    "build_manifest_sha256": "19fb1060ad58063fb3711b2c1feb8eb446c34aa44e5826b7f8c3714f8a985a4c",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "fire",
@@ -398,7 +645,15 @@
    "media_production": "2026-showcase-fire",
    "media_build": "20261103T093555143731Z-0b3b986066",
    "build_manifest_sha256": "6d32a7b0899bd3bdfdfaef36e8ec2528645ec620f95c7f121e0d3d8bd60b7671",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   },
   {
    "case_id": "grazing",
@@ -410,7 +665,15 @@
    "media_production": "2026-showcase-grazing",
    "media_build": "20261103T093555881206Z-415db22532",
    "build_manifest_sha256": "a7c8e1bcbd577743052ce044a7cc2535ef8fb3ce2ea491a15867a6babfbfb056",
-   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010"
+   "policy_sha256": "13f2fb0d2b10ca448b68b55d4e582ff9e3eb1d893cd0009f1bd05fbb60100010",
+   "runtime": {
+    "workspace_bundle": "26.1026.10807",
+    "node_packages": {
+     "@oai/artifact-tool": "2.8.106",
+     "sharp": "0.35.5",
+     "@oai/artifact-tool/node_modules/skia-canvas": "3.0.8"
+    }
+   }
   }
  ]
 }
