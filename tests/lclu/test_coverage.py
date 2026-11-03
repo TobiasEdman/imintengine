@@ -515,6 +515,38 @@ def test_mosaic_waits_for_this_runs_markers_not_for_sidecars(setup, tmp_path):
         cov.main([*args, '--num-shards', '2', '--mosaic'])
 
 
+@pytest.mark.parametrize('failed', [0, 2])
+def test_a_failed_shard_ends_the_wait_while_siblings_are_missing(setup, tmp_path, failed):
+    # Run 2 of three shards: only the failed shard wrote its marker, the
+    # others are missing after it (failed=0) or before it (failed=2).
+    release, _ = copy_release(setup, tmp_path)
+    identity = json.loads((release / 'release.json').read_text())
+    marker = json.loads(cov.marker_path(release, 0, 2).read_text())
+    write_json(cov.marker_path(release, failed, 3),
+               {**marker, 'run': '2', 'shard': failed, 'num_shards': 3,
+                'aborted': {'error': 'RuntimeError', 'consecutive': 3}})
+    with pytest.raises(RuntimeError, match=rf'Shards \[{failed}\] of run 2 recorded failed windows'):
+        cov.check_shards(release, identity, 3, '2')
+
+
+def test_a_mosaic_started_before_the_producers_waits_for_their_metadata(setup, tmp_path, monkeypatch):
+    output = tmp_path / 'coverage'
+    args = [a if a != str(setup['base'] / 'coverage') else str(output) for a in setup['args']]
+    mosaic = [*args, '--num-shards', '2', '--mosaic']
+    with pytest.raises(RuntimeError, match='no release metadata'):
+        cov.main(mosaic, poll=0)                                   # no wait allowed, nothing published
+    published = []
+
+    def producers_publish(_seconds):                               # metadata and markers land later
+        if not published:
+            shutil.copytree(setup['release'], output / '2024' / 't1')
+            published.append(True)
+
+    monkeypatch.setattr(cov.time, 'sleep', producers_publish)
+    assert cov.main([*mosaic, '--wait-seconds', '600'], poll=0) == 0
+    assert published and (output / '2024' / 't1' / 'mosaic' / 'a-2024.tif').is_file()
+
+
 def test_mosaic_refuses_another_inference_identity(setup, tmp_path):
     _, args = copy_release(setup, tmp_path)
     with pytest.raises(ValueError, match='Release inference identity'):

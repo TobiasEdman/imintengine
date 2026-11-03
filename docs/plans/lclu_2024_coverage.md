@@ -263,6 +263,12 @@ the shard split, and writes nothing. `--list` prints one line per window.
   paper.
 - The pass criterion must be fixed before the Stockholm numbers are seen. The
   code reports the metric and does not judge it (open question 3).
+  - The synthetic range above is a test observation, not an acceptance
+    threshold.
+  - With no interior disagreement, `seam_to_interior` is `null`. The
+    criterion must say what that means.
+  - The criterion must also account for the compared pair counts and the
+    land-cover composition along the seams.
 - If seams show, the fallback is overlapping windows with a centre crop
   (stride 252 px, about 4× the compute), used only where needed.
 
@@ -387,25 +393,30 @@ Both Jobs share:
    page change goes in a PR.
 6. Live check, then publication.
 
-## Open questions for Codex
+## Decisions and open questions
 
-1. **Fill windows or requalified regions?**
-   - Fills keep each window an on-demand map but overlap the lattice: 740
-     windows instead of 490.
-   - A buffered qualification would keep the lattice at 726 non-overlapping
-     windows, but it is a new source configuration and serving release, and
-     it widens the on-demand offer at municipality borders.
-2. **Result identity outside the server.** The producer builds the server's
-   objects itself instead of calling `LcluService.from_manifest`, because the
-   model is loaded once and the budget is rebuilt per window. Is that close
-   enough, or should the service grow a batch entry point? That would change
-   `lclu.py` and so the implementation identity.
-3. **Seam metric and threshold.** The metric is defined above. The
-   `seam_to_interior` threshold has to be fixed before the Stockholm
-   measurement.
-4. **Serving the tiles.** r9's FastAPI, or a small static Service? This
-   decides whether XYZ tiles are produced in batch.
-5. **Receipts.** The one shared write goes into r9's identity cache, and its
-   stat snapshot may differ per node (see the pre-gate). Is co-location or a
-   measured acceptance enough, or should the Job mount that path read-only
-   and fail on a missing or mismatching receipt?
+Codex answered the design questions in its review of PR 130 (2026-11-03).
+Its answers do not authorise a deployment.
+
+1. **Fill windows.** Keep the admitted lattice plus fill windows for the first
+   release; the pixel ownership passes a full-area check over all 11 areas.
+   Requalifying the regions with a buffered polygon would change the public
+   qualification contract and needs its own decision.
+2. **Result identity outside the server.** Rebuilding the server's objects per
+   window around one loaded model is acceptable. Keep the request-key parity
+   tests. A batch entry point in `lclu.py` waits for a concrete caller.
+3. **Seam threshold: open.** It is fixed before the Stockholm results are seen;
+   see the seam gate for what the criterion must cover.
+4. **Serving.** Prefer a read-only coverage route in the existing FastAPI
+   service, with immutable release URLs and nearest-neighbour categorical
+   rendering. The tile delivery is decided there; the producer need not
+   precompute every XYZ tile.
+5. **Receipts and free space.** The cross-node receipt check and the
+   concurrent free-space check stay deployment gates.
+6. **Inference identity: open, Tobias decides.**
+   - The pin stays fail-closed.
+   - `imint/data/wekeo_vpp.py` (from PR 123) is part of
+     `preparation_identity`, and main's version is not r9's, so a batch from
+     main cannot carry r9's request keys.
+   - The next serving release and the batch must run the same frozen
+     inference code and runtime. Claude proposes r10 from main.

@@ -788,19 +788,23 @@ def build_mosaic(release: Path, plan: dict, area: dict, records: dict, band: int
 
 
 def check_shards(release: Path, identity: dict, count: int, run_id: str) -> list[dict] | None:
-    """Every shard's marker from this run, or None while one is missing; raises if a shard failed.
+    """Every shard's marker from this run, or None while one is missing.
 
-    A marker from an earlier run counts as missing, so a resumed release
-    never builds on the previous run's completion.
+    Raises as soon as any marker of this run records a failure, even while
+    siblings are missing: a failed pod can end the Job before they write
+    theirs. A marker from an earlier run counts as missing, so a resumed
+    release never builds on the previous run's completion.
     """
-    markers = []
+    markers, missing = [], False
     for index in range(count):
         try:
             marker = json.loads(marker_path(release, index, count).read_text())
         except (OSError, ValueError):
-            return None
+            missing = True
+            continue
         if marker.get('run') != run_id:
-            return None
+            missing = True
+            continue
         if (marker['inference_pin'] != identity['inference_pin'] or marker['plan'] != identity['plan']
                 or (marker['shard'], marker['num_shards']) != (index, count)):
             raise RuntimeError(f'Shard {index} marker belongs to another plan or identity')
@@ -808,7 +812,21 @@ def check_shards(release: Path, identity: dict, count: int, run_id: str) -> list
     bad = [m['shard'] for m in markers if m['failed'] or m['aborted']]
     if bad:
         raise RuntimeError(f'Shards {bad} of run {run_id} recorded failed windows; resume them first')
-    return markers
+    return None if missing else markers
+
+
+def wait_for_release(release: Path, seconds: float, poll: float = 30) -> None:
+    """Wait for the producers' plan.json and release.json; the mosaic Job may start first.
+
+    Both are published atomically, so existence means complete; mosaic()
+    validates their plan and identity afterwards.
+    """
+    deadline = time.monotonic() + seconds
+    while not ((release / 'release.json').is_file() and (release / 'plan.json').is_file()):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f'{release} has no release metadata after {seconds:.0f} s')
+        print(f'waiting for release metadata in {release}', flush=True)
+        time.sleep(poll)
 
 
 def wait_for_shards(release: Path, identity: dict, count: int, run_id: str,
@@ -830,6 +848,9 @@ def mosaic(release: Path, plan: dict, config: Path, band: int, *, count: int, ru
 
     if public_identity(file_identity(config)) != plan['config']:
         raise ValueError('Campaign configuration differs from the release plan')
+    deadline = time.monotonic() + wait_seconds      # one bound for metadata and markers
+    wait_for_release(release, wait_seconds, poll)
+    publish_once(release / 'plan.json', plan)       # verifies; never rewrites
     identity = json.loads((release / 'release.json').read_text())
     if identity['plan'] != public_identity(file_identity(release / 'plan.json')):
         raise ValueError('release.json does not bind this plan')
@@ -841,7 +862,7 @@ def mosaic(release: Path, plan: dict, config: Path, band: int, *, count: int, ru
     with hold_lock(out / '.lock'):
         for stale in out.glob('.*.partial.tif'):
             stale.unlink()
-        wait_for_shards(release, identity, count, run_id, wait_seconds, poll)
+        wait_for_shards(release, identity, count, run_id, max(0.0, deadline - time.monotonic()), poll)
         records, missing = {}, []
         for window in runnable(plan):
             record = verify_sidecar(release, window, identity['inference_pin'])
@@ -949,9 +970,6 @@ def main(argv: list[str] | None = None, *, model=None, poll: float = 30) -> int:
     check_roots(args.output_root, live)
     release = release_dir(args.output_root, args.year, args.release)
     if args.mosaic:
-        if not (release / 'release.json').is_file():
-            parser.error(f'{release} has no produced windows')
-        publish_once(release / 'plan.json', plan)   # verifies; never rewrites
         mosaic(release, plan, args.config, args.seam_band, count=args.num_shards, run_id=args.run_id,
                expect_pin=args.expect_inference_pin, wait_seconds=args.wait_seconds, poll=poll)
         return 0
