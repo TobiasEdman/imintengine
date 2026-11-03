@@ -124,11 +124,17 @@ def preflight(variant: str, paths: dict[str, str]) -> list[str]:
             manifest = json.loads(manifest_path.read_text())
             if manifest["rule"] != RULE:
                 problems.append(f"labels made by rule {manifest['rule']}, expected {RULE}")
-            if not manifest["distilled_tiles"] == len(npz_names(b28)) == len(r2_names):
-                problems.append(f"cohort differs: manifest {manifest['distilled_tiles']}, "
-                                f"{len(npz_names(b28))} in {b28}, {len(r2_names)} in {r2}")
+            b28_names = npz_names(b28)
+            missing = sorted(set(r2_names) - set(b28_names))
+            unexpected = sorted(set(b28_names) - set(r2_names))
+            if missing or unexpected or manifest["distilled_tiles"] != len(r2_names):
+                problems.append(f"cohort differs from {r2}: manifest {manifest['distilled_tiles']}, "
+                                f"{len(r2_names)} in {r2}, missing {missing[:5]}, "
+                                f"unexpected {unexpected[:5]}")
             if manifest["class_28_pixels"] == 0:
                 problems.append("relabelled labels hold no class 28")
+            if not npz_names(Path(manifest["outputs"]["nmd"])):
+                problems.append(f"no relabelled NMD sidecars in {manifest['outputs']['nmd']}")
         stats = data / "class_stats.json"
         if not stats.is_file() or "pixel_counts" not in json.loads(stats.read_text()):
             problems.append(f"{stats} has no pixel_counts: class 28's weight cannot be derived")
@@ -166,13 +172,21 @@ def label_counts(label_dir: Path, classes: tuple[int, ...]) -> dict[int, int]:
 def b28_class_stats(data_dir: str, b28_label_dir: str) -> dict:
     """``<data_dir>/class_stats.json`` with class 28 carved out of class 3.
 
-    Class 28 takes the share of class 3 that the relabel turned into 28 in the
-    training labels. The total and every other count stay as R4 read them, so
-    28 gets the weight the recipe computes for its frequency instead of the cap.
+    class_stats.json counts canonical labels, so the share is taken in that
+    domain: the relabelled NMD sidecars the manifest names, where class 3 plus
+    class 28 is exactly the old class 3 (hygge stays excluded). The distilled
+    labels would not do: distillation rewrites classes 1-4. The total and
+    every other count stay as R4 read them, so 28 gets the weight the recipe
+    computes for its frequency instead of the cap.
     """
     source = Path(data_dir) / "class_stats.json"
     stats = json.loads(source.read_text())
-    counts = label_counts(Path(b28_label_dir), (OLD_CLASS, NEW_CLASS))
+    manifest = json.loads((Path(b28_label_dir) / MANIFEST).read_text())
+    nmd_dir = manifest["outputs"]["nmd"]
+    counts = label_counts(Path(nmd_dir), (OLD_CLASS, NEW_CLASS))
+    if counts[NEW_CLASS] != manifest["class_28_pixels"]:
+        raise ValueError(f"{nmd_dir} holds {counts[NEW_CLASS]} class 28 pixels, "
+                         f"the manifest {manifest['class_28_pixels']}")
     share = counts[NEW_CLASS] / (counts[OLD_CLASS] + counts[NEW_CLASS])
     old, new = UNIFIED_CLASS_NAMES[OLD_CLASS], UNIFIED_CLASS_NAMES[NEW_CLASS]
     pixels = dict(stats["pixel_counts"])
@@ -181,7 +195,7 @@ def b28_class_stats(data_dir: str, b28_label_dir: str) -> dict:
     pixels[new] = moved
     return stats | {"pixel_counts": pixels, "im023_class_28": {
         "source": str(source), "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-        "label_dir": b28_label_dir, "rule": RULE,
+        "label_dir": nmd_dir, "rule": RULE,
         "label_pixels": {old: counts[OLD_CLASS], new: counts[NEW_CLASS]},
         "share": share, "moved": moved}}
 

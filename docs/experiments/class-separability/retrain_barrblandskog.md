@@ -2,12 +2,9 @@
 
 IM-023, 2026-10-30. **Beslut (Tobias):** barrblandskog (NMD 113) blir egen
 unified-klass 28 och modellen tränas om, TESSERA-familjen först. Underlaget
-är `forest5`-provet i [README.md](README.md). Barrblandskog gick att skilja
-ut från tall och gran och förväxlades knappt med lövskog. R4:s frysta
-representation och råa TESSERA var lika bra, så det som saknades var
-målklassen. Siffrorna finns i den privata evidenskatalogen
-`ImintEngine/class-separability-0127/forest5-2022/` och hålls privata till
-publiceringen.
+är `forest5`-provet, förregistrerat i [README.md](README.md). Resultatet finns
+i den privata evidenskatalogen `ImintEngine/class-separability-0127/forest5-2022/`
+och hålls privat till publiceringen.
 
 Den här planen ändrar ingen förseglad sanning, ingen befintlig checkpoint och
 ingen etikettkatalog som R4 bygger på. Varje klustersteg kräver Tobias
@@ -140,16 +137,20 @@ Ordning:
 **Klassvikter.** Tränaren hämtar klassvikterna från `class_stats.json` i
 datakatalogen, inte från etikettkatalogen. Så var det också för R4. Filen
 känner bara 23 klasser, så klass 28 räknades med antalet 1 och fick taket
-`--max-class-weight` (5,0). I rökkörningen på 2080 Ti förutsade
-huvudvarianten då klass 28 långt utöver sin andel efter en epok.
+`--max-class-weight` (5,0).
 
 **Beslut (Tobias 2026-11-03): bara klass 28 rättas nu.** Huvudvarianten
 tränar på en kopia, `class_stats_b28.json` i checkpointkatalogen. Där tar
-klass 28 den andel av klass 3 som omvandlingen flyttade i
-träningsetiketterna, och totalen är oförändrad. Klass 28 får alltså den
-vikt receptet ger dess frekvens. Klass 3 får sin egen vikt utan
-barrblandskogen, och övriga vikter är desamma som R4:s.
-Kontrollkörningen läser filen som R4 gjorde.
+klass 28 den andel av klass 3 som omvandlingen flyttade, och totalen är
+oförändrad. Andelen räknas i samma domän som `class_stats.json`, alltså i de
+kanoniska NMD-etiketterna som manifestet anger
+(`/cephfs/nmd2023_labels_b28`). Där är klass 3 plus klass 28 exakt den gamla
+klass 3, och hygge förblir undantaget. De destillerade etiketterna duger inte,
+eftersom destillationen skriver om klass 1–4. Klass 28:s pixlar måste stämma
+med manifestets `class_28_pixels`, annars avbryts körningen. Klass 28 får
+alltså den vikt receptet ger dess frekvens. Klass 3 får sin egen vikt utan
+barrblandskogen, och övriga vikter är desamma som R4:s. Kontrollkörningen
+läser filen som R4 gjorde.
 
 Klasserna 23–27 saknas också i filen och tränades med taket i R4. Det rättas
 i en egen omträning, en ändring i taget.

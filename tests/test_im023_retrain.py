@@ -149,7 +149,12 @@ def test_preflight_refuses_wrong_or_partial_labels(cohort):
     manifest.write_text(json.dumps(content | {"rule": "other"}))
     assert any("expected " + relabel.RULE in m for m in retrain.preflight("main", p))
     manifest.write_text(json.dumps(content))
-    (cohort["b28"] / "t0.npz").unlink()
+    # Same count, other tile: the loader pairs label sidecars by name, so control and
+    # main would train on different tiles while a count check reports parity.
+    (cohort["b28"] / "t0.npz").rename(cohort["b28"] / "unexpected.npz")
+    differs = [m for m in retrain.preflight("main", p) if "cohort differs" in m]
+    assert differs and "missing ['t0.npz']" in differs[0] and "unexpected ['unexpected.npz']" in differs[0]
+    (cohort["b28"] / "unexpected.npz").unlink()
     assert any("cohort differs" in m for m in retrain.preflight("main", p))
     manifest.unlink()
     assert any("run k8s/im023/relabel-b28-job.yaml first" in m for m in retrain.preflight("main", p))
@@ -168,10 +173,16 @@ def test_b28_class_stats_carves_class_28_out_of_class_3(cohort):
     source = json.loads((cohort["tiles"] / "class_stats.json").read_text())["pixel_counts"]
     stats = retrain.b28_class_stats(str(cohort["tiles"]), str(cohort["b28"]))
     pixels, info = stats["pixel_counts"], stats["im023_class_28"]
-    labels = retrain.label_counts(cohort["b28"], (3, 28))
-    assert labels == {c: sum(int((np.load(f)["label"] == c).sum()) for f in cohort["b28"].glob("*.npz"))
-                      for c in (3, 28)}
-    assert info["share"] == labels[28] / (labels[3] + labels[28]) > 0
+    # The share is taken in class_stats.json's canonical domain, the relabelled NMD
+    # sidecars, where 3 + 28 is exactly the old class 3.
+    canonical = retrain.label_counts(cohort["nmd_b28"], (3, 28))
+    old = retrain.label_counts(cohort["nmd"], (3,))[3]
+    assert canonical[3] + canonical[28] == old
+    assert canonical[28] == json.loads((cohort["b28"] / relabel.MANIFEST).read_text())["class_28_pixels"]
+    assert info["share"] == canonical[28] / old > 0
+    # The fixture's distillation rewrites classes 1-4, so the distilled ratio differs.
+    distilled = retrain.label_counts(cohort["b28"], (3, 28))
+    assert distilled[28] / (distilled[3] + distilled[28]) != info["share"]
     assert pixels["barrblandskog"] == round(source["lövskog"] * info["share"])
     assert sum(pixels.values()) == sum(source.values())
     assert {k for k in pixels if pixels[k] != source.get(k)} == {"lövskog", "barrblandskog"}
@@ -181,6 +192,14 @@ def test_b28_class_stats_carves_class_28_out_of_class_3(cohort):
     assert before[28] == 5.0 and after[28] < 5.0
     # Other weights move only by the one pixel the count floor gave the absent class 28.
     assert np.allclose(np.delete(before, [3, 28]), np.delete(after, [3, 28]), rtol=1e-4, atol=0)
+
+
+def test_b28_class_stats_refuses_labels_that_disagree_with_the_manifest(cohort):
+    manifest = cohort["b28"] / relabel.MANIFEST
+    content = json.loads(manifest.read_text())
+    manifest.write_text(json.dumps(content | {"class_28_pixels": content["class_28_pixels"] + 1}))
+    with pytest.raises(ValueError, match="class 28 pixels"):
+        retrain.b28_class_stats(str(cohort["tiles"]), str(cohort["b28"]))
 
 
 def test_class_weight_source_names_class_28(tmp_path):
