@@ -1,10 +1,13 @@
 {
   "id": "0142",
   "subject": "Offer 2025 on the annual map with HR-VPP 2024, clearly labelled",
-  "description": "HR-VPP 2025 is not published for any of our 20 tiles (WEkEO, 2026-11-03). A control showed that HR-VPP from y-1 changes a median 6.8 % of pixels (max 10.2 %, noise floor 0). Tobias decided on 2026-11-03 to offer 2025 with HR-VPP 2024, clearly labelled. Scope: an explicit year table {2025: 2024} in imint/inference/lclu.py; provenance and result carry vpp_year and vpp_year_substituted; the catalogue carries the notice; preparation, staging, preflight and the acceptance audit (qualified_substituted_vpp) follow the table; the page shows '2025 · växtfenologi från 2024' with the note. Release r11 is created after review on Tobias's go (PVC expanded to 800Gi for its sources). Not in scope: r11 itself, re-pinning the 2024 batch to r11 (follow-up). Review: Codex.",
-  "status": "pending",
+  "description": "HR-VPP 2025 is not published for any of our 20 tiles (WEkEO, 2026-11-03). A control showed that HR-VPP from y-1 changes a median 6.8 % of pixels (max 10.2 %, noise floor 0). Tobias decided on 2026-11-03 to offer 2025 with HR-VPP 2024, clearly labelled. Scope: an explicit year table {2025: 2024} in imint/inference/lclu.py; provenance and result carry vpp_year and vpp_year_substituted; the catalogue carries the notice; preparation, staging, preflight and the acceptance audit (qualified_substituted_vpp) follow the table; the page shows '2025 \u00b7 v\u00e4xtfenologi fr\u00e5n 2024' with the note. Release r11 is created after review on Tobias's go (PVC expanded to 800Gi for its sources). Not in scope: r11 itself, re-pinning the 2024 batch to r11 (follow-up). Review: Codex.",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-2025-vpp2024",
   "created_at": "2026-11-03T20:30:00Z",
-  "updated_at": "2026-11-03T20:30:00Z"
+  "updated_at": "2026-11-03T20:05:16Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-03T20:05:16Z"
 }
