@@ -219,6 +219,9 @@ def main():
     parser.add_argument("--weighting-method", type=str, default=_defaults.weighting_method,
                         choices=["inverse", "sqrt", "effective_number"],
                         help="Class weighting strategy")
+    parser.add_argument("--class-stats", type=str, default=None,
+                        help="class_stats.json for class weights and sampling "
+                             "(default: <first data dir>/class_stats.json)")
     parser.add_argument("--label-smoothing", type=float, default=_defaults.label_smoothing,
                         help="Label smoothing for focal loss (0.0 = disabled)")
     parser.add_argument("--lovasz-weight", type=float, default=_defaults.lovasz_weight,
@@ -391,6 +394,7 @@ def main():
         focal_gamma=args.focal_gamma,
         max_class_weight=args.max_class_weight,
         weighting_method=args.weighting_method,
+        class_stats_path=args.class_stats,
         label_smoothing=args.label_smoothing,
         lovasz_weight=args.lovasz_weight,
         early_stop_metric=args.early_stop_metric,

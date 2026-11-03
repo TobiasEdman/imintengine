@@ -1,0 +1,80 @@
+# IM-023 step 2a′: chain check of both TESSERA variants on a 2080 Ti while the
+# H100 is cordoned (Tobias 2026-11-03: "run the smoke on a 2080 Ti while we wait").
+# Not R4's recipe: FP32 (Turing has no hardware BF16), batch 2 (FP32 activations
+# of batch 8 at 504 px exceed 11 GB), 6 workers (no 2080 Ti node had 16 CPU/80 Gi
+# free). It writes smoke2080_*, never smoke_*, so it cannot satisfy the full
+# runs' gate: that stays on the queued H100 smoke (train-tessera-smoke-job.yaml).
+#
+#   kubectl create --dry-run=server -f k8s/im023/train-tessera-smoke-2080ti-job.yaml
+#   kubectl create -f k8s/im023/train-tessera-smoke-2080ti-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-tessera-smoke-2080ti
+  namespace: prithvi-training-default
+  labels: { app: unified-training, purpose: im023-retrain, variant: smoke-2080ti }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: im023-retrain, variant: smoke-2080ti }
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 21600   # 6 h cap for two FP32 epochs + setup
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: trainer
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              SHA=a2dbe179ad685f90fcf139003355f0e11cdc9ccb
+              echo "=== im023-tessera-smoke-2080ti — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+              pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
+              RETRAIN=/workspace/imintengine/scripts/im023_retrain.py
+              cd /cephfs
+              # --- run ---
+              python3 "$RETRAIN" --variant main --epochs 1 --checkpoint-dir /cephfs/checkpoints/im023/smoke2080_main -- --disable-bf16 --batch-size 2 --num-workers 6
+              python3 "$RETRAIN" --variant control --epochs 1 --checkpoint-dir /cephfs/checkpoints/im023/smoke2080_control -- --disable-bf16 --batch-size 2 --num-workers 6
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi

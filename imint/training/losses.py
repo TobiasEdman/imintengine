@@ -304,10 +304,11 @@ class FractionLoss(nn.Module):
 
     Supervises the fraction head's ``sigmoid(logits)`` against the NMD2023
     Trädslag crown-cover targets in [0, 1] (raw 0-100 rasters divided by 100).
-    Pixels are masked out where the target is unreliable OR carries no
-    supervision:
+    The dataset supplies a positive supervision mask: 1 means reliable with
+    signal, 0 means excluded. Keep only those pixels, with an additional
+    no-signal check:
 
-        mask_out = frac_unreliable  OR  (all K species fractions == 0)
+        keep = frac_mask AND (any species fraction > 0)
 
     An all-zero target means "no supervision here" (outside NMD2023 coverage,
     ~5.5% of pixels), NOT "0% of every species is present" — supervising toward
@@ -329,15 +330,16 @@ class FractionLoss(nn.Module):
         self,
         frac_logits: torch.Tensor,
         frac_target: torch.Tensor,
-        frac_unreliable: torch.Tensor,
+        frac_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Compute the masked fraction loss.
 
         Args:
             frac_logits: (B, K, H, W) raw fraction-head logits.
             frac_target: (B, K, H, W) target crown-cover in [0, 1].
-            frac_unreliable: (B, H, W) uint8/bool — 1 where the pixel is
-                flagged unreliable (osakerklassning).
+            frac_mask: (B, H, W) float/bool positive supervision mask from
+                UnifiedDataset — 1 = supervise, 0 = exclude. This is not the
+                raw sidecar's frac_unreliable mask.
 
         Returns:
             Scalar loss (mean over unmasked pixel-species entries). Returns a
@@ -348,9 +350,9 @@ class FractionLoss(nn.Module):
 
         # Per-pixel supervision mask (B, 1, H, W): keep where reliable AND at
         # least one species is present.
-        unreliable = frac_unreliable.to(pred).bool()          # (B, H, W)
+        supervised = frac_mask.to(pred).bool()               # (B, H, W)
         has_signal = (target > 0).any(dim=1)                  # (B, H, W)
-        keep = (~unreliable) & has_signal                     # (B, H, W)
+        keep = supervised & has_signal                       # (B, H, W)
         keep = keep.unsqueeze(1).to(pred)                     # (B, 1, H, W)
 
         if self.loss_type == "smooth_l1":

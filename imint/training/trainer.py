@@ -338,7 +338,8 @@ class LULCTrainer:
                 ds._area_weight_max = cfg.area_weight_max
 
         # Class weights
-        stats_path = Path(cfg.data_dir) / "class_stats.json"
+        stats_path = (Path(cfg.class_stats_path) if cfg.class_stats_path
+                      else Path(cfg.data_dir) / "class_stats.json")
         split_manifest = getattr(train_dataset, "_split_manifest", None)
         if split_manifest is not None:
             raw_counts = split_manifest["label_support"]["train"]["pixel_counts"]
