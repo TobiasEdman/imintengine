@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
 WORKDIR /wheels
-COPY pyproject.toml README.md LICENSE THIRD_PARTY_LICENSES.md ./
+COPY pyproject.toml README.md LICENSE LICENSE-DATA NOTICE THIRD_PARTY_LICENSES.md ./
 COPY imint/ imint/
 RUN python3 -m pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels \
     "git+https://github.com/TobiasEdman/des-contracts.git@v0.1.0"
@@ -48,7 +48,7 @@ RUN python3 -m pip install --no-cache-dir \
 
 # Install remaining deps from pre-built wheels
 COPY --from=builder /wheels /wheels
-COPY pyproject.toml README.md LICENSE THIRD_PARTY_LICENSES.md ./
+COPY pyproject.toml README.md LICENSE LICENSE-DATA NOTICE THIRD_PARTY_LICENSES.md ./
 COPY imint/ imint/
 RUN python3 -m pip install --no-cache-dir --no-index --find-links=/wheels \
     "imint-engine[training,api]==0.2.0" \

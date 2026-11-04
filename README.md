@@ -285,25 +285,38 @@ The engine code is untouched.
 | **Prithvi-EO-2.0** | IBM/NASA | Apache 2.0 | LULC segmentation backbone (300M params) |
 | **CoastSeg SegFormer** | Vos et al. | GPL-3.0 | Shoreline classification (weights only) |
 | **YOLO11s** | Ultralytics | AGPL-3.0 | Object & vessel detection |
-| **COT MLP5** | Pirinen / RISE | TBD | Cloud optical thickness |
+| **COT MLP5** | Pirinen / RISE | Apache 2.0 | Cloud optical thickness |
 | **PIB Grazing** | RISE | TBD | Grazing activity classification |
 
 ---
 
 ## License
 
-Copyright (c) 2024-2025 RISE Research Institutes of Sweden AB
+Copyright 2026 RISE Research Institutes of Sweden AB
 
-The original source code and documentation in this repository are dedicated
-to the public domain under **CC0 1.0 Universal**. See [LICENSE](LICENSE)
-for the full text.
+- **Source code** is licensed under the **Apache License 2.0**
+  ([LICENSE](LICENSE)): `imint/`, `executors/`, `scripts/`, `tests/`,
+  `docker/`, `k8s/`, the notebooks, the code in `demos/`, the repository's
+  own scripts in `docs/` (such as `docs/js/*.js`), Dockerfiles and all
+  other code.
+- **Data, documentation and other non-code material** is dedicated to the
+  public domain under **CC0 1.0 Universal** ([LICENSE-DATA](LICENSE-DATA)):
+  the rest of `docs/` (text, HTML, images, data and figures), `config/`,
+  data files, figures, reports and generated outputs.
+- **Exception, the showcase films:** in `docs/showcase/films/` and `docs/films.html`
+  the images, maps, text and captions are CC0 1.0, but the **narration voice**
+  (a synthetic voice clone) is **not** covered by CC0. It may not be extracted,
+  reused, or used to train or prompt voice models.
+- **Third-party components** (models, data, libraries, including the
+  vendored scripts in `docs/js/vendor/`) keep their own licenses; see
+  [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+- **Earlier versions** of this repository, published under CC0 1.0, remain
+  available under CC0 1.0.
 
-Third-party components (models, data, libraries) retain their original
-licenses. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for
-details. Notable obligations:
+Notable third-party obligations:
 
 - **YOLO11s** (Ultralytics): AGPL-3.0 — commercial closed-source use
   requires an Enterprise license
 - **Prithvi-EO** (IBM/NASA): Apache 2.0
-- **COT MLP5** (Pirinen et al. / RISE): license TBD
+- **COT MLP5** (Pirinen et al. / RISE): Apache 2.0
 - **Sjokort S-57** (Sjofartsverket): academic use only via SLU GET

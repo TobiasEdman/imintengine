@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /wheels
-COPY pyproject.toml README.md LICENSE THIRD_PARTY_LICENSES.md ./
+COPY pyproject.toml README.md LICENSE LICENSE-DATA NOTICE THIRD_PARTY_LICENSES.md ./
 COPY imint/ imint/
 RUN pip wheel --no-cache-dir --no-deps --wheel-dir=/wheels \
     "git+https://github.com/TobiasEdman/des-contracts.git@v0.1.0"
@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-COPY pyproject.toml README.md LICENSE THIRD_PARTY_LICENSES.md ./
+COPY pyproject.toml README.md LICENSE LICENSE-DATA NOTICE THIRD_PARTY_LICENSES.md ./
 COPY imint/ imint/
 RUN pip install --no-cache-dir --no-index --find-links=/wheels \
     "imint-engine[api]==0.2.0" \
