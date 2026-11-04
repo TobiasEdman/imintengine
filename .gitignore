@@ -8,11 +8,13 @@ data/
 !imint/data/
 !imint/data/**
 !docs/data/
-# NFI (Riksskogstaxeringen) plot coordinates are protected under SLU data
-# terms — never track, never `git add -f`. The repo is PUBLIC; a committed
-# coordinate file cannot be unpublished. Enforced by
-# tests/test_repo_hygiene.py::test_no_nfi_plot_coordinates_tracked.
+# data/nfi/ holds SLU's open calibration subset (temporary plots, CC0 1.0):
+# raw source data, so not tracked. Permanent-plot data received under SLU's
+# confidentiality agreement goes in data/nfi_permanent/ and must never be
+# tracked; the repo is public. Enforced by
+# tests/test_repo_hygiene.py::test_no_permanent_nfi_plot_data_tracked.
 data/nfi/
+data/nfi_permanent/
 *.npy
 *.tif
 *.geotiff

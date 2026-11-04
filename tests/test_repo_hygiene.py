@@ -279,17 +279,32 @@ def test_pipeline_images_have_run_script() -> None:
     )
 
 
-def test_no_nfi_plot_coordinates_tracked() -> None:
-    """NFI plot coordinates must NEVER enter this (public) repo.
+#: Where data received under SLU's confidentiality agreement belongs.
+_PERMANENT_NFI_DIR = "data/nfi_permanent/"
+#: A data file whose name says it holds permanent NFI plots.
+_PERMANENT_NFI_NAME = re.compile(r"permanent[_-]?(?:nfi|plots?)|permanenta[_-]?provytor", re.IGNORECASE)
+_DATA_SUFFIXES = {".parquet", ".csv", ".xlsx", ".xls", ".json", ".geojson", ".gpkg",
+                  ".shp", ".npz", ".npy", ".txt"}
 
-    Riksskogstaxeringen permanent-plot locations are protected under SLU's
-    data terms — publishing them would breach the agreement, and a public
-    git history cannot be unpublished. `.gitignore` covers `data/nfi/`,
-    but `git add -f` bypasses ignores and other data/ subdirs are already
-    force-added, so the ignore is convention; THIS test is the guard.
 
-    Two rings: nothing under data/nfi/ may be tracked, and no tracked
-    parquet anywhere may carry NFI plot-coordinate columns.
+def _is_permanent_nfi_data(rel: str) -> bool:
+    path = Path(rel)
+    return rel.startswith(_PERMANENT_NFI_DIR) or (
+        path.suffix.lower() in _DATA_SUFFIXES and bool(_PERMANENT_NFI_NAME.search(path.name))
+    )
+
+
+def test_no_permanent_nfi_plot_data_tracked() -> None:
+    """Permanent NFI plot data must never enter this (public) repo.
+
+    SLU keeps the exact coordinates of Riksskogstaxeringen's permanent plots
+    confidential and releases them only under a confidentiality agreement.
+    This repo uses SLU's open calibration subset instead: temporary plots,
+    positions included, published under CC0 1.0 (``swe_nfi_plotdata2.xlsx``,
+    see ``docs/data/nfi_plotdata_DATA_CARD.md``). Its plot ids, coordinates
+    and tile names may therefore appear here. Agreement data belongs under
+    ``data/nfi_permanent/``, which ``.gitignore`` covers; ``git add -f``
+    bypasses ignores, so this test is the guard.
     """
     import subprocess
 
@@ -297,161 +312,28 @@ def test_no_nfi_plot_coordinates_tracked() -> None:
         ["git", "-C", str(REPO), "ls-files"],
         capture_output=True, text=True, check=True,
     ).stdout.splitlines()
-
-    under_nfi = [f for f in tracked if f.startswith("data/nfi/")]
-    assert not under_nfi, (
-        f"PROTECTED NFI data tracked in a public repo: {under_nfi}. "
-        f"Remove immediately (git rm --cached) and scrub history before "
-        f"the next push."
-    )
-
-    pd = pytest.importorskip("pandas")
-    coord_cols = {"Easting", "Northing"}
-    offenders: list[str] = []
-    for f in tracked:
-        if not f.endswith(".parquet"):
-            continue
-        path = REPO / f
-        if not path.exists():
-            continue
-        try:
-            cols = set(pd.read_parquet(path).columns)
-        except Exception:
-            continue  # unreadable parquet is another test's problem
-        if coord_cols <= cols and {"TractID", "PlotID"} & cols:
-            offenders.append(f)
+    offenders = [rel for rel in tracked if _is_permanent_nfi_data(rel)]
     assert not offenders, (
-        f"Tracked parquet(s) carry NFI plot coordinates "
-        f"(Easting/Northing + plot ids): {offenders}. These are protected "
-        f"under SLU terms and the repo is public."
+        f"Permanent NFI plot data tracked in a public repo: {offenders}. "
+        f"SLU releases these coordinates only under agreement; keep them "
+        f"under {_PERMANENT_NFI_DIR}."
     )
 
 
-#: An NFI tile name: nfi<year>_<west>_<south> in SWEREF99 TM metres.
-_NFI_TILE_NAME = re.compile(r"nfi20\d\d_\d{6}_\d{7}")
-#: A holdout evaluation tile name: holdoutval_<tx>_<ty>[_<year>] on the
-#: 5120 m lattice, i.e. west = tx * 5120 and south = ty * 5120.
-_HOLDOUT_TILE_NAME = re.compile(r"holdoutval_(\d+)_(\d+)(?:_20\d\d)?(?!\d)")
-_HOLDOUT_TILE_M = 5120
-#: Sweden in SWEREF99 TM metres (EPSG:3006 area of use, with margin). A
-#: holdout tile whose corner falls outside is a synthetic fixture.
-_SWEDEN_E = (180_000, 1_100_000)
-_SWEDEN_N = (6_000_000, 7_800_000)
-#: A literal SWEREF99 TM (easting, northing) pair.
-_COORD_TUPLE = re.compile(r"\(\s*(\d{6})(?:\.\d+)?\s*,\s*(\d{7})(?:\.\d+)?\s*\)")
-#: An NFI file: "nfi", "holdout" or "fieldtruth" at the start of a path token
-#: (not inside e.g. "config"). Evaluation-copy tiles are plot-centred too.
-_NFI_PATH = re.compile(r"(?:^|[/_.\-])(?:nfi|holdout|fieldtruth)")
-_TEXT_SUFFIXES = {".py", ".yaml", ".yml", ".md", ".json", ".txt", ".sh", ".toml",
-                  ".cfg", ".ini", ".csv", ".html", ".js", ".ipynb"}
-
-
-def _in_sweden(east: int, north: int) -> bool:
-    return (_SWEDEN_E[0] <= east < _SWEDEN_E[1]) and (_SWEDEN_N[0] <= north < _SWEDEN_N[1])
-
-
-def _nfi_location_hits(rel: str, text: str) -> list[str]:
-    """NFI and holdout tile names anywhere, and coordinate pairs in NFI files.
-
-    NFI tiles are centred on the plots they carry, so a tile name or a tile
-    corner in NFI code locates a plot. A holdout tile name gives its 5.12 km
-    footprint, and most holdout tiles carry NFI plots. A holdout name whose
-    corner lies outside Sweden, and a pair whose numbers are both whole
-    100 km, are synthetic test values, not locations.
-    """
-    hits = _NFI_TILE_NAME.findall(text)
-    hits += [m.group(0) for m in _HOLDOUT_TILE_NAME.finditer(text)
-             if _in_sweden(int(m.group(1)) * _HOLDOUT_TILE_M, int(m.group(2)) * _HOLDOUT_TILE_M)]
-    if _NFI_PATH.search(rel.lower()):
-        hits += [m.group(0) for m in _COORD_TUPLE.finditer(text)
-                 if int(m.group(1)) % 100_000 or int(m.group(2)) % 100_000]
-    return hits
-
-
-# Synthetic values only. The tuple below is built, so no real-looking pair
-# sits in this file; the one literal pair left is a whole-100 km point.
-_E, _N = 123450, 6543210
-_NAME = "nfi%d_%06d_%07d" % (2024, _E, _N)
-_PAIR = "(%d, %d)" % (_E, _N)
-
-
-@pytest.mark.parametrize("rel, text, found", [
-    ("k8s/x-job.yaml", f"#   {_NAME}  frame_2016 ALL ZERO", True),
-    ("k8s/nfi-probe-job.yaml", f"windows = {{'21a': {_PAIR}}}", True),
-    ("scripts/build_nfi_index_v5.py", _PAIR, True),
-    ("k8s/holdout-eval-probe-job.yaml", _PAIR, True),
-    ("imint/eval/fieldtruth.py", _PAIR, True),
-    ("k8s/lpis-debug-job.yaml", f"centre {_PAIR}", False),
-    ("tests/test_tile_config.py", _PAIR, False),              # "config" is not an NFI file
-    ("tests/test_plan_nfi_tile_counts.py", "bbox_from_center(500000,6400000)", False),
-    ("tests/test_nfi_x.py", "(500000, 6400000)", False),       # whole 100 km: synthetic
+@pytest.mark.parametrize("rel, found", [
+    ("data/nfi_permanent/plots.parquet", True),
+    ("data/nfi_permanent/README.md", True),           # anything in the agreement directory
+    ("docs/data/permanent_plots_2024.csv", True),
+    ("data/permanenta_provytor.xlsx", True),
+    ("data/Permanent-NFI.json", True),
+    ("scripts/load_permanent_nfi.py", False),         # code that reads it is not the data
+    ("data/nfi/swe_nfi_plotdata2.xlsx", False),       # SLU's CC0 calibration subset
+    ("data/distill/distill_split.json", False),
+    ("docs/data/nfi_plotdata_DATA_CARD.md", False),
+    ("imint/schema/crop_schema.py", False),
 ])
-def test_nfi_location_patterns(rel: str, text: str, found: bool) -> None:
-    assert bool(_nfi_location_hits(rel, text)) is found
-
-
-def _holdout_name(tx: int, ty: int, year: int | None = 2019) -> str:
-    """Built, so no holdout name inside Sweden sits literally in this file."""
-    return "holdoutval_%d_%d" % (tx, ty) + ("_%d" % year if year else "")
-
-
-# Lattice indices around the bounds: tx 35|36 and 214|215 straddle the east
-# limits, ty 1171|1172 and 1523|1524 the north limits.
-@pytest.mark.parametrize("rel, tx, ty, year, found", [
-    ("tests/test_tile_listing.py", 100, 1300, 2024, True),      # any file, not only NFI paths
-    ("docs/experiments/x.md", 100, 1300, None, True),           # the year suffix is optional
-    ("docs/experiments/x.json", 36, 1172, 2018, True),           # south-west corner, inside
-    ("docs/experiments/x.json", 214, 1523, 2018, True),          # north-east corner, inside
-    ("tests/test_x.py", 35, 1300, 2019, False),                  # west of Sweden
-    ("tests/test_x.py", 215, 1300, 2019, False),                 # east of Sweden
-    ("tests/test_x.py", 100, 1171, 2019, False),                 # south of Sweden
-    ("tests/test_x.py", 100, 1524, 2019, False),                 # north of Sweden
-    ("tests/test_census_holdout_val_512.py", 100, 1100, 2019, False),  # the census fixtures
-    ("tests/test_build_labels_pickle_safety.py", 9, 9, 2022, False),
-])
-def test_holdout_tile_names_are_hits_only_inside_sweden(
-        rel: str, tx: int, ty: int, year: int | None, found: bool) -> None:
-    assert bool(_nfi_location_hits(rel, _holdout_name(tx, ty, year))) is found
-
-
-@pytest.mark.parametrize("text", [
-    "holdoutval_1",              # the dashboard fixture: no lattice index
-    "/data/holdout_val_512",     # the holdout directory
-])
-def test_holdout_text_without_a_lattice_name_is_not_a_hit(text: str) -> None:
-    assert not _nfi_location_hits("tests/test_x.py", text)
-
-
-def test_no_nfi_tile_locations_tracked() -> None:
-    """No tracked text file may name an NFI tile or carry an NFI coordinate pair.
-
-    The parquet guard above misses text: on 2026-10-26 a probe yaml put seven
-    top-up tile corners into a public PR branch, and a recovered Job header
-    on main named three nfi2024 tiles. On 2026-11-03 a published census
-    record was found naming 273 holdout tiles. Plot locations stay in the
-    data environment; probes read them from the PVC.
-    """
-    import subprocess
-
-    tracked = subprocess.run(
-        ["git", "-C", str(REPO), "ls-files"],
-        capture_output=True, text=True, check=True,
-    ).stdout.splitlines()
-    offenders: dict[str, list[str]] = {}
-    for rel in tracked:
-        path = REPO / rel
-        if path.suffix.lower() not in _TEXT_SUFFIXES or not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        if hits := _nfi_location_hits(rel, text):
-            offenders[rel] = hits
-    assert not offenders, (
-        f"NFI tile names or coordinates in tracked files: {sorted(offenders)}. "
-        f"They locate protected plots and the repo is public."
-    )
+def test_permanent_nfi_data_pattern(rel: str, found: bool) -> None:
+    assert _is_permanent_nfi_data(rel) is found
 
 
 # ── manifest-writing skg Jobs forward SIGTERM to their script ──────────────

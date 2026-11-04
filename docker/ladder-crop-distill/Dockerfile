@@ -54,7 +54,8 @@ RUN python -c "import re; value='${SOURCE_GIT_SHA}'; assert re.fullmatch(r'[0-9a
 # the GNU OpenMP runtime. The slim base deliberately omits both. Fetch the
 # exact Debian artifacts directly and verify their repository SHA-256 values;
 # an apt index update would otherwise make this supposedly frozen image vary.
-ADD https://deb.debian.org/debian-security/pool/updates/main/e/expat/libexpat1_2.8.3-1~deb13u1_amd64.deb /tmp/libexpat1.deb
+# snapshot.debian.org keeps every version; the security pool dropped this one.
+ADD https://snapshot.debian.org/archive/debian-security/20260818T014843Z/pool/updates/main/e/expat/libexpat1_2.8.3-1~deb13u1_amd64.deb /tmp/libexpat1.deb
 ADD https://deb.debian.org/debian/pool/main/g/gcc-14/libgomp1_14.2.0-19_amd64.deb /tmp/libgomp1.deb
 RUN echo "38abe0e710a07688e9c149d74536e67cfee0364bdb64dd6d644c32a1cfad389f  /tmp/libexpat1.deb" | sha256sum --check --strict \
     && echo "72b7a1a33c48f3195efeb044111b34ae684b1e640bb6495c832443b798601cd5  /tmp/libgomp1.deb" | sha256sum --check --strict \
