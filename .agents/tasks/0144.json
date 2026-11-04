@@ -1,0 +1,13 @@
+{
+  "id": "0144",
+  "subject": "Record the COT MLP5 ensemble as Apache-2.0",
+  "description": "Tobias stated on 2026-11-03 that the COT MLP5 cloud optical thickness ensemble (Pirinen et al., DigitalEarthSweden/ml-cloud-opt-thick) is licensed Apache-2.0. Scope: the COT row in THIRD_PARTY_LICENSES.md and the COT row in the licence table that imint/exporters/html_report.py renders. Not in scope: README.md and LICENSE, which PR #136 (task 0141) already changes; their COT lines are coordinated with that PR. Not in scope: regenerating the published showcase report. Review: Codex.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/cot-licence-apache",
+  "created_at": "2026-11-03T21:00:00Z",
+  "updated_at": "2026-11-03T20:59:27Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-03T20:59:27Z"
+}
