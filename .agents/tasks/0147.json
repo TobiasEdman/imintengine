@@ -1,0 +1,10 @@
+{
+  "id": "0147",
+  "subject": "Point the README showcase section to the live site",
+  "description": "Tobias decided on 2026-11-05 to fix the README before the engine is published in DigitalEarthSwedenExperimentalLab, in the lab copy and here. The Showcase section lists four old tabs with wrong place names (Lysekil, Västervik; correct are Hunnebostrand and Munkarp). Replace the table with a short pointer to tobiasedman.github.io/imintengine and digitalearth.se/case. Not in scope: the sibling imint-showcase sentence and the clone URL, which are correct for this repository. Review: Codex or owner.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/readme-showcase-pointer",
+  "created_at": "2026-11-05T08:10:00Z",
+  "updated_at": "2026-11-05T08:10:00Z"
+}
