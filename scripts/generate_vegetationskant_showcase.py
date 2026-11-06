@@ -313,7 +313,8 @@ def main():
     # ── Step 5: NMD land cover ──────────────────────────────────────
     print("\n[5] Running NMD analysis...")
     try:
-        nmd = NMDAnalyzer()
+        # The showcase stays on NMD 2018 until its images are regenerated on 2023.
+        nmd = NMDAnalyzer(config={"product": 2018})
         nmd_result = nmd.run(
             ref_rgb, bands=ref_bands, date=ref_date,
             coords=coords, output_dir=out_dir, geo=geo,
@@ -321,7 +322,8 @@ def main():
         if nmd_result.success and nmd_result.outputs.get("nmd_available"):
             l2_raster = nmd_result.outputs.get("l2_raster")
             if l2_raster is not None:
-                save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"))
+                save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"),
+                                 palette="nmd2018_l2")
     except Exception as e:
         print(f"    NMD skipped: {e}")
 

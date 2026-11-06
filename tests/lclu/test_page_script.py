@@ -51,7 +51,9 @@ def test_an_outdated_cached_page_asks_for_a_reload(results):
 
 def test_the_page_versions_its_script():
     # A changed DOM contract must reach browsers that cached the old script.
-    assert re.search(r'<script defer src="js/lclu\.js\?v=\d+"></script>', (ROOT/'docs/lclu.html').read_text())
+    page = (ROOT/'docs/lclu.html').read_text()
+    assert re.search(r'<script defer src="js/lclu\.js\?v=\d+"></script>', page)
+    assert re.search(r'<link rel="stylesheet" href="css/lclu\.css\?v=\d+">', page)
 
 
 def test_the_stylesheet_reaches_only_the_page():
@@ -71,3 +73,38 @@ def test_the_showcase_tab_shows_this_page_first():
     assert re.findall(r'class="sub-tab active" data-subtab="(\w+)"', nav) == ['lclu']
     assert re.search(r'<div class="sub-tab-content active lclu" id="tab-lclu" data-src="lclu\.html"></div>', index)
     assert "loadAnnualMap();" in (ROOT/'docs/js/app.js').read_text()
+
+
+LABEL = '2025 · växtfenologi från 2024'
+NOTE = 'Uppskattningsvis ~7 % av pixlarna kan avvika jämfört med en karta med årets växtfenologi.'
+
+
+def test_a_substituted_year_carries_the_apis_label_wherever_it_is_named(results):
+    shown = results['substituted']
+    assert shown['error'] is None
+    assert shown['creations'] == [{'place': 'A', 'year': 2025}, {'place': 'A', 'year': 2024}]
+    chosen, made = shown['chosen'], shown['made']
+    assert chosen['readout'] == chosen['valuetext'] == LABEL
+    assert chosen['substituted_ticks'] == [['2025', LABEL]]
+    assert made['status'] == f'Årskarta {LABEL} är klar.'
+    assert made['result_shown'] and made['title'] == f'Årskarta {LABEL}' and made['note'] == NOTE
+    assert made['readout'] == f'{LABEL} · skapad'
+    assert shown['span'] == '2023⁠–⁠2025'
+    assert results['single_year']['span'] == '2024'
+
+
+def test_other_years_and_an_api_without_the_list_get_no_label(results):
+    other, plain = results['substituted']['other'], results['substituted']['plain']
+    assert other['status'] == '2024: ingen karta än. Släpp tidsaxeln för att skapa den.'
+    assert not other['result_shown'] and other['readout'] == '2024'
+    assert plain['title'] == 'Årskarta 2024' and plain['note'] is None
+    assert plain['status'] == 'Årskarta 2024 är klar.'
+    without = results['without_list']
+    assert without['error'] is None and without['substituted_ticks'] == []
+    assert without['title'] == 'Årskarta 2024' and without['note'] is None
+
+
+def test_the_substitution_wording_lives_only_in_the_api():
+    for path in ('docs/js/lclu.js', 'docs/lclu.html'):
+        text = (ROOT/path).read_text()
+        assert 'växtfenologi från' not in text and '~7 %' not in text, path

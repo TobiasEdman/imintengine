@@ -30,7 +30,11 @@ prithvi:
   device: cpu
 
 nmd:
-  enabled: true             # NMD LULC analysis (requires DES connection + coords)
+  enabled: true             # NMD land cover analysis (requires coords)
+  product: 2023             # 2023: NMD 2023 basskikt v2.1 from the national raster at
+                            # $NMD2023_PATH (default /data/nmd2023/NMD2023bas_v2_1.tif);
+                            # 2018: NMD 2018 from DES openEO. Required, no default.
+  # raster_path: data/nmd2023/NMD2023bas_v2_1.tif  # overrides $NMD2023_PATH (2023 only)
 
 samgeo:
   enabled: false            # SAMGeo zero-shot segmentation (requires: pip install segment-geospatial)

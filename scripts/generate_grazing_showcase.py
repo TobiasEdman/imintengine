@@ -160,9 +160,10 @@ def main():
     print("\n[4] Fetching NMD land cover...")
     nmd_result = None
     try:
-        nmd_result = fetch_nmd_data(coords=coords, target_shape=(H, W))
+        nmd_result = fetch_nmd_data(coords=coords, target_shape=(H, W), product=2018)
         if nmd_result is not None:
-            save_nmd_overlay(nmd_result.nmd_raster, os.path.join(out_dir, "nmd_overlay.png"))
+            save_nmd_overlay(nmd_result.nmd_raster, os.path.join(out_dir, "nmd_overlay.png"),
+                             palette="nmd2018_raw")
     except Exception as e:
         print(f"    NMD skipped: {e}")
 

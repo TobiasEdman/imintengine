@@ -25,6 +25,7 @@ prithvi:
 
 nmd:
   enabled: true
+  product: 2023             # NMD 2023 from $NMD2023_PATH; 2018 = DES openEO
 
 cot:
   enabled: true

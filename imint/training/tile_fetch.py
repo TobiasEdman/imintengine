@@ -725,12 +725,16 @@ def fetch_nmd_label_local(
 
 
 def _fetch_nmd_label_remote(bbox_3006: dict, tile: "TileConfig") -> np.ndarray | None:
-    """Fallback: fetch NMD via openEO (requires internet)."""
+    """Fallback: fetch NMD 2018 via openEO (requires internet).
+
+    NMD 2018 is the label source of this path (the r1 rung compares it with
+    NMD 2023), so the product is stated, not defaulted.
+    """
     try:
         coords_wgs84 = bbox_3006_to_wgs84(bbox_3006)
         from imint.fetch import fetch_nmd_data
         result = fetch_nmd_data(
-            coords_wgs84, target_shape=(tile.size_px, tile.size_px),
+            coords_wgs84, target_shape=(tile.size_px, tile.size_px), product=2018,
         )
         if result and result.nmd_raster is not None:
             return result.nmd_raster

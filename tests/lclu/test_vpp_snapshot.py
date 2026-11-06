@@ -108,8 +108,13 @@ def test_missing_selected_file_is_not_published(vpp_cache, tmp_path):
     assert not (tmp_path / 'snapshots').exists()
 
 
-def test_stage_verifies_snapshot_targets_before_dem_preparation(vpp_cache, tmp_path, monkeypatch):
-    """Exercise stage's real index/hash path; the identity reader rejects symlinks."""
+@pytest.mark.parametrize('year', [2024, 2025])
+def test_stage_verifies_snapshot_targets_before_dem_preparation(vpp_cache, tmp_path, monkeypatch, year):
+    """Exercise stage's real index/hash path; the identity reader rejects symlinks.
+
+    Only HR-VPP 2024 is cached: 2025 stages on it through VPP_YEAR_SUBSTITUTIONS,
+    and 2023, which has no table entry, is refused instead of falling back.
+    """
     from scripts import stage_lclu_demo as staging
 
     index_path, bounds, _, _ = vpp_cache
@@ -127,8 +132,8 @@ def test_stage_verifies_snapshot_targets_before_dem_preparation(vpp_cache, tmp_p
     scope = tmp_path / 'scope.json'
     west, south, east, north = bounds
     write_json(scope, {'version': 1, 'bounds_3006': [west + 20, south + 20, east - 20, north - 20],
-                      'blocks': [{'year': 2024, 'grid_size': 1, 'scales_size': 1,
-                                  'variant': 'vultr', 'version': '1.0'}]})
+                      'blocks': [{'year': y, 'grid_size': 1, 'scales_size': 1,
+                                  'variant': 'vultr', 'version': '1.0'} for y in (2023, year)]})
     verified = []
     original_verify = staging.verify_source_file
     def verify(record, base, receipts):
@@ -142,9 +147,12 @@ def test_stage_verifies_snapshot_targets_before_dem_preparation(vpp_cache, tmp_p
     def stop_at_dem(*_args, **_kwargs):
         raise ReachedDem
     monkeypatch.setattr(staging, 'fetch', stop_at_dem)
+    with pytest.raises(ValueError, match='Exact-year 2023 HR-VPP'):
+        staging.stage(scope, 2023, data, tmp_path / 'staged-2023')
     with pytest.raises(ReachedDem):
-        staging.stage(scope, 2024, data, tmp_path / 'staged')
+        staging.stage(scope, year, data, tmp_path / 'staged')
     assert len(verified) == 5
     assert all(path.is_file() and not path.is_symlink() for path in verified)
     frozen, = (tmp_path / 'staged/vpp').glob('*/index.json')
+    assert {meta['year'] for meta in json.loads(frozen.read_text()).values()} == {2024}
     assert len(json.loads(frozen.read_text())) == 5

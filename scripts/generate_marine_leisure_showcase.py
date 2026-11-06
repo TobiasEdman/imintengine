@@ -137,7 +137,8 @@ def main():
 
     # ── Step 4: NMD ───────────────────────────────────────────────
     print("\n[4/6] Running NMD analyzer...")
-    nmd = NMDAnalyzer()
+    # The showcase stays on NMD 2018 until its images are regenerated on 2023.
+    nmd = NMDAnalyzer(config={"product": 2018})
     nmd_result = nmd.run(
         rgb, bands=bands, date=date, coords=COORDS_WGS84,
         output_dir=out_dir, scl=scl,
@@ -146,7 +147,8 @@ def main():
 
     l2_raster = nmd_result.outputs.get("l2_raster")
     if l2_raster is not None:
-        save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"))
+        save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"),
+                         palette="nmd2018_l2")
 
     # ── Step 5: YOLO vessel detection ─────────────────────────────
     print("\n[5/6] Running YOLO marine vessel detection...")
