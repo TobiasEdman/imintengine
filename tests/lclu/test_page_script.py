@@ -52,3 +52,14 @@ def test_an_outdated_cached_page_asks_for_a_reload(results):
 def test_the_page_versions_its_script():
     # A changed DOM contract must reach browsers that cached the old script.
     assert re.search(r'<script defer src="js/lclu\.js\?v=\d+"></script>', (ROOT/'docs/lclu.html').read_text())
+
+
+def test_the_stylesheet_reaches_only_the_page():
+    # The showcase loads lclu.css into index.html for its Marktäckekartering
+    # sub-tab, so every rule must be scoped to .lclu (lclu.html's body, the tab).
+    css = re.sub(r'/\*.*?\*/', '', (ROOT/'docs/css/lclu.css').read_text(), flags=re.S)
+    preludes = re.findall(r'([^{}]+)\{', re.sub(r'@media[^{]*\{', '', css))
+    selectors = [s.strip() for prelude in preludes for s in prelude.split(',')]
+    assert selectors and [s for s in selectors if s != '.lclu' and not s.startswith('.lclu ')] == []
+    assert '<body class="lclu">' in (ROOT/'docs/lclu.html').read_text()
+
