@@ -2,9 +2,10 @@
 
 > **Note added 2026-11-06.** The published commercial shipping tab covers
 > Öresund between Helsingborg and Helsingør (12.56–12.70 E, 56.01–56.06 N).
-> `scripts/generate_marine_commercial_showcase.py` has used that area since
-> its first commit (5c44f44). The Kalmarsund location and coordinates below
-> do not match the published tab. This log is kept as it was written.
+> `scripts/generate_marine_commercial_showcase.py` has used these coordinates
+> since its first commit (5c44f44); only its docstring still said Kalmarsund
+> until 2026-11-06. The Kalmarsund location and coordinates below do not
+> match the published tab. This log is kept as it was written.
 
 > Commercial shipping tab (Kalmarsund), AI2 vessel detection, coordinate convention fix, grazing statistics with NMD cross-reference.
 
