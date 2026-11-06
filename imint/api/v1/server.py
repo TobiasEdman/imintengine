@@ -638,10 +638,12 @@ def _check_capacity() -> None:
 
 @app.get('/v1/lclu', tags=['lclu'])
 async def lclu_info():
-    from imint.inference.lclu import HISTORICAL_NOTE, legend, YEARS
+    from imint.inference.lclu import HISTORICAL_NOTE, legend, vpp_substitutions, YEARS
     return {'ready': _accepting_jobs and _lclu_service is not None,
             'model': 'TESSERA R4', 'candidate_years': YEARS, 'legend': legend(),
             'historical_note': HISTORICAL_NOTE,
+            # Years whose map uses another year's HR-VPP, with the page's wording.
+            'vpp_substitutions': vpp_substitutions(),
             'locations': _lclu_service.sources.locations() if _lclu_service else [],
             'areas': _lclu_service.sources.areas() if _lclu_service else [],
             'message': ('Välj en plats för att kontrollera årstillgång.' if _lclu_service else
