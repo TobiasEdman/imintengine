@@ -136,17 +136,19 @@ def main():
             cmap_name="RdBu", vmin=-1, vmax=1,
         )
 
-    nmd = NMDAnalyzer()
+    # The showcase stays on NMD 2018 until its images are regenerated on 2023.
+    nmd = NMDAnalyzer(config={"product": 2018})
     nmd_result = nmd.run(
         rgb, bands=bands, date=date, coords=coords,
         output_dir=out_dir, scl=scl, geo=geo,
     )
     print(f"  NMD: {nmd_result.summary()}")
 
-    # save_nmd_overlay takes (l2_raster, path) — use l2_raster for detailed classes
+    # l2_raster holds NMD 2018 level-2 indices (the detailed classes)
     l2_raster = nmd_result.outputs.get("l2_raster")
     if l2_raster is not None:
-        save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"))
+        save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"),
+                         palette="nmd2018_l2")
 
     # ── Step 4: YOLO vessel detection ────────────────────────────────
     print("\n[4/9] Running YOLO marine vessel detection...")

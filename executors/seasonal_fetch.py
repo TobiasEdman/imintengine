@@ -510,6 +510,7 @@ class SeasonalFetchExecutor:
         nmd_result = fetch_nmd_data(
             coords=coords,
             target_shape=ref_shape,
+            product=2018,
         )
         labels = nmd_raster_to_lulc(
             nmd_result.nmd_raster,

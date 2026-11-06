@@ -125,8 +125,13 @@ def run_job(job: IMINTJob) -> IMINTResult:
     summary_path = save_summary_report(results, job.date, job.output_dir)
     print(f"\n  Summary → {summary_path}")
 
-    # Generate interactive HTML report
-    _generate_html_report(job, prefix)
+    # Generate interactive HTML report; NMD content only from this run's NMD result
+    nmd_product = next(
+        (r.outputs["product"] for r in results
+         if r.analyzer == "nmd" and r.success and r.outputs.get("nmd_available")),
+        None,
+    )
+    _generate_html_report(job, prefix, nmd_product)
     print(f"{'='*60}\n")
 
     return IMINTResult(
@@ -324,20 +329,24 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
 
     elif result.analyzer == "nmd":
         if result.outputs.get("nmd_available"):
+            product = result.outputs["product"]
             l2_raster = result.outputs.get("l2_raster")
             class_stats = result.outputs.get("class_stats")
             cross_ref = result.outputs.get("cross_reference")
             if l2_raster is not None:
                 # Simple color-coded overlay (kept for quick reference)
-                save_nmd_overlay(l2_raster, os.path.join(out, f"{prefix}nmd_overlay.png"))
+                save_nmd_overlay(l2_raster, os.path.join(out, f"{prefix}nmd_overlay.png"),
+                                 palette=f"nmd{product}_l2")
                 # Rich multi-panel visualization with charts and cross-reference
                 if class_stats:
                     save_nmd_visualization(
                         l2_raster, job.rgb, class_stats, cross_ref,
                         os.path.join(out, f"{prefix}nmd_analysis.png"),
+                        product=product,
                     )
             if class_stats:
-                save_nmd_stats(class_stats, cross_ref, os.path.join(out, f"{prefix}nmd_stats.json"))
+                save_nmd_stats(class_stats, cross_ref,
+                               os.path.join(out, f"{prefix}nmd_stats.json"), product=product)
 
     elif result.analyzer == "vegetation_edge":
         seg_map = result.outputs.get("segmentation_map")
@@ -432,8 +441,13 @@ def _save_vegetation_seg_png(seg_map: np.ndarray, path: str) -> str:
     return path
 
 
-def _generate_html_report(job: IMINTJob, prefix: str) -> None:
-    """Generate interactive HTML report after all analyzers complete."""
+def _generate_html_report(job: IMINTJob, prefix: str, nmd_product: int | None) -> None:
+    """Generate interactive HTML report after all analyzers complete.
+
+    ``nmd_product`` is the NMD edition this run's NMD analyzer used, or None
+    when it did not produce NMD. NMD files left in the output directory by
+    an earlier run are then not reported: they may be another edition.
+    """
     out = job.output_dir
     h, w = job.rgb.shape[:2]
 
@@ -459,6 +473,8 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         "sjokort": f"{prefix}sjokort.png",
         "samgeo": f"{prefix}samgeo_clean.png",
     }
+    if nmd_product is None:
+        del path_candidates["nmd"]
     image_paths = {}
     for key, filename in path_candidates.items():
         full_path = os.path.join(out, filename)
@@ -469,10 +485,10 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         print("  [html_report] skipped — no images available")
         return
 
-    # Load nmd_stats if available
+    # Load this run's nmd_stats
     nmd_stats_path = os.path.join(out, f"{prefix}nmd_stats.json")
     nmd_stats = {}
-    if os.path.exists(nmd_stats_path):
+    if nmd_product is not None and os.path.exists(nmd_stats_path):
         with open(nmd_stats_path) as f:
             nmd_stats = json.load(f)
 
@@ -491,6 +507,7 @@ def _generate_html_report(job: IMINTJob, prefix: str) -> None:
         image_shape=(h, w),
         date=job.date or "unknown",
         output_path=html_path,
+        nmd_product=nmd_product,
     )
     print(f"  HTML Report → {html_path}")
 

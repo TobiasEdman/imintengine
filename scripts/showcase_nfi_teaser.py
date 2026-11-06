@@ -242,7 +242,7 @@ def write_layers(rgb_png: Path, sidecar: Path, tile_npz: Path, maps: dict[str, P
 
     out_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(rgb_crop).save(out_dir / "rgb.png", optimize=True)
-    save_nmd_overlay(l2, str(out_dir / "nmd2023.png"))
+    save_nmd_overlay(l2, str(out_dir / "nmd2023.png"), palette="nmd2018_l2")
     layers = {"rgb": (out_dir / "rgb.png", rgb_png), "nmd2023": (out_dir / "nmd2023.png", sidecar)}
     for name, crop in map_crops.items():
         Image.fromarray(crop).save(out_dir / f"{name}.png", optimize=True)
