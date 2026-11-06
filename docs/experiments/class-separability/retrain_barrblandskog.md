@@ -188,21 +188,42 @@ i en egen omträning, en ändring i taget.
      - c) andelsregeln på control:s fraktionshuvud;
      - d) andelsregeln på main:s fraktionshuvud.
 
-     Andelsregeln är `collapse_fractions_to_nfi_class` för blandskog. För
-     barrblandskog tillämpas samma regel ett steg ner: barr når 0,7, men
-     varken tall- eller granandelen når 0,7 av barrandelen. R4 poängsätts
-     som b och c.
+     Andelsregeln är `collapse_fractions_to_nfi_class` för blandskog, med
+     samma skogsgolv (0,1). För barrblandskog tillämpas samma regel ett steg
+     ner, med samma golv: barr når 0,7, men varken tall- eller granandelen
+     når 0,7 av barrandelen. R4 poängsätts som b och c.
    - **Mått:** recall, precision och F1 för blandskog, barrblandskog, tall och
-     gran, med blockbootstrap som i den primära poängsättningen.
-   - **Läsning, bestämd i förväg:** en blandklass bedöms onödig som egen
-     pixelklass om två villkor gäller samtidigt:
-     1. andelsregeln (c eller d) ger minst lika hög F1 för klassen som det
-        hårda huvudet (a), inom bootstrapintervallet;
-     2. det hårda huvudet sänker tall eller gran utanför intervallet,
-        jämfört med b.
+     gran. Jämförelser görs som parade skillnader ΔF1 med samma rumsliga
+     blockbootstrap som NFI-protokollet (`nfi_fieldtruth_0103.md`: 50 km-rutor,
+     10 000 dragningar, seed 20260818) och samma minsta relevanta skillnad,
+     SESOI = 0,02. En icke-signifikant skillnad räknas inte som likvärdighet.
+   - **Barrblandskog, läsning bestämd i förväg.** Klassen bedöms onödig som
+     egen pixelklass om båda villkoren gäller:
+     1. ΔF1 = F1(c) − F1(a) för barrblandskog har undre gräns över −0,02.
+        Andelsregeln på control:s fraktionshuvud, alltså en modell utan
+        klass 28, är då inte sämre än main:s klass 28. Jämförelsen är
+        bestämd: c mot a. d redovisas bara.
+     2. För tall eller gran har ΔF1 = F1(a) − F1(b) övre gräns under −0,02.
+        Main är då sämre än control med mer än SESOI. Sanningen är v1:s tall
+        och gran utan de härledda barrblandskogsytorna, alltså rena
+        bestånd. I a räknas en pixel som förutsägs som 28 som 28 och inte
+        som ihopslagen. Villkoret mäter vad klassen kostar de rena klasserna.
 
-     Då rekommenderas härledning ur andelar i stället. Annars behålls klassen.
-     Inga trösklar läggs till eller ändras efter att resultat har setts.
+     Gäller båda rekommenderas härledning ur andelar i stället, annars
+     behålls klassen.
+   - **Blandskog, läsning bestämd i förväg.** Båda körningarna har klass 4,
+     så villkor 2 går inte att pröva: ingen körning saknar klassen. Bara
+     villkor 1 gäller, inom control: ΔF1 = F1(c) − F1(b) för blandskog. Är
+     den undre gränsen över −0,02 kan blandskog härledas ur andelar utan
+     förlust. Ska klass 4 tas bort ur schemat krävs en egen körning utan
+     den; det avgörs inte här. Main:s motsvarighet, d mot a, redovisas bara.
+   - **Känd skillnad:** sanningens tall är tall + contorta, men
+     fraktionshuvudets tallandel har ingen contorta (`build_tradslag_fracs.py`
+     använder NMD Trädslag: tall, gran, triviallöv, ädellöv). Det gäller också
+     den primära regeln. Som känslighetsanalys redovisas resultaten även utan
+     ytor där contorta är minst 30 % av tallvolymen. Den ändrar inte
+     beslutet.
+   - Inga trösklar läggs till eller ändras efter att resultat har setts.
    - Poängsättning mot den förseglade holdouten körs bara på Tobias
      klartecken, som tidigare.
 
