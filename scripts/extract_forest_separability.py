@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Bounded frozen R4 feature extraction from historical training tiles only.
+"""Bounded frozen-model feature extraction from historical training tiles only.
+
+``--model-name``, ``--checkpoint`` and ``--num-classes`` name the frozen
+TESSERA model (R4 is ``r4``; the IM-023 models have their own names, see
+``forest_separability_schemes.check_model``); its features and predictions are
+keyed by that name.
 
 No NFI index, NFI observation, sealed holdout, or new external data is read.
 Selection is deterministic before any classification score is computed.
@@ -20,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from probe_forest_separability import CLASS_SCHEMES, ROLE, digest, sample_pixels, write_json
+from scripts.forest_separability_schemes import BUNDLE_KEYS, NUM_CLASSES_CHOICES, check_model
 
 
 def ensure_development_roots(data_dir: Path, label_dir: Path, distill_dir: Path) -> None:
@@ -121,7 +127,18 @@ def validate_selected_metadata(data, entry: dict) -> None:
         raise ValueError("authenticated pixel geometry differs from selection")
 
 
+def validate_architecture(model, native: int, num_classes: int) -> None:
+    """The probe reads R4's TESSERA head: 504 px, 128-wide, ``num_classes`` out
+    (already checked by ``check_model``)."""
+    if (native, model.embed_dim, model.num_classes) != (504, 128, num_classes):
+        raise ValueError(
+            f"unexpected architecture: img_size {native}, embed_dim {model.embed_dim}, "
+            f"{model.num_classes} classes; expected 504, 128, {num_classes}")
+
+
 def extract(args) -> None:
+    # Before any import or read: a misnamed model must not cost a pod run.
+    check_model(args.model_name, str(args.checkpoint), args.num_classes)
     import torch
     from scripts.cache_predict import file_identity
     from scripts.extract_plot_features import register_preclassifier_hook, _sample_feature
@@ -138,7 +155,8 @@ def extract(args) -> None:
                                year=args.feature_year, scheme=args.scheme,
                                audit_path=args.output / "availability.json")
     checkpoint = file_identity(args.checkpoint)
-    contract = {"role": ROLE, "scheme": args.scheme, "checkpoint": checkpoint, "selection": selected,
+    contract = {"role": ROLE, "scheme": args.scheme, "model_name": args.model_name,
+                "num_classes": args.num_classes, "checkpoint": checkpoint, "selection": selected,
                 "feature_year": args.feature_year, "reference_year": 2023,
                 "reference_year_gap": 2023 - args.feature_year, "per_class_cap": args.per_class,
                 "source_manifest_sha256": digest(ROOT / "SOURCE_MANIFEST.json")
@@ -149,8 +167,7 @@ def extract(args) -> None:
     model, epoch, _, native = load_model(
         str(args.checkpoint), torch.device("cpu"), backbone_name="tessera_v1", img_size=504,
         expected_checkpoint_sha256=checkpoint["sha256"], expected_checkpoint_size=checkpoint["size"])
-    if native != 504 or model.num_classes != 28 or model.embed_dim != 128:
-        raise ValueError("unexpected R4 architecture")
+    validate_architecture(model, native, args.num_classes)
     model.eval()
     aux_names = inference_aux_names(model.ck_cfg, model.n_aux_channels)
     store = register_preclassifier_hook(model)
@@ -189,12 +206,15 @@ def extract(args) -> None:
                     raise ValueError("invalid feature capture or logits")
                 vectors = _sample_feature(store["feat"], r, c, 504)
                 west, _, _, north = entry["bbox_3006"]
-                sample = {"r4": vectors, "tessera": emb[:, r, c].T.copy(),
+                sample = {args.model_name: vectors, "tessera": emb[:, r, c].T.copy(),
                           "raw_nmd": raw[r, c], "tile": np.full(len(r), path.stem),
                           "xy": np.column_stack((west + (c + 4.5) * 10,
                                                   north - (r + 4.5) * 10)),
-                          "r4_prediction": logits.argmax(1)[0, r, c].numpy(),
+                          f"{args.model_name}_prediction": logits.argmax(1)[0, r, c].numpy(),
                           "base_label": base_labels[r, c], "distilled_label": distilled[r, c]}
+                if set(sample) != {args.model_name, f"{args.model_name}_prediction",
+                                   *BUNDLE_KEYS}:
+                    raise AssertionError("sample keys drifted from BUNDLE_KEYS")
                 if not np.isfinite(vectors).all():
                     raise ValueError("nonfinite frozen features")
             finally:
@@ -223,6 +243,10 @@ def main():
     ap.add_argument("--label-dir", required=True, type=Path)
     ap.add_argument("--distill-dir", required=True, type=Path)
     ap.add_argument("--checkpoint", required=True, type=Path)
+    ap.add_argument("--model-name", required=True,
+                    help="keys the frozen model's features and predictions")
+    ap.add_argument("--num-classes", required=True, type=int,
+                    choices=NUM_CLASSES_CHOICES, help="the checkpoint's class count")
     ap.add_argument("--output", required=True, type=Path)
     ap.add_argument("--feature-year", required=True, choices=(2022, 2023), type=int)
     ap.add_argument("--scheme", required=True, choices=sorted(CLASS_SCHEMES))

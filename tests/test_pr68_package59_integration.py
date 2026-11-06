@@ -57,7 +57,8 @@ def test_ladder_uses_and_fingerprints_canonical_metrics(tmp_path, monkeypatch):
     assert result['confusion_matrix'][1, 0] == 1
     assert result['confusion_matrix'].sum() == 3
     assert ladder.derive(result['confusion_matrix'])['overall_accuracy'] == pytest.approx(2/3, abs=1e-4)
-    args = SimpleNamespace(holdout_dir=tmp_path, label_dir=tmp_path, ckpt_root=tmp_path)
+    args = SimpleNamespace(holdout_dir=tmp_path, label_dir=tmp_path, ckpt_root=tmp_path,
+                           num_classes=28, fold=None, checkpoint=None, cell_name=None)
     (tmp_path/'fixture.npz').write_bytes(b'synthetic-fingerprint-input')
     fingerprint = ladder.run_fingerprint(['fixture'], args)
     expected = Path(metrics.__file__)

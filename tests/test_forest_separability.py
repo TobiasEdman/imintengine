@@ -8,6 +8,7 @@ from scripts.probe_forest_separability import (
     CLASS_SCHEMES, ROLE, class_labels, digest, metrics, run_probe, sample_pixels, spatial_folds,
 )
 from scripts.extract_forest_separability import ensure_development_roots, tile_candidates
+from scripts.forest_separability_schemes import DEFAULT_CHECKPOINT
 
 
 def test_raw_codes_cannot_be_confused_with_reduced_training_codes():
@@ -79,7 +80,7 @@ def test_spatial_split_buffers_group_borders_and_scores_each_point_once():
         spatial_folds(np.vstack((xy, xy[:1])), n_splits=3, block_m=10000, buffer_m=500)
 
 
-def make_bundle(tmp_path, scheme="binary"):
+def make_bundle(tmp_path, scheme="binary", *, model="r4", num_classes=28, prediction=None):
     rng = np.random.default_rng(8)
     k = len(CLASS_SCHEMES[scheme])
     per_group = 12 * k
@@ -89,18 +90,23 @@ def make_bundle(tmp_path, scheme="binary"):
     signal = (np.eye(k)[y] * 5 + rng.normal(0, 0.1, (len(y), k))).astype(np.float32)
     first_code = np.array([codes[0] for _, codes in CLASS_SCHEMES[scheme]], np.uint16)
     p = tmp_path / "features.npz"
-    np.savez(p, raw_nmd=first_code[y], xy=xy, tessera=signal, r4=signal * 2,
+    np.savez(p, raw_nmd=first_code[y], xy=xy, tessera=signal, **{model: signal * 2},
              tile=np.repeat(np.arange(8), per_group),
              base_label=np.full(len(y), 3, np.uint8), distilled_label=(y % 4 + 1).astype(np.uint8),
-             r4_prediction=(y % 4 + 1).astype(np.int64))
-    p.with_suffix('.json').write_text(json.dumps({'role': ROLE, 'scheme': scheme, 'feature_year': 2022,
-                                                  'reference_year': 2023, 'bundle_sha256': digest(p)}))
+             **{f"{model}_prediction": (y % 4 + 1 if prediction is None else prediction(y))
+                .astype(np.int64)})
+    p.with_suffix('.json').write_text(json.dumps({
+        'role': ROLE, 'scheme': scheme, 'model_name': model, 'num_classes': num_classes,
+        'checkpoint': {'path': (DEFAULT_CHECKPOINT if model == 'r4'
+                                else f'/data/checkpoints/im023/{model}/best_model.pt'),
+                       'size': 1, 'sha256': 'c' * 64},
+        'feature_year': 2022, 'reference_year': 2023, 'bundle_sha256': digest(p)}))
     return p
 
 
 def test_real_disk_probe_separable_signal_and_majority_baseline(tmp_path):
     path = make_bundle(tmp_path)
-    report = run_probe(path, scheme="binary", n_splits=4)
+    report = run_probe(path, scheme="binary", model_name="r4", n_splits=4)
     assert report['feature_year'] == 2022 and report['reference_year_gap'] == 1
     assert report['n_samples'] == 192 and report['n_tiles'] == 8
     for model in report['models'].values():
@@ -113,7 +119,7 @@ def test_real_disk_probe_separable_signal_and_majority_baseline(tmp_path):
 
 def test_forest5_probe_reports_full_confusion_and_assigned_classes(tmp_path):
     path = make_bundle(tmp_path, "forest5")
-    report = run_probe(path, scheme="forest5", n_splits=4)
+    report = run_probe(path, scheme="forest5", model_name="r4", n_splits=4)
     assert report['scheme'] == 'forest5' and report['n_samples'] == 480
     for model in report['models'].values():
         assert model['balanced_accuracy'] == 1
@@ -132,22 +138,22 @@ def test_receipt_and_role_fail_closed(tmp_path):
     receipt = path.with_suffix('.json')
     receipt.write_text(json.dumps({'role': 'sealed_holdout', 'bundle_sha256': digest(path)}))
     with pytest.raises(ValueError, match='development'):
-        run_probe(path, scheme="binary")
+        run_probe(path, scheme="binary", model_name="r4")
     receipt.write_text(json.dumps({'role': ROLE, 'scheme': 'binary', 'feature_year': 2022,
                                    'reference_year': 2023, 'bundle_sha256': '0' * 64}))
     with pytest.raises(ValueError, match='receipt'):
-        run_probe(path, scheme="binary")
+        run_probe(path, scheme="binary", model_name="r4")
 
 
 def test_probe_scheme_must_match_extraction_receipt(tmp_path):
     path = make_bundle(tmp_path)
     with pytest.raises(ValueError, match="scheme 'binary' is not 'forest5'"):
-        run_probe(path, scheme="forest5")
+        run_probe(path, scheme="forest5", model_name="r4")
     receipt = json.loads(path.with_suffix('.json').read_text())
     del receipt['scheme']
     path.with_suffix('.json').write_text(json.dumps(receipt))
     with pytest.raises(ValueError, match="scheme None"):
-        run_probe(path, scheme="binary")
+        run_probe(path, scheme="binary", model_name="r4")
 
 
 def test_root_guard_rejects_evaluation_and_symlinks(tmp_path):
@@ -269,7 +275,244 @@ def test_renderer_runs_without_numpy_on_the_operator_machine():
 
 
 def test_sumpskog5_probe_runs_end_to_end_on_disk(tmp_path):
-    report = run_probe(make_bundle(tmp_path, "sumpskog5"), scheme="sumpskog5", n_splits=4)
+    report = run_probe(make_bundle(tmp_path, "sumpskog5"), scheme="sumpskog5", model_name="r4",
+                       n_splits=4)
     assert report['scheme'] == 'sumpskog5' and 'dryland' not in report['reference']
     assert list(report['models']['r4']['per_class'])[2] == 'barrblandskog på våtmark'
     assert report['models']['tessera']['balanced_accuracy'] == 1
+
+
+# ── the frozen model as a parameter (IM-023 29-class model) ─────────────────
+
+
+def _main_prediction(y):
+    """forest5: half of barrblandskog (index 2) called 28, the rest 3; others 1."""
+    half = np.arange(len(y)) % 2 == 0
+    return np.where(y == 2, np.where(half, 28, 3), 1)
+
+
+def test_29_class_probe_reports_the_share_called_barrblandskog(tmp_path):
+    path = make_bundle(tmp_path, "forest5", model="main", num_classes=29,
+                       prediction=_main_prediction)
+    report = run_probe(path, scheme="forest5", model_name="main", n_splits=4)
+    assert set(report["models"]) == {"tessera", "main"}
+    assert report["frozen_model"] == {"name": "main", "num_classes": 29,
+                                      "checkpoint_sha256": "c" * 64}
+    assert report["assigned_unified_class"]["main_prediction"]["barrblandskog"] == {
+        "28": 48, "3": 48}
+    share = report["predicted_class_28_share"]
+    assert share["barrblandskog"] == 0.5
+    assert share["lövskog (115–117)"] == 0.0 and share["tallskog"] == 0.0
+    json.dumps(report, allow_nan=False)
+
+
+def test_28_class_probe_reports_no_class_28_share(tmp_path):
+    report = run_probe(make_bundle(tmp_path, "forest5"), scheme="forest5", model_name="r4",
+                       n_splits=4)
+    assert report["frozen_model"]["name"] == "r4"
+    assert report["predicted_class_28_share"] is None
+    assert "r4_prediction" in report["assigned_unified_class"]
+
+
+def test_probe_model_must_match_the_extraction_receipt(tmp_path):
+    path = make_bundle(tmp_path, "forest5", model="main", num_classes=29)
+    with pytest.raises(ValueError, match="model 'main' is not 'r4'"):
+        run_probe(path, scheme="forest5", model_name="r4")
+    receipt = json.loads(path.with_suffix(".json").read_text())
+    receipt["num_classes"] = 27
+    path.with_suffix(".json").write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="num_classes"):
+        run_probe(path, scheme="forest5", model_name="main")
+
+
+def test_probe_cli_takes_the_model_name(tmp_path, monkeypatch):
+    import sys
+    from scripts import probe_forest_separability as probe
+    path = make_bundle(tmp_path, "forest5", model="main", num_classes=29,
+                       prediction=_main_prediction)
+    out = tmp_path / "probe.json"
+    monkeypatch.setattr(sys, "argv", ["probe", "--features", str(path), "--output", str(out),
+                                      "--scheme", "forest5", "--model-name", "main", "--folds", "4"])
+    probe.main()
+    assert json.loads(out.read_text())["predicted_class_28_share"]["barrblandskog"] == 0.5
+
+
+MAIN_CHECKPOINT = '/data/checkpoints/im023/tessera_b28/best_model.pt'
+
+
+@pytest.mark.parametrize("model_classes,requested,native,embed,ok", [
+    (28, 28, 504, 128, True), (29, 29, 504, 128, True),
+    (28, 29, 504, 128, False), (29, 28, 504, 128, False),
+    (29, 29, 512, 128, False), (29, 29, 504, 256, False)])
+def test_extract_accepts_28_and_29_class_heads_only(model_classes, requested, native, embed, ok):
+    """Other class counts never get this far: check_model refuses them first."""
+    from types import SimpleNamespace
+    from scripts.extract_forest_separability import validate_architecture
+    model = SimpleNamespace(num_classes=model_classes, embed_dim=embed)
+    if ok:
+        validate_architecture(model, native, requested)
+    else:
+        with pytest.raises(ValueError):
+            validate_architecture(model, native, requested)
+
+
+@pytest.mark.parametrize("name,checkpoint,num_classes,match", [
+    ("main", MAIN_CHECKPOINT, 27, "num_classes"),
+    ("r4", MAIN_CHECKPOINT, 28, "is R4"),
+    ("main", "/data/checkpoints/ladder/tessera_r4/best_model.pt", 29, "is R4")])
+def test_extract_refuses_a_misnamed_model_before_reading_anything(tmp_path, name, checkpoint,
+                                                                   num_classes, match):
+    from argparse import Namespace
+    from scripts import extract_forest_separability as ex
+    args = Namespace(model_name=name, checkpoint=Path(checkpoint), num_classes=num_classes,
+                     data_dir=tmp_path / 'absent', label_dir=tmp_path, distill_dir=tmp_path,
+                     output=tmp_path / 'out', per_class=128, max_tiles=24,
+                     feature_year=2022, scheme='forest5')
+    with pytest.raises(ValueError, match=match):
+        ex.extract(args)
+    assert not (tmp_path / 'out').exists()
+
+
+def test_extract_cli_requires_the_model_arguments(monkeypatch):
+    import sys
+    from scripts import extract_forest_separability as ex
+    seen = []
+    monkeypatch.setattr(ex, "extract", seen.append)
+    base = ["extract", "--data-dir", "d", "--label-dir", "l", "--distill-dir", "t",
+            "--checkpoint", "c.pt", "--output", "o", "--feature-year", "2022",
+            "--scheme", "forest5"]
+    for missing in ([], ["--model-name", "main"], ["--num-classes", "29"]):
+        monkeypatch.setattr(sys, "argv", base + missing)
+        with pytest.raises(SystemExit):
+            ex.main()
+    monkeypatch.setattr(sys, "argv", base + ["--model-name", "main", "--num-classes", "29"])
+    ex.main()
+    assert (seen[-1].model_name, seen[-1].num_classes) == ("main", 29)
+    monkeypatch.setattr(sys, "argv", base + ["--model-name", "main", "--num-classes", "30"])
+    with pytest.raises(SystemExit):
+        ex.main()
+
+
+def test_class_constants_match_the_unified_schema():
+    """The stdlib-only module mirrors the schema it cannot import without numpy."""
+    from imint.schema.unified_schema import (
+        NUM_CLASSES_BEFORE_BARRBLANDSKOG, NUM_UNIFIED_CLASSES, UNIFIED_CLASS_NAMES)
+    from scripts.forest_separability_schemes import (
+        BARRBLANDSKOG_CLASS, DEFAULT_NUM_CLASSES, NUM_CLASSES_CHOICES)
+    assert NUM_CLASSES_CHOICES == (NUM_CLASSES_BEFORE_BARRBLANDSKOG, NUM_UNIFIED_CLASSES)
+    assert DEFAULT_NUM_CLASSES == NUM_CLASSES_BEFORE_BARRBLANDSKOG
+    assert UNIFIED_CLASS_NAMES[BARRBLANDSKOG_CLASS] == "barrblandskog"
+
+
+def test_model_names_and_evidence_tags():
+    from scripts.forest_separability_schemes import (
+        BUNDLE_KEYS, DEFAULT_CHECKPOINT, check_model, run_tag)
+    check_model("main", MAIN_CHECKPOINT, 29)
+    check_model("control", '/data/checkpoints/im023/tessera_control/best_model.pt', 28)
+    check_model("r4", DEFAULT_CHECKPOINT, 28)
+    check_model("r4", "/data/checkpoints/ladder//tessera_r4/./best_model.pt", 28)
+    for bad in ("Main", "r4-x", "a" * 13, "", "4r", *BUNDLE_KEYS):
+        with pytest.raises(ValueError, match="model name"):
+            check_model(bad, MAIN_CHECKPOINT, 29)
+    assert {"tile", "xy", "tessera"} <= set(BUNDLE_KEYS)
+    with pytest.raises(ValueError, match="num_classes"):
+        check_model("main", MAIN_CHECKPOINT, 30)
+    for name, checkpoint, classes in (("r4", MAIN_CHECKPOINT, 28),          # R4's name, other weights
+                                      ("r4", DEFAULT_CHECKPOINT, 29),        # R4 with 29 classes
+                                      ("main", DEFAULT_CHECKPOINT, 28),      # R4's weights renamed
+                                      ("main", "/data/checkpoints/ladder//tessera_r4/best_model.pt", 28)):
+        with pytest.raises(ValueError, match="is R4"):
+            check_model(name, checkpoint, classes)
+    assert run_tag("r4", "forest5", 2022) == "forest5-2022"     # R4's existing evidence
+    assert run_tag("main", "forest5", 2022) == "main-forest5-2022"
+
+
+def test_model_arguments_are_all_given_or_none():
+    from scripts.forest_separability_schemes import DEFAULT_CHECKPOINT, resolve_model
+    assert resolve_model(None, None, None) == ("r4", DEFAULT_CHECKPOINT, 28)
+    assert resolve_model("main", MAIN_CHECKPOINT, 29) == ("main", MAIN_CHECKPOINT, 29)
+    for partial in (("main", None, None), (None, MAIN_CHECKPOINT, None), (None, None, 29),
+                    ("main", MAIN_CHECKPOINT, None)):
+        with pytest.raises(ValueError, match="go together"):
+            resolve_model(*partial)
+
+
+def test_schemes_cli_validates_a_run_and_prints_its_tags(capsys):
+    from scripts.forest_separability_schemes import main
+    main(["--scheme", "forest5", "--", "2022", "2023"])
+    assert capsys.readouterr().out.split() == ["forest5-2022", "forest5-2023"]
+    main(["--model-name", "main", "--checkpoint", MAIN_CHECKPOINT, "--num-classes", "29",
+          "--scheme", "forest5", "--", "2022"])
+    assert capsys.readouterr().out.split() == ["main-forest5-2022"]
+    for bad in (["--scheme", "forest5", "--", "2022", "--model-name", "main"],  # trailing flag
+                ["--scheme", "forest5", "--", "2022", "2024"],
+                ["--scheme", "forest5", "--", "2022", "2022"],
+                ["--scheme", "forest4", "--", "2022"],
+                ["--model-name", "main", "--scheme", "forest5", "--", "2022"]):
+        with pytest.raises(SystemExit) as exc:
+            main(bad)
+        assert exc.value.code == 2
+
+
+def _rendered(output):
+    items = json.loads((output / 'job.json').read_text())['items']
+    configmap, job = items
+    env = {e['name']: e['value'] for e in job['spec']['template']['spec']['containers'][0]['env']}
+    return configmap, job, env
+
+
+def test_rendered_job_defaults_to_r4(tmp_path):
+    from scripts.render_forest_separability_job import render
+    render(tmp_path / 'r4', scheme='forest5', feature_year=2022)
+    _, job, env = _rendered(tmp_path / 'r4')
+    assert job['metadata']['name'].startswith('forest-separability-0127-forest5-2022-')
+    assert (env['PROBE_MODEL_NAME'], env['PROBE_CHECKPOINT'], env['PROBE_NUM_CLASSES']) == (
+        'r4', '/data/checkpoints/ladder/tessera_r4/best_model.pt', '28')
+    assert json.loads((tmp_path / 'r4' / 'identity.json').read_text())['tag'] == 'forest5-2022'
+
+
+def test_rendered_job_for_the_29_class_model(tmp_path):
+    import base64, io, tarfile
+    from scripts.render_forest_separability_job import BOOTSTRAP, render
+    render(tmp_path / 'main', scheme='forest5', feature_year=2022, model_name='main',
+           checkpoint=MAIN_CHECKPOINT, num_classes=29)
+    configmap, job, env = _rendered(tmp_path / 'main')
+    name = job['metadata']['name']
+    assert name.startswith('forest-separability-0127-main-forest5-2022-') and len(name) <= 63
+    assert (env['PROBE_MODEL_NAME'], env['PROBE_CHECKPOINT'], env['PROBE_NUM_CLASSES']) == (
+        'main', MAIN_CHECKPOINT, '29')
+    with tarfile.open(fileobj=io.BytesIO(base64.b64decode(configmap['binaryData']['source.tar.gz']))) as tar:
+        manifest = json.loads(tar.extractfile('SOURCE_MANIFEST.json').read())
+    assert (manifest['model_name'], manifest['checkpoint'], manifest['num_classes']) == (
+        'main', MAIN_CHECKPOINT, 29)
+    assert json.loads((tmp_path / 'main' / 'identity.json').read_text())['tag'] == 'main-forest5-2022'
+    # Both pod steps receive the name; extraction also the checkpoint and class count.
+    assert configmap['data']['bootstrap.py'] == BOOTSTRAP
+    assert BOOTSTRAP.count("'--model-name',os.environ['PROBE_MODEL_NAME']") == 2
+    assert "'--checkpoint',os.environ['PROBE_CHECKPOINT']" in BOOTSTRAP
+    assert "'--num-classes',os.environ['PROBE_NUM_CLASSES']" in BOOTSTRAP
+    render(tmp_path / 'long', scheme='sumpskog5', feature_year=2023, model_name='a' * 12,
+           checkpoint=MAIN_CHECKPOINT, num_classes=29)
+    assert len(_rendered(tmp_path / 'long')[1]['metadata']['name']) <= 63
+
+
+@pytest.mark.parametrize("kwargs,match", [
+    ({'model_name': 'main', 'checkpoint': '/data/other/best_model.pt', 'num_classes': 29},
+     'checkpoint'),
+    ({'model_name': 'main', 'checkpoint': '/data/checkpoints/../secret/best_model.pt',
+      'num_classes': 29}, 'checkpoint'),
+    ({'model_name': 'main', 'checkpoint': 'data/checkpoints/x/best_model.pt',
+      'num_classes': 29}, 'checkpoint'),
+    ({'model_name': 'main', 'checkpoint': '/data/checkpoints/x/best_model.pth',
+      'num_classes': 29}, 'checkpoint'),
+    ({'model_name': 'tessera', 'checkpoint': MAIN_CHECKPOINT, 'num_classes': 29}, 'model name'),
+    ({'model_name': 'main', 'checkpoint': MAIN_CHECKPOINT, 'num_classes': 30}, 'num_classes'),
+    ({'model_name': 'r4', 'checkpoint': MAIN_CHECKPOINT, 'num_classes': 28}, 'is R4'),
+    ({'model_name': 'main'}, 'go together'),
+    ({'checkpoint': MAIN_CHECKPOINT}, 'go together'),
+])
+def test_render_refuses_bad_model_arguments(tmp_path, kwargs, match):
+    from scripts.render_forest_separability_job import render
+    with pytest.raises(ValueError, match=match):
+        render(tmp_path / 'bad', scheme='forest5', feature_year=2022, **kwargs)
+    assert not (tmp_path / 'bad').exists()
