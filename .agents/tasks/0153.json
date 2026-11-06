@@ -1,0 +1,13 @@
+{
+  "id": "0153",
+  "subject": "Pre-register the mixed-class comparison for the IM-023 evaluation",
+  "description": "Tobias asked on 2026-11-06, during the IM-023 full runs and before any evaluation result, to pre-register whether the two mixed forest classes, barrblandskog (28) and blandskog (4), are meaningful classes at 10 m pixels or are better derived from the fraction head's species shares; 'testa blandskog samtidigt'. Scope: one new item under the evaluation step of docs/experiments/class-separability/retrain_barrblandskog.md that fixes the truth (NFI species volumes; sealed truth v1 unchanged), the predictors, the metrics and the decision rule in advance. No code, no scoring; scoring against the sealed holdout still needs Tobias's go. Review: Codex.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/im023-mixed-prereg",
+  "created_at": "2026-11-06T13:23:54Z",
+  "updated_at": "2026-11-06T13:25:44Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-06T13:25:44Z"
+}
