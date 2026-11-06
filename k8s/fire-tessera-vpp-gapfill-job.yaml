@@ -17,7 +17,8 @@
 # Image and checkout follow k8s/lclu-vpp-gapfill-job.yaml (task 0128, which
 # filled the shared cache). Unlike 0128, the Python packages are installed from
 # the hash-locked k8s/fire-tessera-vpp-gapfill-requirements.lock in the
-# checkout (Tobias 2026-11-06: pin before running), so SRC_SHA must contain it.
+# checkout (Tobias 2026-11-06: pin before running), so SRC_SHA must contain it:
+# c3bfb78 adds the lock; prefetch_vpp_wekeo.py is unchanged from main 72b39c9.
 # Expected: 20 COGs, ~3.1 GB (33VWJ years are ~760 MB).
 #
 # Step 2, after this Job succeeds: k8s/fire-tessera-render-job.yaml.
@@ -61,7 +62,7 @@ spec:
           env:
             - { name: VPP_SOURCE,     value: "wekeo" }
             - { name: VPP_WEKEO_DIR,  value: "/data/vpp_wekeo_fire" }
-            - { name: SRC_SHA,        value: "72b39c9c33d76e4c58dd52358ef9608c1800aead" }
+            - { name: SRC_SHA,        value: "c3bfb7844eca29b22c1de1db06bb091d41800433" }
             - { name: FIRE_MGRS_TILE, value: "33VWJ" }
             - { name: FIRE_VPP_YEARS, value: "2017,2019,2020,2023" }
           envFrom:
