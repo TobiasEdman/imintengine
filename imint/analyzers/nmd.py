@@ -5,6 +5,17 @@ Cross-references other analyzer results with land cover classes from NMD.
 Instead of just reporting "40% change", we can say "change occurred in
 60% forest, 30% cropland, 10% developed land".
 
+The NMD edition is the analyzer config's ``product`` (2018 or 2023); there
+is no default. The engine configs choose 2023.
+
+- NMD 2023 basskikt v2.1: Naturvårdsverket's own 55 classes and colours
+  (``imint.schema.nmd2023``). Level 2 is each class, keyed by its code as
+  a string ("111", "4211"); level 1 is the klassgrupp. 0 is outside
+  coverage, reported as "outside"; any other code outside the legend makes
+  the analyzer fail.
+- NMD 2018 basskikt v1.1: the 19 level-2 groups below; unknown codes count
+  as "unclassified".
+
 NMD 2018 Basskikt class codes:
     111      Tallskog (pine forest)
     112      Granskog (spruce forest)
@@ -40,6 +51,7 @@ import numpy as np
 
 from .base import BaseAnalyzer, AnalysisResult
 from ..fetch import fetch_nmd_data, FetchError
+from ..schema.nmd2023 import NMD2023_CLASSES, NMD2023_LEVEL1, NMD2023_OUTSIDE
 
 
 # ── NMD Class Mapping ────────────────────────────────────────────────────────
@@ -168,6 +180,27 @@ NMD2018_LEGEND = NMDLegend(
     unmapped_key="unclassified",
 )
 
+NMD2023_LEGEND = NMDLegend(
+    product=2023,
+    level1={key: codes for key, (_name, codes) in NMD2023_LEVEL1.items()},
+    level2={str(code): frozenset({code}) for code in NMD2023_CLASSES},
+    unmapped_key="outside",
+    unmapped_codes=frozenset({NMD2023_OUTSIDE}),
+)
+
+NMD_LEGENDS = {2018: NMD2018_LEGEND, 2023: NMD2023_LEGEND}
+
+
+def nmd_legend(product: int) -> NMDLegend:
+    """The class tables of NMD ``product`` (2018 or 2023); anything else raises."""
+    try:
+        return NMD_LEGENDS[product]
+    except (KeyError, TypeError):
+        raise ValueError(
+            f"NMD product must be one of {tuple(NMD_LEGENDS)}, got {product!r}; "
+            "set 'product' in the nmd analyzer config"
+        ) from None
+
 
 def nmd_code_to_l1(code: int) -> str:
     """Map an NMD 2018 class code to its Level 1 category name.
@@ -233,9 +266,11 @@ def nmd_raster_to_l2(nmd_raster: np.ndarray) -> np.ndarray:
 class NMDAnalyzer(BaseAnalyzer):
     """NMD Land Cover analyzer.
 
-    Fetches NMD data from DES, computes per-class statistics, and
-    cross-references with previous analyzer results (change detection,
-    spectral indices, object detection).
+    Reads the NMD edition named by config ``product`` (2018 from DES, 2023
+    from the national raster; optional ``raster_path`` overrides
+    ``$NMD2023_PATH``), computes per-class statistics, and cross-references
+    with previous analyzer results (change detection, spectral indices,
+    object detection).
     """
 
     name = "nmd"
@@ -249,6 +284,7 @@ class NMDAnalyzer(BaseAnalyzer):
         output_dir="outputs",
         previous_results: list[AnalysisResult] | None = None,
     ) -> AnalysisResult:
+        legend = nmd_legend(self.config.get("product"))
         if coords is None:
             return AnalysisResult(
                 analyzer=self.name,
@@ -257,8 +293,6 @@ class NMDAnalyzer(BaseAnalyzer):
                 metadata={"reason": "no_coords"},
             )
 
-        legend = NMD2018_LEGEND
-
         # Fetch NMD raster
         h, w = rgb.shape[:2]
         try:
@@ -266,6 +300,7 @@ class NMDAnalyzer(BaseAnalyzer):
                 coords=coords,
                 target_shape=(h, w),
                 product=legend.product,
+                raster_path=self.config.get("raster_path"),
             )
             nmd_raster = nmd_result.nmd_raster
         except (FetchError, ImportError) as e:
@@ -294,6 +329,7 @@ class NMDAnalyzer(BaseAnalyzer):
             success=True,
             outputs={
                 "nmd_available": True,
+                "product": legend.product,
                 "nmd_raster": nmd_raster,
                 "l1_raster": l1_raster,
                 "l2_raster": l2_raster,

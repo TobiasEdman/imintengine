@@ -136,7 +136,8 @@ def main():
             cmap_name="RdBu", vmin=-1, vmax=1,
         )
 
-    nmd = NMDAnalyzer()
+    # The showcase stays on NMD 2018 until its images are regenerated on 2023.
+    nmd = NMDAnalyzer(config={"product": 2018})
     nmd_result = nmd.run(
         rgb, bands=bands, date=date, coords=coords,
         output_dir=out_dir, scl=scl, geo=geo,

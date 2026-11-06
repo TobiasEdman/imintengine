@@ -2,7 +2,8 @@
 Integration test — runs the full engine pipeline end-to-end.
 
 Verifies that run_job() produces valid output files in the correct formats.
-NMD analyzer is mocked to avoid DES connections during testing.
+The NMD fetch is mocked; the engine config asks for NMD 2023, so the mock
+returns uint16 NMD 2023 codes as the national raster would.
 """
 from __future__ import annotations
 
@@ -20,16 +21,19 @@ from imint.fetch import NMDFetchResult
 
 @pytest.fixture(autouse=True)
 def _mock_nmd_fetch(monkeypatch):
-    """Mock NMD fetch for all integration tests to avoid DES connections."""
+    """Mock the NMD fetch for all integration tests (no raster or DES needed)."""
     def _fake_fetch(**kwargs):
+        assert kwargs["product"] == 2023, "engine config must choose NMD 2023"
         target_shape = kwargs.get("target_shape", (64, 64))
         h, w = target_shape or (64, 64)
-        # Mixed NMD raster: forest(111), cropland(3), water(61)
-        raster = np.zeros((h, w), dtype=np.uint8)
+        # Mixed NMD 2023 raster: forest(111), cropland(3), open land(4211, > 255),
+        # water(61)
+        raster = np.zeros((h, w), dtype=np.uint16)
         raster[:h//3, :] = 111     # forest
         raster[h//3:2*h//3, :] = 3  # cropland
+        raster[h//3:2*h//3, :8] = 4211  # torr buskdominerad mark
         raster[2*h//3:, :] = 61     # water
-        return NMDFetchResult(nmd_raster=raster, from_cache=True)
+        return NMDFetchResult(nmd_raster=raster)
 
     monkeypatch.setattr("imint.analyzers.nmd.fetch_nmd_data", _fake_fetch)
 
@@ -142,6 +146,31 @@ class TestRunJobEndToEnd:
         assert "object_detection" in names
         assert "prithvi" in names
         assert "nmd" in names
+
+    def test_nmd_outputs_are_nmd_2023(self, tmp_path):
+        """Stats, overlay, analysis figure and report carry NMD 2023's own classes."""
+        from imint.schema.nmd2023 import NMD2023_CLASSES
+
+        job = _make_job(tmp_path)
+        run_job(job)
+        out = job.output_dir
+
+        with open(os.path.join(out, "2022-06-15_nmd_stats.json")) as f:
+            stats = json.load(f)
+        assert stats["product"] == 2023
+        assert set(stats["class_stats"]["level2"]) == {"111", "3", "4211", "61"}
+        assert set(stats["class_stats"]["level1"]) == {"forest", "cropland", "open_land", "water"}
+
+        overlay = np.array(Image.open(os.path.join(out, "2022-06-15_nmd_overlay.png")))
+        for (row, col), code in (((0, 0), 111), ((30, 0), 4211), ((30, 40), 3), ((60, 0), 61)):
+            np.testing.assert_array_equal(
+                overlay[row, col], list(bytes.fromhex(NMD2023_CLASSES[code][1][1:])))
+        assert os.path.getsize(os.path.join(out, "2022-06-15_nmd_analysis.png")) > 0
+
+        with open(os.path.join(out, "2022-06-15_imint_report.html"), encoding="utf-8") as f:
+            html = f.read()
+        assert "NMD 2023 Marktäcke (Nivå 2)" in html
+        assert "Torr buskdominerad mark" in html and "Tallskog på fastmark" in html
 
     def test_detections_geojson_valid(self, tmp_path):
         """Detections GeoJSON should be valid GeoJSON format."""

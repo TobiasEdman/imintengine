@@ -313,7 +313,8 @@ def main():
     # ── Step 5: NMD land cover ──────────────────────────────────────
     print("\n[5] Running NMD analysis...")
     try:
-        nmd = NMDAnalyzer()
+        # The showcase stays on NMD 2018 until its images are regenerated on 2023.
+        nmd = NMDAnalyzer(config={"product": 2018})
         nmd_result = nmd.run(
             ref_rgb, bands=ref_bands, date=ref_date,
             coords=coords, output_dir=out_dir, geo=geo,

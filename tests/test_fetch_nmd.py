@@ -525,6 +525,35 @@ class TestNMDExports:
             save_nmd_overlay(np.full((2, 2), 111, dtype=np.uint8), path, palette="nmd2018_l2")
         assert not os.path.exists(path)
 
+    def test_overlay_2023_uses_the_official_colours(self, tmp_path):
+        """NMD 2023 level-2 indices render in the QML colours; 0 (outside) is grey."""
+        from imint.analyzers.nmd import NMD2023_LEGEND
+        from imint.exporters.export import save_nmd_overlay
+        from imint.schema.nmd2023 import NMD2023_CLASSES
+        from PIL import Image
+
+        raw = np.array([[111, 4211, 62, 0], [413, 4233, 3, 54]], dtype=np.uint16)
+        path = str(tmp_path / "nmd2023.png")
+        save_nmd_overlay(NMD2023_LEGEND.l2_raster(raw), path, palette="nmd2023_l2")
+        arr = np.array(Image.open(path))
+        for (r, c), code in np.ndenumerate(raw):
+            expected = [128, 128, 128] if code == 0 else list(bytes.fromhex(NMD2023_CLASSES[code][1][1:]))
+            np.testing.assert_array_equal(arr[r, c], expected, err_msg=str(code))
+
+    def test_visualization_2023_and_unknown_product(self, tmp_path):
+        from imint.analyzers.nmd import NMD2023_LEGEND, _compute_class_stats
+        from imint.exporters.export import save_nmd_visualization
+
+        raw = np.array([[111, 4211], [62, 0]], dtype=np.uint16).repeat(10, 0).repeat(10, 1)
+        stats = _compute_class_stats(raw, NMD2023_LEGEND)
+        rgb = np.zeros((*raw.shape, 3), dtype=np.float32)
+        path = str(tmp_path / "nmd_analysis.png")
+        save_nmd_visualization(NMD2023_LEGEND.l2_raster(raw), rgb, stats, None, path, product=2023)
+        assert os.path.getsize(path) > 0
+        with pytest.raises(ValueError, match="no NMD level-2 display table"):
+            save_nmd_visualization(NMD2023_LEGEND.l2_raster(raw), rgb, stats, None,
+                                   str(tmp_path / "x.png"), product=2020)
+
     def test_save_nmd_stats(self, tmp_path):
         """NMD stats JSON should be valid and contain expected keys."""
         import json
@@ -545,12 +574,13 @@ class TestNMDExports:
         }
 
         path = str(tmp_path / "nmd_stats.json")
-        save_nmd_stats(stats, cross_ref, path)
+        save_nmd_stats(stats, cross_ref, path, product=2018)
 
         assert os.path.exists(path)
         with open(path) as f:
             data = json.load(f)
 
+        assert data["product"] == 2018
         assert "class_stats" in data
         assert "cross_reference" in data
         assert data["class_stats"]["level1"]["forest"]["fraction"] == 0.5
@@ -563,7 +593,7 @@ class TestNMDExports:
 
         stats = {"level1": {}, "level2": {}}
         path = str(tmp_path / "nmd_stats.json")
-        save_nmd_stats(stats, None, path)
+        save_nmd_stats(stats, None, path, product=2018)
 
         with open(path) as f:
             data = json.load(f)

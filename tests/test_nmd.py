@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from imint.analyzers.base import AnalysisResult
+from imint.schema.nmd2023 import NMD2023_CLASSES
 from imint.analyzers.nmd import (
     NMDAnalyzer,
     NMD2018_LEGEND,
@@ -357,7 +358,7 @@ class TestNMDGracefulDegradation:
 
     def test_no_coords(self):
         """Missing coords should return nmd_available=False, success=True."""
-        analyzer = NMDAnalyzer()
+        analyzer = NMDAnalyzer(config={"product": 2018})
         rgb = np.random.rand(10, 10, 3).astype(np.float32)
         result = analyzer.analyze(rgb, coords=None)
         assert result.success is True
@@ -374,7 +375,7 @@ class TestNMDGracefulDegradation:
 
         monkeypatch.setattr(nmd_module, "fetch_nmd_data", _mock_fetch)
 
-        analyzer = NMDAnalyzer()
+        analyzer = NMDAnalyzer(config={"product": 2018})
         rgb = np.random.rand(10, 10, 3).astype(np.float32)
         coords = {"west": 13.0, "south": 55.5, "east": 13.1, "north": 55.6}
         result = analyzer.analyze(rgb, coords=coords)
@@ -392,7 +393,7 @@ class TestNMDGracefulDegradation:
 
         monkeypatch.setattr(nmd_module, "fetch_nmd_data", lambda **kwargs: mock_result)
 
-        analyzer = NMDAnalyzer()
+        analyzer = NMDAnalyzer(config={"product": 2018})
         rgb = np.random.rand(10, 10, 3).astype(np.float32)
         coords = {"west": 13.0, "south": 55.5, "east": 13.1, "north": 55.6}
 
@@ -413,7 +414,7 @@ class TestNMDGracefulDegradation:
 
         monkeypatch.setattr(nmd_module, "fetch_nmd_data", lambda **kwargs: mock_result)
 
-        analyzer = NMDAnalyzer()
+        analyzer = NMDAnalyzer(config={"product": 2018})
         rgb = np.random.rand(10, 10, 3).astype(np.float32)
         coords = {"west": 13.0, "south": 55.5, "east": 13.1, "north": 55.6}
 
@@ -443,3 +444,103 @@ class TestNMDGracefulDegradation:
         # Check change cross-ref values (now L2 keys)
         cr = result.outputs["cross_reference"]["change_detection"]
         assert cr["forest_pine"]["change_fraction"] == 1.0
+
+
+# ── NMD 2023 in the analyzer ─────────────────────────────────────────────────
+
+class TestNMD2023Analyzer:
+    """The engine's NMD analyzer on NMD 2023: own classes, explicit product."""
+
+    COORDS = {"west": 15.42, "south": 61.92, "east": 15.47, "north": 61.97}
+
+    @staticmethod
+    def _raster():
+        """Rows: 111 forest, 4211 open land (>255), 62 sea, 23 låg fjällskog
+        på våtmark, 54 torvtäkt, 0 outside coverage."""
+        return np.repeat(np.array([111, 4211, 62, 23, 54, 0], dtype=np.uint16), 2)[:, None].repeat(5, 1)
+
+    def _analyze(self, monkeypatch, raster, config=None, previous=None):
+        from imint.fetch import NMDFetchResult
+        from imint.analyzers import nmd as nmd_module
+
+        calls = []
+
+        def _fetch(**kwargs):
+            calls.append(kwargs)
+            return NMDFetchResult(nmd_raster=raster)
+
+        monkeypatch.setattr(nmd_module, "fetch_nmd_data", _fetch)
+        analyzer = NMDAnalyzer(config=config or {"product": 2023})
+        rgb = np.zeros((*raster.shape, 3), dtype=np.float32)
+        return analyzer.run(rgb, coords=self.COORDS, previous_results=previous), calls
+
+    def test_product_is_required(self):
+        analyzer = NMDAnalyzer(config={"enabled": True})
+        rgb = np.zeros((4, 4, 3), dtype=np.float32)
+        with pytest.raises(ValueError, match="set 'product'"):
+            analyzer.analyze(rgb, coords=None)
+        result = analyzer.run(rgb, coords=self.COORDS)
+        assert result.success is False and "product" in result.error
+        for bad in ("2023", 2020):
+            with pytest.raises(ValueError, match="NMD product must be one of"):
+                NMDAnalyzer(config={"product": bad}).analyze(rgb, coords=None)
+
+    def test_requests_2023_and_passes_the_raster_path(self, monkeypatch):
+        result, calls = self._analyze(
+            monkeypatch, self._raster(), {"product": 2023, "raster_path": "/x/NMD2023.tif"})
+        assert result.success, result.error
+        assert calls == [{"coords": self.COORDS, "target_shape": (12, 5),
+                          "product": 2023, "raster_path": "/x/NMD2023.tif"}]
+        assert result.outputs["product"] == 2023
+
+    def test_own_classes_and_klassgrupp_statistics(self, monkeypatch):
+        result, _ = self._analyze(monkeypatch, self._raster())
+        stats = result.outputs["class_stats"]
+        sixth = {"pixel_count": 10, "fraction": round(1 / 6, 4)}
+        assert stats["level2"] == {"111": sixth, "4211": sixth, "62": sixth, "23": sixth, "54": sixth}
+        assert stats["level1"] == {"forest": sixth, "wetland": sixth, "open_land": sixth,
+                                   "developed": sixth, "water": sixth, "outside": sixth}
+        codes = list(NMD2023_CLASSES)
+        l2 = result.outputs["l2_raster"]
+        assert l2.dtype == np.uint8
+        assert [int(l2[r, 0]) for r in (0, 2, 4, 6, 8, 10)] == [
+            codes.index(111) + 1, codes.index(4211) + 1, codes.index(62) + 1,
+            codes.index(23) + 1, codes.index(54) + 1, 0]
+        l1 = result.outputs["l1_raster"]
+        assert [int(l1[r, 0]) for r in (0, 2, 4, 6, 8, 10)] == [1, 4, 6, 2, 5, 0]
+
+    def test_a_code_outside_the_official_legend_fails_the_analyzer(self, monkeypatch):
+        raster = self._raster()
+        raster[0, 0] = 41  # NMD 2018 "övrig öppen mark utan vegetation", gone in 2023
+        result, _ = self._analyze(monkeypatch, raster)
+        assert result.success is False
+        assert "outside its legend: [41]" in result.error
+
+    def test_cross_reference_is_keyed_by_2023_code(self, monkeypatch):
+        raster = self._raster()
+        ndvi = np.where(raster == 4211, 0.3, 0.8).astype(np.float32)
+        previous = [AnalysisResult(analyzer="spectral", success=True,
+                                   outputs={"indices": {"NDVI": ndvi}})]
+        result, _ = self._analyze(monkeypatch, raster, previous=previous)
+        spectral = result.outputs["cross_reference"]["spectral"]
+        assert set(spectral) == {"111", "4211", "62", "23", "54"}
+        assert spectral["4211"]["mean_ndvi"] == pytest.approx(0.3)
+        assert spectral["111"]["mean_ndvi"] == pytest.approx(0.8)
+
+    def test_the_legends_cover_exactly_the_fetch_products(self):
+        from imint.analyzers.nmd import NMD_LEGENDS
+        from imint.fetch import NMD_PRODUCTS
+
+        assert tuple(NMD_LEGENDS) == NMD_PRODUCTS
+
+
+def test_engine_configs_choose_nmd_2023_explicitly():
+    """The engine default is NMD 2023, stated in every engine config."""
+    import yaml
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("config/analyzers.yaml", "imint/config/analyzers.yaml",
+                "config/analyzers_full.yaml"):
+        assert yaml.safe_load((root / rel).read_text())["nmd"]["product"] == 2023, rel
+    assert '"nmd": {"enabled": True, "product": 2023}' in (root / "run_full_analysis.py").read_text()
