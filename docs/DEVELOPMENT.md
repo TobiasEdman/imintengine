@@ -111,11 +111,11 @@ docs/
     coastline-shorelines.geojson ← Index-based shoreline vectors
     chart-data.json            ← Chart data (wildfire, grazing NMD/confidence)
   showcase/
-    fire/                      ← 9 PNGs (Ljusdal wildfire)
-    marine/                    ← 7 PNGs + sjokort (Hunnebostrand, leisure)
-    marine_commercial/         ← 10 PNGs + sjokort (Öresund, commercial)
+    fire/                      ← 10 PNGs (Ljusdal wildfire)
+    marine/                    ← 8 PNGs + sjokort (Hunnebostrand, leisure)
+    marine_commercial/         ← 9 PNGs + sjokort (Öresund, commercial)
     grazing/                   ← 7 PNGs (Munkarp, Skåne)
-    kustlinje/                 ← 7 PNGs (Ystad coast)
+    kustlinje/                 ← 11 PNGs (Ystad coast)
 ```
 
 Key files:
