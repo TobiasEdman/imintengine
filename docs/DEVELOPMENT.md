@@ -77,13 +77,12 @@ It's embedded as an iframe on **digitalearth.se**.
 
 ### Current Tabs
 
-| Tab | Date | Area | Key analysis |
-|-----|------|------|--------------|
-| Brand | 2018-07-24 | Ljusdal, Gavleborg | Wildfire detection (dNBR, Prithvi segmentation) |
-| Marin — Fritid | 2025-07-10 | Hunnebostrand, Bohuslan | Recreational vessel detection (YOLO, heatmap) |
-| Marin — Kommersiell | 2025-07-15 | Kalmarsund, Oland | Commercial shipping (YOLO + AI2, dual heatmaps, vessel attributes) |
-| Betesmark | 2025-06-14 | Oland | Grazing classification (CNN-biLSTM, LPIS), NMD cross-reference |
-| Kustlinje | 2025-06-14 | Ystad, Skane | Shoreline change 2018-2025 (CoastSat, NDWI) |
+The live site is the source of truth for what it shows. It has six analysis
+tabs (Marktäcke, Marin, Kust, Vattenkvalitet, Pixel & sensor, Atmosfär) and
+a films page. The analyses inside them include the Kårböle wildfire in
+Ljusdal (2018), vessels off Hunnebostrand in Bohuslän and in Öresund between
+Helsingborg and Helsingør, grazing at Munkarp in Skåne, and the Ystad
+coastline.
 
 ### Showcase Files
 
@@ -114,8 +113,8 @@ docs/
   showcase/
     fire/                      ← 9 PNGs (Ljusdal wildfire)
     marine/                    ← 7 PNGs + sjokort (Hunnebostrand, leisure)
-    marine_commercial/         ← 10 PNGs + sjokort (Kalmarsund, commercial)
-    grazing/                   ← 7 PNGs (Oland)
+    marine_commercial/         ← 10 PNGs + sjokort (Öresund, commercial)
+    grazing/                   ← 7 PNGs (Munkarp, Skåne)
     kustlinje/                 ← 7 PNGs (Ystad coast)
 ```
 
@@ -128,13 +127,13 @@ Key files:
 Each tab has a generation script that fetches Sentinel-2 data, runs analyzers, and saves PNGs:
 
 ```bash
-# Grazing showcase (Oland)
+# Grazing showcase (Munkarp, Skåne)
 .venv/bin/python scripts/generate_grazing_showcase.py
 
 # Kustlinje showcase (Ystad coast, 2018-2025)
 .venv/bin/python scripts/generate_kustlinje_showcase.py
 
-# Marine commercial showcase (Kalmarsund, YOLO + AI2)
+# Marine commercial showcase (Öresund, YOLO + AI2)
 .venv/bin/python scripts/generate_marine_commercial_showcase.py
 ```
 
