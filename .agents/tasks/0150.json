@@ -1,0 +1,10 @@
+{
+  "id": "0150",
+  "subject": "Use NMD 2023 in the engine's NMD fetch and analyzer",
+  "description": "Tobias decided on 2026-11-06 to replace NMD 2018 with NMD 2023 everywhere except comparisons, including the engine. DES openEO has no NMD 2023, so add an explicit NMD 2023 reader for the national raster (/data/nmd2023 on ICE, data/nmd2023 locally), uint16 without the uint8 cast, a year-aware cache, NMD 2023's own classes and Naturvårdsverket colours for the analyzer and overlays, and keep training callers explicitly on NMD 2018 (ladder r1 is a comparison). Not in scope: showcase images (task 0152), training labels, the Pirinen stack. Review: Codex or owner.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/nmd2023-engine",
+  "created_at": "2026-11-06T09:51:32Z",
+  "updated_at": "2026-11-06T09:51:32Z"
+}
