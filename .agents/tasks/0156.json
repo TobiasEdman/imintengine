@@ -1,0 +1,10 @@
+{
+  "id": "0156",
+  "subject": "Amend the NFI freeze for the IM-023 cells and score items 3-5",
+  "description": "Tobias approved on 2026-11-06 an amendment to the 2026-10-27 NFI holdout freeze (not a change) so the IM-023 main (29 classes) and control (28) checkpoints can be scored against the same sealed holdout and truth v1, with the fraction head allowed for the primary 28->tall/gran rule and the pre-registered mixed-class test (item 5); plus LUCAS with 28 folded into pine or spruce by fraction share (item 4). Scope: an amendment manifest and protocol, the per-plot dump with hard class and fraction shares, the scorers and their tests, and the eval job manifests including the already-run item-1 job. The original freeze, its cells and its code pin stay untouched. Scoring the sealed holdout is approved for this evaluation. Review: Codex or Tobias.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/im023-nfi-amendment",
+  "created_at": "2026-11-06T21:46:04Z",
+  "updated_at": "2026-11-06T21:46:04Z"
+}
