@@ -1,6 +1,6 @@
-"""Generate showcase images for the Marine Commercial (Kalmarsund) tab.
+"""Generate showcase images for the Marine Commercial (Öresund) tab.
 
-Fetches Sentinel-2 data from DES for the Kalmar Strait area, runs
+Fetches Sentinel-2 data from DES for the Öresund strait, runs
 both YOLO and AI2 vessel detection models, generates multi-date
 heatmaps, spectral indices, NMD overlay, and cloud analysis.
 
@@ -38,7 +38,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Generate marine commercial showcase images (Kalmarsund)"
+        description="Generate marine commercial showcase images (Öresund)"
     )
     parser.add_argument(
         "--date", default=PRIMARY_DATE,
