@@ -63,3 +63,11 @@ def test_the_stylesheet_reaches_only_the_page():
     assert selectors and [s for s in selectors if s != '.lclu' and not s.startswith('.lclu ')] == []
     assert '<body class="lclu">' in (ROOT/'docs/lclu.html').read_text()
 
+
+def test_the_showcase_tab_shows_this_page_first():
+    index = (ROOT/'docs/index.html').read_text()
+    nav = re.search(r'id="tab-lulc">\s*<div class="sub-tab-nav">(.*?)</div>', index, re.S)[1]
+    assert re.findall(r'data-subtab="(\w+)"', nav)[0] == 'lclu'
+    assert re.findall(r'class="sub-tab active" data-subtab="(\w+)"', nav) == ['lclu']
+    assert re.search(r'<div class="sub-tab-content active lclu" id="tab-lclu" data-src="lclu\.html"></div>', index)
+    assert "loadAnnualMap();" in (ROOT/'docs/js/app.js').read_text()

@@ -135,6 +135,7 @@ async function boot({omit = [], storage = {}} = {}) {
     window: {IMINT_LCLU_CONFIG: {apiBase: 'https://api.test'}, location: {origin: 'https://page.test'}},
     document, L, fetch, URL, console,
     Option: class { constructor(text, value) { this.text = text; this.value = value; } },
+    ResizeObserver: class { observe() {} },
     setTimeout: (run, ms) => { timers.push({id: ++timerId, at: now + ms, run}); return timerId; },
     clearTimeout: id => { const index = timers.findIndex(timer => timer.id === id); if (index >= 0) timers.splice(index, 1); },
     sessionStorage: {getItem: key => store.get(key) ?? null, setItem: (key, value) => store.set(key, value)},

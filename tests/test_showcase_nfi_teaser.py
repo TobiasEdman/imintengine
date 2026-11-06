@@ -255,7 +255,9 @@ def test_the_moved_content_is_gone_from_the_showcase_tabs() -> None:
     index = (REPO / "docs/index.html").read_text()
     tab_data = (REPO / "docs/js/tab-data.js").read_text()
     nav = re.search(r'id="tab-lulc">\s*<div class="sub-tab-nav">(.*?)</div>', index, re.S).group(1)
-    assert re.findall(r'<a href="lclu\.html" class="sub-tab">([^<]+)</a>', nav) == ["🌲 Marktäckekartering ↗"]
+    # The Marktäcke page is shown in the tab from lclu.html, not copied into index.html.
+    assert re.findall(r'<a href="#" class="sub-tab[^"]*" data-subtab="lclu">([^<]+)</a>', nav) == ["🌲 Marktäckekartering"]
+    assert 'data-src="lclu.html"' in index
     for text in (index, tab_data):
         assert not re.search(r"nfi_validation|nfi-[a-z]+|unified_nfi|\bnfi_[a-z_]+|nmd2023", text)
 
