@@ -52,4 +52,5 @@ def test_showcase_page_calls_the_public_host():
     config = (ROOT / "docs/js/lclu-config.js").read_text()
     assert re.search(r"apiBase:\s*'([^']*)'", config)[1] == f"https://{HOST}"
     index = (ROOT / "docs/index.html").read_text()
-    assert 'href="lclu.html"' in index
+    assert 'id="tab-lclu" data-src="lclu.html"' in index
+    assert '<script defer src="js/lclu-config.js"></script>' in (ROOT / "docs/lclu.html").read_text()

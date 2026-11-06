@@ -1,0 +1,13 @@
+{
+  "id": "0149",
+  "subject": "Show the annual land-cover map as the Markt\u00e4cke tab's first sub-tab",
+  "description": "Tobias decided on 2026-11-06 that the interactive land-cover map (lclu.html) is the sub-tab shown first in the showcase Markt\u00e4cke tab, rewritten to fit the main page rather than embedded as an iframe. Move the lclu.html content into index.html as sub-tab #tab-lclu (default), scope lclu.css to it, load lclu.js as a module, resize the map when the tab is shown, and make lclu.html a redirect so the public link keeps working. Move the tests that read lclu.html to the index section. Stacked on task 0148 (PR #142). Not in scope: the service, the map's behaviour and texts, other tabs. Review: Codex or owner.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/showcase-lclu-subtab",
+  "created_at": "2026-11-06T08:57:39Z",
+  "updated_at": "2026-11-06T08:57:45Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-06T08:57:45Z"
+}
