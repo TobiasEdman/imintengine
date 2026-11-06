@@ -169,6 +169,42 @@ i en egen omträning, en ändring i taget.
    rättvis; sekundärt redovisas 28 som egen kolumn i förväxlingsmatrisen.
    Sanningen ändras inte. Kontrollkörningen och R4 poängsätts med samma regel.
 4. **LUCAS** på samma sätt, med 28 räknad som barrskog.
+5. **Blandklasserna: egen klass eller härledd ur andelar.** Förregistrerad
+   2026-11-06 på Tobias begäran, under fullkörningarna och innan något
+   utvärderingsresultat finns. Frågan gäller både barrblandskog (28) och
+   blandskog (4). Blandning definieras på beståndsnivå, medan en 10 m-pixel
+   bara rymmer några kronor. Är klasserna meningsfulla på pixelnivå, eller
+   fångas blandningen bättre av fraktionshuvudets trädslagsandelar?
+   - **Sanning:** NFI-provytornas volym per trädslag, samma fält som sanning
+     v1 (`derive_nfi_forest_class`). Sanning v1 ändras inte.
+     - Blandskog: sanning v1:s klass 4, där varken barr eller löv når 0,7 av
+       volymen.
+     - Barrblandskog: härleds ur samma fält. Barr når 0,7 av volymen, men
+       varken tall (tall + contorta) eller gran når 0,7 av barrvolymen.
+     - Ytor utan volym utesluts, som i v1.
+   - **Prediktorer**, på samma pixelurval som den primära NFI-poängsättningen:
+     - a) main:s hårda huvud (klass 4 respektive 28);
+     - b) control:s hårda huvud (klass 4; 28 finns inte);
+     - c) andelsregeln på control:s fraktionshuvud;
+     - d) andelsregeln på main:s fraktionshuvud.
+
+     Andelsregeln är `collapse_fractions_to_nfi_class` för blandskog. För
+     barrblandskog tillämpas samma regel ett steg ner: barr når 0,7, men
+     varken tall- eller granandelen når 0,7 av barrandelen. R4 poängsätts
+     som b och c.
+   - **Mått:** recall, precision och F1 för blandskog, barrblandskog, tall och
+     gran, med blockbootstrap som i den primära poängsättningen.
+   - **Läsning, bestämd i förväg:** en blandklass bedöms onödig som egen
+     pixelklass om två villkor gäller samtidigt:
+     1. andelsregeln (c eller d) ger minst lika hög F1 för klassen som det
+        hårda huvudet (a), inom bootstrapintervallet;
+     2. det hårda huvudet sänker tall eller gran utanför intervallet,
+        jämfört med b.
+
+     Då rekommenderas härledning ur andelar i stället. Annars behålls klassen.
+     Inga trösklar läggs till eller ändras efter att resultat har setts.
+   - Poängsättning mot den förseglade holdouten körs bara på Tobias
+     klartecken, som tidigare.
 
 ### 4. Demon (efter godkänd utvärdering)
 
