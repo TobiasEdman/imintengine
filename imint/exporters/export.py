@@ -406,56 +406,43 @@ def save_summary_report(
     return path
 
 
-def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
-    """Render NMD land cover classes as a color-coded PNG overlay.
+# Raw NMD 2018 Generell (10 m) code → display colour (R, G, B).
+_NMD2018_RAW_COLORS = {
+    # Skog utanför våtmark
+    111: (0, 100, 0),       # Tallskog
+    112: (34, 139, 34),     # Granskog
+    113: (20, 120, 20),     # Barrblandskog
+    114: (60, 179, 113),    # Lövblandad barrskog
+    115: (50, 205, 50),     # Triviallövskog
+    116: (80, 180, 60),     # Ädellövskog
+    117: (100, 200, 80),    # Triviallövskog med ädellövinslag
+    118: (70, 160, 100),    # Temporärt ej skog
+    # Skog på våtmark
+    121: (46, 79, 46),      # Tallskog våtmark
+    122: (58, 95, 58),      # Granskog våtmark
+    123: (50, 85, 50),      # Barrblandskog våtmark
+    124: (90, 143, 90),     # Lövblandad barrskog våtmark
+    125: (74, 127, 74),     # Triviallövskog våtmark
+    126: (85, 140, 80),     # Ädellövskog våtmark
+    127: (95, 155, 90),     # Triviallövskog med ädellövinslag våtmark
+    128: (80, 130, 80),     # Temporärt ej skog våtmark
+    # Öppen mark
+    2:   (139, 90, 43),     # Öppen våtmark
+    3:   (255, 215, 0),     # Åkermark
+    41:  (200, 173, 127),   # Övrig öppen mark utan vegetation
+    42:  (210, 180, 140),   # Övrig öppen mark med vegetation
+    # Bebyggelse
+    51:  (255, 0, 0),       # Exploaterad mark, byggnad
+    52:  (255, 69, 0),      # Exploaterad mark, ej byggnad/väg
+    53:  (255, 99, 71),     # Exploaterad mark, övrig hårdgjord
+    # Vatten
+    61:  (0, 0, 255),       # Sjö och vattendrag
+    62:  (30, 144, 255),    # Hav
+}
 
-    Handles both raw NMD codes (e.g. 111, 112, 3, 42, 61, …) and
-    pre-remapped sequential codes (0-19).  If max value > 19 the raw
-    NMD coding system is assumed and mapped to display colours.
-
-    Args:
-        l2_raster: 2D uint8/uint16 array with NMD class codes.
-        path: Output PNG path.
-
-    Returns:
-        The output file path.
-    """
-    # Raw NMD Generell (10 m) code → display colour (R, G, B)
-    _RAW_NMD_COLORS = {
-        # Skog utanför våtmark
-        111: (0, 100, 0),       # Tallskog
-        112: (34, 139, 34),     # Granskog
-        113: (20, 120, 20),     # Barrblandskog
-        114: (60, 179, 113),    # Lövblandad barrskog
-        115: (50, 205, 50),     # Triviallövskog
-        116: (80, 180, 60),     # Ädellövskog
-        117: (100, 200, 80),    # Triviallövskog med ädellövinslag
-        118: (70, 160, 100),    # Temporärt ej skog
-        # Skog på våtmark
-        121: (46, 79, 46),      # Tallskog våtmark
-        122: (58, 95, 58),      # Granskog våtmark
-        123: (50, 85, 50),      # Barrblandskog våtmark
-        124: (90, 143, 90),     # Lövblandad barrskog våtmark
-        125: (74, 127, 74),     # Triviallövskog våtmark
-        126: (85, 140, 80),     # Ädellövskog våtmark
-        127: (95, 155, 90),     # Triviallövskog med ädellövinslag våtmark
-        128: (80, 130, 80),     # Temporärt ej skog våtmark
-        # Öppen mark
-        2:   (139, 90, 43),     # Öppen våtmark
-        3:   (255, 215, 0),     # Åkermark
-        41:  (200, 173, 127),   # Övrig öppen mark utan vegetation
-        42:  (210, 180, 140),   # Övrig öppen mark med vegetation
-        # Bebyggelse
-        51:  (255, 0, 0),       # Exploaterad mark, byggnad
-        52:  (255, 69, 0),      # Exploaterad mark, ej byggnad/väg
-        53:  (255, 99, 71),     # Exploaterad mark, övrig hårdgjord
-        # Vatten
-        61:  (0, 0, 255),       # Sjö och vattendrag
-        62:  (30, 144, 255),    # Hav
-    }
-
-    # Sequential L2 palette (for pre-remapped rasters, indices 0-19)
-    _SEQ_PALETTE = np.array([
+# Level-2 index raster (NMDLegend.l2_raster) → display colour, per palette.
+_NMD_L2_COLORS = {
+    "nmd2018_l2": np.array([
         [128, 128, 128],  # 0: unclassified
         [0, 100, 0],      # 1: forest_pine
         [34, 139, 34],    # 2: forest_spruce
@@ -476,21 +463,44 @@ def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
         [255, 99, 71],    # 17: developed_roads
         [0, 0, 255],      # 18: water_lakes
         [30, 144, 255],   # 19: water_sea
-    ], dtype=np.uint8)
+    ], dtype=np.uint8),
+}
 
-    max_val = int(l2_raster.max())
-    if max_val > 19:
-        # Raw NMD codes — map via lookup
-        h, w = l2_raster.shape[:2]
-        rgb = np.full((h, w, 3), 128, dtype=np.uint8)  # default gray
-        for code, color in _RAW_NMD_COLORS.items():
-            mask = l2_raster == code
-            if mask.any():
-                rgb[mask] = color
+NMD_OVERLAY_PALETTES = ("nmd2018_raw", *_NMD_L2_COLORS)
+
+
+def save_nmd_overlay(raster: np.ndarray, path: str, *, palette: str) -> str:
+    """Render an NMD raster as a colour-coded PNG overlay.
+
+    The caller states what the raster holds; nothing is inferred from its
+    values.
+
+    Args:
+        raster: 2D array of level-2 indices or raw codes, as ``palette`` says.
+        path: Output PNG path.
+        palette: ``"nmd2018_l2"`` — NMD 2018 level-2 indices 0-19
+            (``nmd_raster_to_l2``); ``"nmd2018_raw"`` — raw NMD 2018 codes,
+            grey where a code has no colour.
+
+    Returns:
+        The output file path.
+
+    Raises:
+        ValueError: unknown palette, or a level-2 index the palette lacks.
+    """
+    if palette == "nmd2018_raw":
+        rgb = np.full((*raster.shape[:2], 3), 128, dtype=np.uint8)  # grey
+        for code, color in _NMD2018_RAW_COLORS.items():
+            rgb[raster == code] = color
+    elif palette in _NMD_L2_COLORS:
+        colors = _NMD_L2_COLORS[palette]
+        if raster.size and int(raster.max()) >= len(colors):
+            raise ValueError(
+                f"{palette} has {len(colors)} entries; raster holds index {int(raster.max())}"
+            )
+        rgb = colors[raster]
     else:
-        # Pre-remapped sequential codes
-        clamped = np.clip(l2_raster, 0, len(_SEQ_PALETTE) - 1)
-        rgb = _SEQ_PALETTE[clamped]
+        raise ValueError(f"unknown NMD overlay palette {palette!r}; expected {NMD_OVERLAY_PALETTES}")
 
     Image.fromarray(rgb).save(path)
     print(f"    saved: {path}")

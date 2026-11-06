@@ -162,7 +162,8 @@ def main():
     try:
         nmd_result = fetch_nmd_data(coords=coords, target_shape=(H, W))
         if nmd_result is not None:
-            save_nmd_overlay(nmd_result.nmd_raster, os.path.join(out_dir, "nmd_overlay.png"))
+            save_nmd_overlay(nmd_result.nmd_raster, os.path.join(out_dir, "nmd_overlay.png"),
+                             palette="nmd2018_raw")
     except Exception as e:
         print(f"    NMD skipped: {e}")
 

@@ -146,7 +146,8 @@ def main():
 
     l2_raster = nmd_result.outputs.get("l2_raster")
     if l2_raster is not None:
-        save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"))
+        save_nmd_overlay(l2_raster, os.path.join(out_dir, "nmd_overlay.png"),
+                         palette="nmd2018_l2")
 
     # ── Step 5: YOLO vessel detection ─────────────────────────────
     print("\n[5/6] Running YOLO marine vessel detection...")

@@ -329,7 +329,8 @@ def _export(result: AnalysisResult, job: IMINTJob) -> None:
             cross_ref = result.outputs.get("cross_reference")
             if l2_raster is not None:
                 # Simple color-coded overlay (kept for quick reference)
-                save_nmd_overlay(l2_raster, os.path.join(out, f"{prefix}nmd_overlay.png"))
+                save_nmd_overlay(l2_raster, os.path.join(out, f"{prefix}nmd_overlay.png"),
+                                 palette="nmd2018_l2")
                 # Rich multi-panel visualization with charts and cross-reference
                 if class_stats:
                     save_nmd_visualization(

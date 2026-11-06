@@ -264,7 +264,7 @@ class TestNMDExports:
         l2_raster[10:, :] = 18   # water_lakes (blue)
 
         path = str(tmp_path / "nmd_overlay.png")
-        save_nmd_overlay(l2_raster, path)
+        save_nmd_overlay(l2_raster, path, palette="nmd2018_l2")
 
         assert os.path.exists(path)
         img = Image.open(path)
@@ -277,6 +277,35 @@ class TestNMDExports:
         np.testing.assert_array_equal(arr[0, 0], [0, 100, 0])
         # water_lakes pixels should be blue (0, 0, 255)
         np.testing.assert_array_equal(arr[15, 0], [0, 0, 255])
+
+    def test_overlay_raw_palette_is_chosen_by_the_caller(self, tmp_path):
+        """Raw codes render through the raw palette whatever their values."""
+        from imint.exporters.export import save_nmd_overlay
+        from PIL import Image
+
+        # 3 and 2 would pass for level-2 indices; the palette decides, not the values.
+        raw = np.array([[3, 2], [111, 0]], dtype=np.uint8)
+        path = str(tmp_path / "raw.png")
+        save_nmd_overlay(raw, path, palette="nmd2018_raw")
+        arr = np.array(Image.open(path))
+        np.testing.assert_array_equal(arr[0, 0], [255, 215, 0])   # 3 Åkermark
+        np.testing.assert_array_equal(arr[0, 1], [139, 90, 43])   # 2 Öppen våtmark
+        np.testing.assert_array_equal(arr[1, 0], [0, 100, 0])     # 111 Tallskog
+        np.testing.assert_array_equal(arr[1, 1], [128, 128, 128])  # no colour → grey
+
+    def test_overlay_refuses_unknown_palette_and_foreign_index(self, tmp_path):
+        from imint.exporters.export import save_nmd_overlay
+
+        path = str(tmp_path / "x.png")
+        with pytest.raises(TypeError):
+            save_nmd_overlay(np.zeros((2, 2), dtype=np.uint8), path)
+        with pytest.raises(ValueError, match="unknown NMD overlay palette"):
+            save_nmd_overlay(np.zeros((2, 2), dtype=np.uint8), path, palette="auto")
+        # Raw 2018 codes handed to the level-2 palette used to be clipped or
+        # auto-detected; now they are refused.
+        with pytest.raises(ValueError, match="raster holds index 111"):
+            save_nmd_overlay(np.full((2, 2), 111, dtype=np.uint8), path, palette="nmd2018_l2")
+        assert not os.path.exists(path)
 
     def test_save_nmd_stats(self, tmp_path):
         """NMD stats JSON should be valid and contain expected keys."""
