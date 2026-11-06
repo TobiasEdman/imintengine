@@ -147,16 +147,11 @@ The executor resolves job context (coordinates, dates, data fetching, cloud dete
 
 ## Showcase
 
-Live dashboard: **[digitalearth.se](https://digitalearth.se)** (GitHub Pages)
-
-Four analysis tabs with interactive Leaflet maps, vector overlays, and background toggles:
-
-| Tab | Area | Analyses |
-|---|---|---|
-| **Brand** | Ljusdal, Gavleborg | dNBR burn severity, Prithvi segmentation, change gradient |
-| **Marin** | Lysekil, Bohuslan | YOLO vessel detection, AI2 vessels, heatmap, sjokort toggle |
-| **Bete** | Vastervik, Kalmar | LPIS grazing classification, NMD overlay |
-| **Kustlinje** | Ystad, Skane | 8-year shoreline vectors, erosion analysis, 2018/2025 toggle |
+The interactive analysis site is published at
+**[tobiasedman.github.io/imintengine](https://tobiasedman.github.io/imintengine/)** and
+embedded at [digitalearth.se/case](https://digitalearth.se/case/). Its tabs cover land
+cover, marine, coast, water quality, pixel and sensor, and atmosphere, with a film for
+each analysis.
 
 A separate **training dashboard** (`imint/training/dashboard.py`) monitors the full pipeline in real-time: NMD pre-filter, seasonal fetch, data preparation, training, evaluation, and LULC inference with a per-tile gallery showing S2 pseudocolor, NMD labels, model predictions, and quality overlays.
 
