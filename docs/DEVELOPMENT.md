@@ -81,7 +81,7 @@ The live site is the source of truth for what it shows. It has six analysis
 tabs (Marktäcke, Marin, Kust, Vattenkvalitet, Pixel & sensor, Atmosfär) and
 a films page. The analyses inside them include the Kårböle wildfire in
 Ljusdal (2018), vessels off Hunnebostrand in Bohuslän and in Öresund between
-Helsingborg and Helsingør, grazing at Munkarp in Skåne, and the Ystad
+Helsingborg and Helsingør, grazing at Munkarp (Höör, Skåne), and the Ystad
 coastline.
 
 ### Showcase Files
@@ -119,7 +119,7 @@ docs/
 ```
 
 Key files:
-- **`tab-data.js`** — `LEGENDS` (shared legend definitions reused across tabs), `GEOJSON_FILES` (path map), `TAB_CONFIG` (structured config for all 5 tabs with panels, summary cards, images)
+- **`tab-data.js`** — `LEGENDS` (shared legend definitions reused across tabs), `GEOJSON_FILES` (path map), `TAB_CONFIG` (structured config for every tab and sub-tab, with panels, summary cards, images)
 - **`app.js`** — `renderTabDynamic()` builds each tab's DOM from config; `initMaps()` creates Leaflet maps with overlays and sync; `initCharts()` loads chart data via fetch
 
 ### Generating Showcase Images
