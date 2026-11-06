@@ -206,6 +206,26 @@ i en egen omträning, en ändring i taget.
    - Poängsättning mot den förseglade holdouten körs bara på Tobias
      klartecken, som tidigare.
 
+**Beslut (Tobias 2026-11-06), före all poängsättning.** Tobias har gett
+klartecken till utvärderingen, inklusive den förseglade NFI-holdouten. Den
+befintliga koden kan inte poängsätta en modell med 29 klasser rätt: tiles
+med klass 28 hoppas över, och NFI räknar 28 som icke-skog. Därför gäller:
+
+- **Moment 1:** huvudjämförelsen mot R4 och control görs mot de
+  ursprungliga NMD-etiketterna. Där slås main:s klass 28 ihop till klass 3,
+  som NMD 113 hade i R4:s etiketter. Sekundärt poängsätts main mot
+  `nmd2023_labels_b28` med 28 som egen klass. Bootstrapintervallen bygger på
+  en förväxlingsmatris per tile.
+- **Moment 3 och 5:** NFI-frysningen från 2026-10-27 får ett tillägg, inte en
+  ändring. Tillägget har ett eget manifest med celler för main och control
+  mot samma holdout och sanning v1, med ny kod och image. Fraktionshuvudet
+  tillåts för den primära regeln och för moment 5. Den ursprungliga
+  frysningen och dess celler lämnas orörda.
+- **Moment 4:** i LUCAS slås klass 28 ihop till tall eller gran efter
+  fraktionshuvudets tall- mot granandel, samma princip som NFI:s primära
+  regel. Klass 28 redovisas också som en egen kolumn utan poäng.
+- **Ordning:** moment 1 och 2 körs först, eftersom de inte berör frysningen.
+
 ### 4. Demon (efter godkänd utvärdering)
 
 Tjänsten är låst till R4:s 28 klasser. En efterträdare behöver ett nytt
