@@ -6,6 +6,10 @@ Pre-registered class schemes (scripts/forest_separability_schemes.py):
 (dryland 111, 112, 113, 114, 115–117) and ``sumpskog5`` (the same types on
 wetland, 121–127).
 
+``--model-name`` must match the name the extraction keyed its frozen-model
+features with (``r4`` for R4). For a 29-class model the report also gives, per
+scheme class, the share of pixels it predicts as unified 28 (barrblandskog).
+
 This never trains a serving model. Raw NMD labels measure agreement with NMD,
 not independent field accuracy. Historical training locations may have been
 seen by the frozen encoder/head; spatial CV applies only to the NEW probe.
@@ -23,7 +27,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from scripts.forest_separability_schemes import CLASS_SCHEMES  # noqa: E402
+from scripts.forest_separability_schemes import (  # noqa: E402
+    BARRBLANDSKOG_CLASS, CLASS_SCHEMES, check_model)
 
 ROLE = "historical_training_development_diagnostic"
 
@@ -157,8 +162,14 @@ def assigned_classes(y: np.ndarray, assigned: np.ndarray, scheme: str) -> dict:
     return report
 
 
-def run_probe(bundle: Path, *, scheme: str, n_splits: int = 5, block_m: float = 50000,
-              buffer_m: float = 5000) -> dict:
+def class_share(y: np.ndarray, assigned: np.ndarray, scheme: str, unified_class: int) -> dict:
+    """Per raw NMD class, the share of its pixels assigned ``unified_class``."""
+    return {name: float(np.mean(assigned[y == k] == unified_class))
+            for k, (name, _) in enumerate(scheme_classes(scheme))}
+
+
+def run_probe(bundle: Path, *, scheme: str, model_name: str, n_splits: int = 5,
+              block_m: float = 50000, buffer_m: float = 5000) -> dict:
     from sklearn.exceptions import ConvergenceWarning
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
@@ -173,6 +184,10 @@ def run_probe(bundle: Path, *, scheme: str, n_splits: int = 5, block_m: float = 
         raise ValueError("explicit feature and reference years are required")
     if meta.get("scheme") != scheme:
         raise ValueError(f"extraction receipt scheme {meta.get('scheme')!r} is not {scheme!r}")
+    if meta.get("model_name") != model_name:
+        raise ValueError(f"extraction receipt model {meta.get('model_name')!r} is not {model_name!r}")
+    num_classes = meta.get("num_classes")
+    check_model(model_name, meta["checkpoint"]["path"], num_classes)
     if meta.get("bundle_sha256") != digest(bundle):
         raise ValueError("feature bundle differs from its extraction receipt")
     with np.load(bundle, allow_pickle=False) as z:
@@ -181,6 +196,7 @@ def run_probe(bundle: Path, *, scheme: str, n_splits: int = 5, block_m: float = 
     if len(y) != len(xy) or not len(y):
         raise ValueError("empty or inconsistent samples")
     folds = spatial_folds(xy, n_splits=n_splits, block_m=block_m, buffer_m=buffer_m)
+    prediction = f"{model_name}_prediction"
     for train, test in folds:
         if len(np.unique(y[train])) != n_classes or len(np.unique(y[test])) != n_classes:
             raise ValueError("every class must be present in every train and test fold")
@@ -201,14 +217,20 @@ def run_probe(bundle: Path, *, scheme: str, n_splits: int = 5, block_m: float = 
                            "tuning": "none", "bootstrap": "500 whole-block resamples, seed42"},
               "n_samples": len(y), "n_tiles": len(np.unique(data["tile"])),
               "feature_receipt_sha256": digest(bundle.with_suffix(".json")), "models": {},
-              # Where each raw NMD class actually went in the training targets and R4 output.
+              "frozen_model": {"name": model_name, "num_classes": num_classes,
+                               "checkpoint_sha256": meta["checkpoint"]["sha256"]},
+              # Where each raw NMD class actually went in the training targets and model output.
               "assigned_unified_class": {key: assigned_classes(y, data[key], scheme)
-                                         for key in ("base_label", "distilled_label", "r4_prediction")}}
+                                         for key in ("base_label", "distilled_label", prediction)},
+              # IM-023 item 2: how much of each NMD class the model calls barrblandskog.
+              "predicted_class_28_share": (
+                  class_share(y, data[prediction], scheme, BARRBLANDSKOG_CLASS)
+                  if num_classes > BARRBLANDSKOG_CLASS else None)}
     majority = np.full(len(y), -1, dtype=np.int64)
     for train, test in folds:
         majority[test] = np.argmax(np.bincount(y[train], minlength=n_classes))
     report["majority_baseline"] = metrics(y, majority, scheme)
-    for name in ("tessera", "r4"):
+    for name in ("tessera", model_name):
         X = data[name]
         if X.ndim != 2 or len(X) != len(y) or not np.isfinite(X).all():
             raise ValueError("invalid frozen features")
@@ -236,11 +258,14 @@ def main() -> None:
     ap.add_argument("--features", required=True, type=Path)
     ap.add_argument("--output", required=True, type=Path)
     ap.add_argument("--scheme", required=True, choices=sorted(CLASS_SCHEMES))
+    ap.add_argument("--model-name", required=True,
+                    help="the name the extraction keyed the frozen model with")
     ap.add_argument("--folds", default=5, type=int)
     ap.add_argument("--block-m", default=50000, type=float)
     ap.add_argument("--buffer-m", default=5000, type=float)
     args = ap.parse_args()
-    write_json(args.output, run_probe(args.features, scheme=args.scheme, n_splits=args.folds,
+    write_json(args.output, run_probe(args.features, scheme=args.scheme,
+                                     model_name=args.model_name, n_splits=args.folds,
                                      block_m=args.block_m, buffer_m=args.buffer_m))
 
 
