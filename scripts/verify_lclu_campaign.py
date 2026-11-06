@@ -4,6 +4,9 @@
 Checks saved qualification inputs/results and the optional live catalogue.
 Does not download data, run inference, change manifests, or certify accuracy.
 Prints JSON; redirect it to a local evidence file. An incomplete audit exits 1.
+
+A qualified year whose HR-VPP year comes from lclu.VPP_YEAR_SUBSTITUTIONS is
+reported as ``qualified_substituted_vpp``, never as plain ``qualified``.
 """
 from __future__ import annotations
 
@@ -26,6 +29,7 @@ from shapely.ops import transform
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imint.inference.lclu import (
     EMBEDDING, Grid, public_identity, public_provenance, validate_bundle, verify_file,
+    vpp_substitutions, vpp_year_for,
 )
 from scripts.cache_predict import contract_pin, file_identity
 from scripts.inference_comparison import _file_snapshot
@@ -35,6 +39,7 @@ from scripts.stage_lclu_demo import select_vpp
 
 R4_SHA256 = '1270bb2af88074840020f3b481ed5e98a72f0b7ceb51befac2b8fa4675385668'
 GAPS = {'missing_vpp', 'missing_tessera', 'missing_static_aux'}
+SUBSTITUTED = 'qualified_substituted_vpp'
 
 
 def require(condition, message):
@@ -104,20 +109,21 @@ def verify_sources(config, base, entry, area, plan, grid, year, sources):
     receipts = (base / config['identity_cache']).resolve()
     index_path, skg_path = verify_aux_metadata(config, base)
     index = read(index_path)
+    vpp_year = vpp_year_for(year)
     wgs = transform_bounds('EPSG:3006', 'EPSG:4326', *area['bounds_3006'], densify_pts=41)
-    selected = select_vpp(index, year, wgs)
+    selected = select_vpp(index, vpp_year, wgs)
     require(set(selected) == set(config['vpp_files']), 'Serving VPP inventory differs from the area')
     for name, record in config['vpp_files'].items():
         sources.verify({**record, 'path': name}, index_path.parent, receipts)
     aux = entry['auxiliary_provenance']
     vpp = aux['vpp']
-    require(vpp['year'] == year and vpp['season'] == 1 and
+    require(vpp['year'] == vpp_year and vpp['season'] == 1 and
             vpp['index'] == public_identity(config['vpp_index']),
             'Qualification VPP identity differs from serving sources')
     bounds = grid.bounds()
     window = tuple(bounds[k] for k in ('west', 'south', 'east', 'north'))
     window_wgs = transform_bounds('EPSG:3006', 'EPSG:4326', *window)
-    window_vpp = select_vpp(index, year, window_wgs)
+    window_vpp = select_vpp(index, vpp_year, window_wgs)
     require(sorted(vpp['files'], key=lambda r: r['file']) ==
             [{'file': name, **public_identity(config['vpp_files'][name])} for name in sorted(window_vpp)],
             'Qualification VPP rasters differ from the window sources')
@@ -200,9 +206,16 @@ def verify_campaign(campaign: Path, work: Path, api: str | None = None) -> dict:
         used_configs, static_by_area = set(), {}
         for key, cell in coverage.items():
             area_id, year = key
-            detail = {'area_id': area_id, 'year': year, 'status': cell['status']}
+            vpp_year = vpp_year_for(year)
+            substituted = vpp_year != year
+            detail = {'area_id': area_id, 'year': year, 'vpp_year': vpp_year,
+                      'status': SUBSTITUTED if cell['status'] == 'qualified' and substituted
+                      else cell['status']}
             try:
                 initial = before[key]
+                require(all(c.get('vpp_year') == vpp_year and c.get('vpp_year_substituted') is substituted
+                            for c in (initial, cell)),
+                        'Cell HR-VPP year differs from the explicit substitution table')
                 if initial['status'] in GAPS:
                     require(cell['status'] == initial['status'], 'A source gap was advertised as qualified')
                     require(cell.get('vpp_missing_metrics') == initial.get('vpp_missing_metrics')
@@ -266,7 +279,7 @@ def verify_campaign(campaign: Path, work: Path, api: str | None = None) -> dict:
                 result['errors'].append(f'{area_id}/{year}: {error}')
             result['cells'].append(detail)
         require(used_configs == set(configs), 'Serving configuration advertises an unqualified area/year')
-        result['counts'] = dict(Counter(c['status'] for c in coverage.values()))
+        result['counts'] = dict(Counter(c['status'] for c in result['cells']))
         result['source_verification'] = dict(sources.counts)
         result['campaign'] = public_identity(serving['campaign'])
         if api:
@@ -278,6 +291,8 @@ def verify_campaign(campaign: Path, work: Path, api: str | None = None) -> dict:
             live_areas = {a['properties']['name']: a for a in info['areas']}
             require(len(live_areas) == len(info['areas']) == len(areas), 'Live area count/names mismatch')
             require(sorted(info['candidate_years']) == sorted(plan['years']), 'Live year inventory mismatch')
+            require(info['vpp_substitutions'] == vpp_substitutions(),
+                    'Live HR-VPP year notice differs from the substitution table')
             for area_id, area in areas.items():
                 name = area['municipality']['properties']['name']
                 years = sorted(y for a, y in expected if a == area_id and coverage[(a, y)]['status'] == 'qualified')

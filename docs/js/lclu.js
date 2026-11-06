@@ -1,5 +1,7 @@
-/* Geographic annual map UI. No synthetic predictions or year substitution:
- * at the chosen place the map shows the timeline's year, or nothing. */
+/* Geographic annual map UI. No synthetic predictions or map-year substitution:
+ * at the chosen place the map shows the timeline's year, or nothing. A year
+ * whose HR-VPP comes from another year (the API's vpp_substitutions) is
+ * labelled with the API's wording wherever the year is named. */
 'use strict';
 const $ = id => document.getElementById(id);
 // A browser may still hold the page from before the timeline: ask for a
@@ -16,7 +18,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 // place: the chosen window {key, lat, lon, years}; key is the server's grid centre.
 let place = null, footprint = null, generation = 0, busy = false, ready = false, inspection = 0, clicks = 0;
-let latestYear = 0, candidateYears = [], areaLayers = [], areaNames = [];
+let latestYear = 0, candidateYears = [], areaLayers = [], areaNames = [], substitutions = new Map();
 // Maps made this browser session, bottom to top. Results persist on the server,
 // so a reload restores the list from sessionStorage and reuses the artifacts.
 const maps = [];
@@ -34,6 +36,8 @@ async function request(url, options) {
   return body;
 }
 const timelineYear = () => Number($('year').value);
+// "<year> · <the API's label>" for a substituted year, else the year.
+const yearLabel = year => substitutions.has(year) ? `${year} · ${substitutions.get(year).label}` : String(year);
 const available = year => Boolean(place?.years.includes(year));
 const find = (key, year) => maps.find(entry => entry.key === key && entry.year === year);
 const shownAt = key => maps.find(entry => entry.key === key && entry.visible);
@@ -88,7 +92,7 @@ function controls() {
 function describeYear(year) {
   if (!place) return 'Välj plats först';
   if (!available(year)) return `${year} – ej verifierade årsdata`;
-  return find(place.key, year) ? `${year} · skapad` : String(year);
+  return find(place.key, year) ? `${yearLabel(year)} · skapad` : yearLabel(year);
 }
 function renderTimeline() {
   const year = timelineYear(), first = candidateYears[0], span = candidateYears.at(-1) - first;
@@ -97,6 +101,8 @@ function renderTimeline() {
     tick.type = 'button'; tick.tabIndex = -1; tick.className = 'year-tick'; tick.textContent = String(candidate);
     tick.style.left = `calc(var(--thumb) / 2 + (100% - var(--thumb)) * ${span ? (candidate - first) / span : 0})`;
     tick.disabled = !available(candidate);
+    tick.classList.toggle('substituted', substitutions.has(candidate));
+    tick.title = substitutions.has(candidate) ? yearLabel(candidate) : '';
     tick.classList.toggle('unavailable', Boolean(place) && !available(candidate));
     tick.classList.toggle('made', Boolean(place && find(place.key, candidate)));
     tick.classList.toggle('current', Boolean(place) && candidate === year);
@@ -113,7 +119,9 @@ function renderResult() {
   const r = entry.result;
   $('download-tif').href = apiUrl(r.artifacts['classification.tif']);
   $('download-provenance').href = apiUrl(r.artifacts['provenance.json']);
-  $('result-title').textContent = `Årskarta ${entry.year}`;
+  $('result-title').textContent = `Årskarta ${yearLabel(entry.year)}`;
+  $('vpp-note').textContent = substitutions.get(entry.year)?.note ?? '';
+  $('vpp-note').hidden = !substitutions.has(entry.year);
   $('coverage').textContent = `${(100*r.valid_pixels/(504*504)).toFixed(1)} % giltiga pixlar · ${r.nodata_pixels.toLocaleString('sv-SE')} utan data. Stödlager kan ha luckor; se proveniens.`;
   $('timing').textContent = entry.seconds == null ? '' : `Svarstid: ${entry.seconds.toFixed(1)} s`;
 }
@@ -194,7 +202,7 @@ async function select(lat, lon, {pan=true, year}={}) {
     $('year').value = String(pick);
     const entry = find(place.key, pick);
     if (entry && year !== undefined) show(entry);
-    if (entry) status(`Årskarta ${pick}. Dra i tidsaxeln för att byta år.`);
+    if (entry) status(`Årskarta ${yearLabel(pick)}. Dra i tidsaxeln för att byta år.`);
     else { status('Välj år på tidsaxeln och skapa din karta. Pixlarnas datatäckning kontrolleras vid körning.'); warm(pick); }
     return true;
   } catch (error) { if (current === generation) status(error.message,true); return false; }
@@ -217,10 +225,10 @@ function onTimeline() {
   if (!place) return;
   const year = timelineYear(), entry = find(place.key, year);
   closeInspection();
-  if (entry) { show(entry); if (!busy) status(`Årskarta ${year}.`); return; }
+  if (entry) { show(entry); if (!busy) status(`Årskarta ${yearLabel(year)}.`); return; }
   hidePlace(place.key); render();
   if (!available(year)) { status(`${year} – ej verifierade årsdata för denna plats.`); return; }
-  if (!busy) status(`${year}: ingen karta än. Släpp tidsaxeln för att skapa den.`);
+  if (!busy) status(`${yearLabel(year)}: ingen karta än. Släpp tidsaxeln för att skapa den.`);
   const key = place.key;
   clearTimeout(warmTimer);
   warmTimer = setTimeout(() => { if (place?.key === key && timelineYear() === year) warm(year); }, 350);
@@ -240,14 +248,14 @@ async function create(year) {
   if (existing) return show(existing);
   if (busy) { pendingYear = {key: place.key, year}; return; }
   const target = place, started = performance.now();
-  busy = true; controls(); status(`${year}: skickar begäran …`);
+  busy = true; controls(); status(`${yearLabel(year)}: skickar begäran …`);
   try {
     const submission = await request('/v1/lclu', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:target.lat,lon:target.lon,year})});
     let job;
     do {
       job = await request(submission.poll_url);
       const queued = pendingYear && pendingYear.year !== year ? ` · ${pendingYear.year} står på tur` : '';
-      status(`${year}: ${phaseLabels[job.phase] || phaseLabels[job.status] || 'Bearbetar …'}${queued}`);
+      status(`${yearLabel(year)}: ${phaseLabels[job.phase] || phaseLabels[job.status] || 'Bearbetar …'}${queued}`);
       if (!['success','failed'].includes(job.status)) await new Promise(resolve=>setTimeout(resolve,900));
     } while (!['success','failed'].includes(job.status));
     if (job.status === 'failed') throw new Error(job.error || 'Årskartan kunde inte skapas.');
@@ -256,9 +264,9 @@ async function create(year) {
       order: ++created, seconds: (performance.now()-started)/1000,
       result: {artifacts: r.artifacts, overlay_bounds: r.overlay_bounds, valid_pixels: r.valid_pixels, nodata_pixels: r.nodata_pixels}});
     if (place?.key === target.key && timelineYear() === year) {
-      show(entry); status(r.cache_hit ? `Årskarta ${year} är klar · tidigare verifierat resultat.` : `Årskarta ${year} är klar.`);
-    } else { render(); status(`Årskarta ${year} är klar och finns under Dina kartor.`); }
-  } catch(error) { status(`${year}: ${error.message}`,true); }
+      show(entry); status(r.cache_hit ? `Årskarta ${yearLabel(year)} är klar · tidigare verifierat resultat.` : `Årskarta ${yearLabel(year)} är klar.`);
+    } else { render(); status(`Årskarta ${yearLabel(year)} är klar och finns under Dina kartor.`); }
+  } catch(error) { status(`${yearLabel(year)}: ${error.message}`,true); }
   finally {
     busy = false; controls();
     const next = pendingYear; pendingYear = null;
@@ -316,6 +324,8 @@ restore(); render();
 request('/v1/lclu').then(info=>{
   ready=info.ready; status(info.message); $('historical-note').textContent=info.historical_note;
   candidateYears=info.candidate_years;
+  // An API without the list substitutes no year.
+  substitutions=new Map((info.vpp_substitutions ?? []).map(item=>[item.year,item]));
   $('year').min=String(candidateYears[0]); $('year').max=String(candidateYears.at(-1));
   if(info.areas?.length){
     const areas=L.geoJSON(info.areas,{interactive:false,style:{color:'#245045',weight:2,dashArray:'5 5',fillOpacity:.02}}).addTo(map);
@@ -325,7 +335,9 @@ request('/v1/lclu').then(info=>{
     $('map-caption').textContent='Välj en punkt inom ett streckat demoområde. Årskartan är 5,04 × 5,04 km och kan sträcka sig utanför området.';
     info.areas.forEach((area,index)=>$('area').add(new Option(area.properties.name,String(index))));
     $('area-control').hidden=info.areas.length<2;
-    latestYear=Math.max(0,...info.areas.flatMap(area=>area.properties.years||[]));
+    const offered=info.areas.flatMap(area=>area.properties.years||[]), firstYear=Math.min(...offered);
+    latestYear=Math.max(0,...offered);
+    if(offered.length) $('year-span').textContent=firstYear===latestYear ? String(firstYear) : `${firstYear}\u2060–\u2060${latestYear}`;
     $('year').value=String(latestYear || candidateYears.at(-1));
     $('area').addEventListener('change',()=>{
       const index=Number($('area').value), point=info.locations[index];

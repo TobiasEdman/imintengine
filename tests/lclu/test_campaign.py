@@ -40,20 +40,24 @@ def fixture(tmp_path):
     return data, path, plan
 
 
-def test_preflight_deduplicates_shared_blocks_and_never_substitutes_vpp_year(tmp_path):
+def test_preflight_substitutes_only_the_tabled_vpp_year_and_marks_it(tmp_path):
+    # Only HR-VPP 2024 exists. 2025 uses it through VPP_YEAR_SUBSTITUTIONS and
+    # says so; 2017 has no table entry and stays missing, not filled from 2024.
     data,path,plan = fixture(tmp_path)
     report = preflight(load_campaign(path), [2017,2024,2025], data)
     assert len(report['cells']) == 6
-    assert [c['status'] for c in report['cells']] == ['missing_vpp','source_ready','missing_vpp']*2
+    assert [c['status'] for c in report['cells']] == ['missing_vpp','source_ready','source_ready']*2
+    assert [(c['year'], c['vpp_year'], c['vpp_year_substituted']) for c in report['cells']] == [
+        (2017, 2017, False), (2024, 2024, False), (2025, 2024, True)]*2
     assert report['requested_unique_blocks']==3
-    assert report['source_ready_unique_blocks']==1
-    assert report['source_ready_original_bytes']==132256
+    assert report['source_ready_unique_blocks']==2
+    assert report['source_ready_original_bytes']==2*132256
     assert report['existing_vpp_files']==5
     assert report['existing_vpp_bytes']==5*len(b'file-presence-only')
     (data/'vpp_wekeo/MINV_2024.tif').unlink()
-    missing = preflight(plan,[2024],data)
+    missing = preflight(plan,[2024,2025],data)
     assert missing['source_ready_unique_blocks']==0
-    assert missing['cells'][0]['vpp_missing_metrics']==['MINV']
+    assert [c['vpp_missing_metrics'] for c in missing['cells'][:2]]==[['MINV'],['MINV']]
 
 
 def test_missing_shared_aux_blocks_all_years_and_duplicate_requests_rejected(tmp_path):

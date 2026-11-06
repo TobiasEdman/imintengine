@@ -10,6 +10,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const SCRIPT = fs.readFileSync(path.join(root, 'docs/js/lclu.js'), 'utf8');
 const HTML = fs.readFileSync(path.join(root, 'docs/lclu.html'), 'utf8');
 const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
+// As GET /v1/lclu sends it (imint.inference.lclu.vpp_substitutions).
+const SUBSTITUTIONS = [{year: 2025, vpp_year: 2024, label: 'växtfenologi från 2024',
+  note: 'Uppskattningsvis ~7 % av pixlarna kan avvika jämfört med en karta med årets växtfenologi.'}];
 const PLACES = {A: {lat: 59.5, lon: 17.5}, B: {lat: 59.6, lon: 17.6}, C: {lat: 59.7, lon: 17.7}};
 const box = (lat, lon) => [[lat - 0.01, lon - 0.01], [lat + 0.01, lon + 0.01]];
 
@@ -39,7 +42,8 @@ const bounds = ([[south, west], [north, east]]) => ({
   getWest: () => west, getSouth: () => south, getEast: () => east, getNorth: () => north,
 });
 
-async function boot({omit = [], storage = {}} = {}) {
+// years: what the place and its area offer; substitutions: null for an API without the list.
+async function boot({omit = [], storage = {}, years = [2023, 2024], substitutions = SUBSTITUTIONS} = {}) {
   const elements = {};
   for (const [, tag, attributes] of HTML.matchAll(/<(\w+)([^>]*\bid="[\w-]+"[^>]*)>/g)) {
     const id = attributes.match(/\bid="([\w-]+)"/)[1];
@@ -92,14 +96,15 @@ async function boot({omit = [], storage = {}} = {}) {
     const url = new URL(request.url), route = url.pathname;
     if (route === '/v1/lclu' && request.method === 'GET') {
       return {ready: true, message: 'Välj en plats.', historical_note: '', candidate_years: YEARS, legend: [],
+        ...(substitutions ? {vpp_substitutions: substitutions} : {}),
         locations: [{lat: 59.5, lon: 17.5}],
-        areas: [{type: 'Feature', properties: {name: 'Testområde', years: [2023, 2024]},
+        areas: [{type: 'Feature', properties: {name: 'Testområde', years},
           geometry: {type: 'Polygon', coordinates: [[[17, 59], [18, 59], [18, 60], [17, 60], [17, 59]]]}}]};
     }
     if (route === '/v1/lclu/availability') {
       const lat = Number(url.searchParams.get('lat')), lon = Number(url.searchParams.get('lon'));
       const [[south, west], [north, east]] = box(lat, lon);
-      return {years: [2023, 2024], unavailable_years: [2017, 2018, 2019, 2020, 2021, 2022, 2025], message: '',
+      return {years, unavailable_years: YEARS.filter(year => !years.includes(year)), message: '',
         geometry: {center: [Math.round(lon * 1000), Math.round(lat * 1000)],
           footprint: {type: 'Polygon', coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]]}}};
     }
@@ -221,6 +226,42 @@ const results = {};
   const page = await boot({omit: ['year-ticks']});
   results.outdated_page = {error: page.error, status: page.elements.status.textContent,
     requests: page.requests.length};
+}
+
+// Where the page names the year: readout, tick, status and result panel.
+function labels(page) {
+  const ticks = page.elements['year-ticks'].children, note = page.elements['vpp-note'];
+  return {readout: page.elements['year-value'].value, valuetext: page.elements.year.getAttribute('aria-valuetext'),
+    status: page.elements.status.textContent, result_shown: !page.elements.result.hidden,
+    title: page.elements['result-title'].textContent, note: note.hidden ? null : note.textContent,
+    substituted_ticks: ticks.filter(tick => tick.classList.contains('substituted')).map(tick => [tick.textContent, tick.title])};
+}
+
+// 2025 offered with HR-VPP 2024: chosen, created, then 2024 beside it.
+{
+  const page = await boot({years: [2023, 2024, 2025]});
+  await page.select('A');
+  const chosen = labels(page);
+  await page.create();
+  const made = labels(page);
+  await page.slide(2024, false);
+  const other = labels(page);
+  await page.create();
+  results.substituted = {error: page.error, chosen, made, other, plain: labels(page),
+    span: page.elements['year-span'].textContent, creations: page.creations()};
+}
+
+// An API without the list (a release before the table) labels no year.
+{
+  const page = await boot({substitutions: null});
+  await page.select('A'); await page.create();
+  results.without_list = {error: page.error, ...labels(page)};
+}
+
+// A catalogue offering a single year names that year, not a range.
+{
+  const page = await boot({years: [2024]});
+  results.single_year = {span: page.elements['year-span'].textContent};
 }
 
 process.stdout.write(JSON.stringify(results));

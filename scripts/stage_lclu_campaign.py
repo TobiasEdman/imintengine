@@ -2,8 +2,10 @@
 """Preflight or stage exact municipality/year pairs with one shared COG store.
 
 Preflight reads metadata and file presence only. Staging requires an explicit
-original-byte budget; it never fills auxiliary gaps, substitutes years, deletes
-originals, or changes cluster resources. Source-ready is not model-qualified.
+original-byte budget; it never fills auxiliary gaps, deletes originals, or
+changes cluster resources. It substitutes no year except an HR-VPP year listed
+in lclu.VPP_YEAR_SUBSTITUTIONS, and every cell records its HR-VPP year and
+whether it was substituted. Source-ready is not model-qualified.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from shapely.geometry import box
 from shapely.ops import unary_union
 
 from imint.data.wekeo_vpp import _bounds_overlap, _VPP_PRODUCT_TYPES
-from imint.inference.lclu import YEARS, public_identity, write_json
+from imint.inference.lclu import YEARS, public_identity, vpp_year_for, write_json
 from scripts.cache_predict import file_identity
 from scripts.stage_lclu_demo import cached_block, stage
 
@@ -71,8 +73,9 @@ def preflight(plan: dict, years: list[int], data: Path) -> dict:
         for year in sorted(years):
             keys = [k for k in area['block_keys'] if rows[k]['year'] == year]
             all_keys.update(keys)
+            vpp_year = vpp_year_for(year)
             selected = {name: meta for name, meta in index.items()
-                        if meta['year'] == year and meta['season'] == 1
+                        if meta['year'] == vpp_year and meta['season'] == 1
                         and _bounds_overlap(meta['bounds_4326'], wgs)}
             missing_metrics = []
             for metric in _VPP_PRODUCT_TYPES:
@@ -84,7 +87,8 @@ def preflight(plan: dict, years: list[int], data: Path) -> dict:
             status = ('missing_tessera' if not keys else 'missing_static_aux' if missing_static else
                       'missing_vpp' if missing_metrics or missing_files else 'source_ready')
             cells.append({'area_id': area['id'], 'name': area['municipality']['properties']['name'],
-                          'year': year, 'status': status, 'blocks': len(keys),
+                          'year': year, 'vpp_year': vpp_year, 'vpp_year_substituted': vpp_year != year,
+                          'status': status, 'blocks': len(keys),
                           'original_bytes': sum(rows[k]['grid_size']+rows[k]['scales_size'] for k in keys),
                           'vpp_missing_metrics': missing_metrics, 'vpp_missing_files': missing_files})
             files.update(name for name in selected if (index_path.parent/name).is_file())

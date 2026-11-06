@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Stage a bounded public municipality/year COG mirror on the demo volume.
 
-Existing /data auxiliaries and the private checkpoint are read-only. Exact-year
-VPP must already be present; no CDSE, DES, WEkEO login or year fallback occurs.
-Interrupted downloads/conversions resume from verified receipts.
+Existing /data auxiliaries and the private checkpoint are read-only. HR-VPP for
+the year lclu.vpp_year_for names must already be present; no CDSE, DES, WEkEO
+login or implicit year fallback occurs. Interrupted downloads/conversions resume
+from verified receipts.
 """
 from __future__ import annotations
 
@@ -22,7 +23,9 @@ from shapely.geometry import box, shape
 from shapely.ops import unary_union
 
 from imint.data.wekeo_vpp import _bounds_overlap, _VPP_PRODUCT_TYPES
-from imint.inference.lclu import EMBEDDING, Grid, public_identity, verify_file, write_json
+from imint.inference.lclu import (
+    EMBEDDING, Grid, public_identity, verify_file, vpp_year_for, write_json,
+)
 from imint.inference.lclu_cog import convert_block
 from imint.training.copernicus_dem import _get_cog_urls
 from scripts.cache_predict import contract_pin, file_identity
@@ -84,14 +87,15 @@ def _download(url: str, path: Path, receipt: Path, *, maximum: int, expected: in
     return path
 
 
-def select_vpp(index: dict, year: int, bounds_4326: tuple) -> dict:
+def select_vpp(index: dict, vpp_year: int, bounds_4326: tuple) -> dict:
+    """Season-1 HR-VPP of exactly ``vpp_year`` covering the box; callers map the year first."""
     selected = {name: meta for name, meta in index.items()
-                if meta['year'] == year and meta['season'] == 1
+                if meta['year'] == vpp_year and meta['season'] == 1
                 and _bounds_overlap(meta['bounds_4326'], bounds_4326)}
     for metric in _VPP_PRODUCT_TYPES:
         footprints = [box(*m['bounds_4326']) for m in selected.values() if m['metric'] == metric]
         if not footprints or not unary_union(footprints).covers(box(*bounds_4326)):
-            raise ValueError(f'Exact-year {year} HR-VPP {metric} coverage missing; stage WEkEO data first')
+            raise ValueError(f'Exact-year {vpp_year} HR-VPP {metric} coverage missing; stage WEkEO data first')
     return selected
 
 
@@ -165,9 +169,11 @@ def stage(scope_path: Path, year: int, data: Path, root: Path, *,
     bounds = scope['bounds_3006']
     wgs = transform_bounds('EPSG:3006', 'EPSG:4326', *bounds, densify_pts=41)
     index_path = data / 'vpp_wekeo/index.json'
-    selected = select_vpp(json.loads(index_path.read_text()), year, wgs)
+    vpp_year = vpp_year_for(year)
+    selected = select_vpp(json.loads(index_path.read_text()), vpp_year, wgs)
     index_path = snapshot_vpp(index_path, selected, shared / 'vpp')
-    print(f'Exact {year} VPP: {len(selected)} files; TESSERA: {len(rows)} blocks / {budget} bytes', flush=True)
+    print(f'{year}: HR-VPP {vpp_year}, {len(selected)} files; TESSERA {year}: '
+          f'{len(rows)} blocks / {budget} bytes', flush=True)
     skg = data / 'skg_open'
     config = {'version': 1, 'embedding': EMBEDDING, 'identity_cache': str(receipts),
               'vpp_index': file_identity(index_path), 'vpp_files': {},

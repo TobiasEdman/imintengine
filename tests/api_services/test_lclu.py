@@ -12,9 +12,9 @@ from .helpers import drain
 REQUEST = {'lon': 17.64, 'lat': 59.86, 'year': 2024}
 
 
-def install(api, monkeypatch, *, prediction=None, valid=None):
+def install(api, monkeypatch, *, prediction=None, valid=None, years=(2023, 2024)):
     # Import after the API fixture's isolated module setup.
-    from imint.inference.lclu import Grid, LcluService, BundleCatalog, EMBEDDING, AUX_NAMES
+    from imint.inference.lclu import Grid, LcluService, BundleCatalog, EMBEDDING, AUX_NAMES, vpp_year_for
     from scripts.cache_predict import file_identity
     grid = Grid.from_lonlat(17.64, 59.86)
     path = api.tmp / 'synthetic.npz'
@@ -25,12 +25,12 @@ def install(api, monkeypatch, *, prediction=None, valid=None):
     arrays.update({name: np.ones((512,512), np.float32) for name in AUX_NAMES})
     np.savez_compressed(path, **arrays)
     entries = []
-    for year in [2023,2024]:
+    for year in years:
         year_path = api.tmp / f'synthetic-{year}.npz'
-        np.savez_compressed(year_path, **{**arrays, 'year':year, 'tessera_year':year, 'vpp_year':year})
+        np.savez_compressed(year_path, **{**arrays, 'year':year, 'tessera_year':year, 'vpp_year':vpp_year_for(year)})
         entries.append({'center_3006':[grid.east,grid.north], 'year':year, 'public_area':True,
                         'input':file_identity(year_path), 'embedding':EMBEDDING,
-                        'auxiliary_provenance':{'vpp': {'year': year, 'season': 1, 'index': {'sha256': 'a'*64, 'size': 1}, 'files': []}}})
+                        'auxiliary_provenance':{'vpp': {'year': vpp_year_for(year), 'season': 1, 'index': {'sha256': 'a'*64, 'size': 1}, 'files': []}}})
     class Model:
         contract = {'synthetic': True}
         calls = 0
@@ -79,6 +79,26 @@ def test_async_success_dedup_download_and_no_des(api, monkeypatch):
             assert job.result['artifacts']['provenance.json'].endswith('/provenance.json')
             with pytest.raises(api.server.HTTPException):
                 await api.server.lclu_file(job.job_id,'input.npz')
+    asyncio.run(run())
+
+
+def test_catalogue_and_2025_result_name_the_substituted_hrvpp_year(api, monkeypatch):
+    note = 'Uppskattningsvis ~7 % av pixlarna kan avvika jämfört med en karta med årets växtfenologi.'
+    async def run():
+        async with api.server.lifespan(api.server.app):
+            install(api, monkeypatch, years=(2024, 2025))
+            info = await api.server.lclu_info()
+            assert info['vpp_substitutions'] == [{'year': 2025, 'vpp_year': 2024,
+                                                  'label': 'växtfenologi från 2024', 'note': note}]
+            assert 2025 in info['candidate_years'] and 'HR-VPP 2024' in info['historical_note']
+            available = await api.server.lclu_availability(lon=REQUEST['lon'], lat=REQUEST['lat'])
+            assert available['years'] == [2024, 2025]
+            for year, substituted in ((2024, False), (2025, True)):
+                submitted = await api.server.submit_lclu(api.server.LcluRequest(**{**REQUEST, 'year': year}))
+                await asyncio.gather(*tuple(api.server._pending_jobs))
+                job = await api.server.get_job(submitted.job_id)
+                assert job.status == 'success' and job.result['year'] == year
+                assert job.result['vpp_year'] == 2024 and job.result['vpp_year_substituted'] is substituted
     asyncio.run(run())
 
 

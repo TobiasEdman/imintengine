@@ -4,9 +4,11 @@
 Read-only planner. It takes the campaign plan (``config/lclu/municipalities.json``)
 and a campaign preflight receipt (``scripts/stage_lclu_campaign.py`` preflight
 output) and, for every area-year whose status is ``missing_vpp``, derives the
-Sentinel-2 MGRS tiles covering the area's buffered EPSG:3006 bounds. Output:
+Sentinel-2 MGRS tiles covering the area's buffered EPSG:3006 bounds. The HR-VPP
+year fetched is the cell's ``vpp_year``, which differs from its year only where
+``lclu.VPP_YEAR_SUBSTITUTIONS`` says so (2025 uses 2024). Output:
 
-  * the exact (MGRS, year) pairs and ready-to-run ``scripts/prefetch_vpp_wekeo.py``
+  * the exact (MGRS, HR-VPP year) pairs and ready-to-run ``scripts/prefetch_vpp_wekeo.py``
     invocations — WEkEO HDA only, never CDSE PU (CLAUDE.md VPP rule);
   * the area × year coverage matrix of the receipt as a Markdown table.
 
@@ -75,8 +77,9 @@ def plan(campaign: Path, preflight: Path) -> dict:
             continue
         tiles = tiles_by_area[cell['area_id']]
         cells.append({'area_id': cell['area_id'], 'name': cell['name'], 'year': cell['year'],
+                      'vpp_year': cell['vpp_year'],
                       'vpp_missing_metrics': cell['vpp_missing_metrics'], 'mgrs_tiles': tiles})
-        by_year[cell['year']].update(tiles)
+        by_year[cell['vpp_year']].update(tiles)
     n_pairs = sum(len(tiles) for tiles in by_year.values())
     n_cogs = n_pairs * len(derive_missing_vpp_mgrs._REQUIRED_METRICS)
     mean_cog = receipt['existing_vpp_bytes'] / receipt['existing_vpp_files']
@@ -95,9 +98,9 @@ def plan(campaign: Path, preflight: Path) -> dict:
             f"python scripts/prefetch_vpp_wekeo.py --mgrs-tiles {','.join(sorted(tiles))} "
             f'--years {year} --dest-dir /data/vpp_wekeo'
             for year, tiles in sorted(by_year.items())],
-        'note': ('Rerun the campaign preflight after the prefetch: a year that WEkEO has '
-                 'not published stays missing_vpp and is an explicit blocker, never '
-                 'filled from another year.'),
+        'note': ('Rerun the campaign preflight after the prefetch: an HR-VPP year that '
+                 'WEkEO has not published stays missing_vpp and is an explicit blocker. '
+                 'Only lclu.VPP_YEAR_SUBSTITUTIONS maps a year to another HR-VPP year.'),
     }
 
 

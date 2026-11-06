@@ -33,21 +33,51 @@ from imint.tile_grid import bounds_from_center
 from scripts.cache_predict import atomic_write, contract_pin, file_identity
 
 YEARS = tuple(range(2017, 2026))
+# The HR-VPP year used for a TESSERA year. This table is the only exception to
+# "HR-VPP year == TESSERA year". A year not listed uses its own HR-VPP, and
+# validate_bundle, public_provenance and the acceptance audit reject every
+# other pairing, so a missing HR-VPP year never falls back implicitly.
+#
+# 2025 -> 2024: Tobias's decision 2026-11-03. HR-VPP 2025 is not published
+# (WEkEO: 0 of 20 tiles). Control r1 (scripts/compare_vpp_year_shift.py) at the
+# serving inference pin, 11 demo areas x 2019-2024: classifying with HR-VPP
+# y-1 instead of y changes a median 6.8 % and at most 10.2 % of valid pixels,
+# with a repeat-run noise floor of 0. That is map-to-map change, not accuracy,
+# and it was measured for a one-year shift only.
+VPP_YEAR_SUBSTITUTIONS = {2025: 2024}
 SOURCE_SIZE, OUTPUT_SIZE, CROP, NODATA = 512, 504, 4, 255
 EMBEDDING = {"producer": "geotessera", "producer_version": "0.10.2",
              "dataset": "v1", "variant": "vultr"}
 AUX_NAMES = ["height", "volume", "basal_area", "diameter", "dem", "vpp_sosd",
              "vpp_eosd", "vpp_length", "vpp_maxv", "vpp_minv", "markfukt"]
 HISTORICAL_NOTE = (
-    "Året gäller TESSERA och HR-VPP. Skogliga grunddata använder senaste "
+    "Året gäller TESSERA och HR-VPP"
+    + "".join(f", utom {year}: HR-VPP {year} är inte publicerad, så {year} använder HR-VPP {vpp}"
+              for year, vpp in sorted(VPP_YEAR_SUBSTITUTIONS.items()))
+    + ". Skogliga grunddata använder senaste "
     "tillgängliga skanning i den angivna utgåvan. Trädhöjd, markfukt och DEM "
     "är fasta stödlager, inte observationer från det valda året."
 )
+# Page wording for a substituted year; ~7 % is control r1's median, 6.8 %.
+VPP_SUBSTITUTION_NOTE = ("Uppskattningsvis ~7 % av pixlarna kan avvika jämfört med "
+                         "en karta med årets växtfenologi.")
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class InputUnavailable(ValueError):
     """No verified input for the exact requested grid and year."""
+
+
+def vpp_year_for(year: int) -> int:
+    """The HR-VPP year a map of ``year`` uses: its own unless VPP_YEAR_SUBSTITUTIONS names one."""
+    return VPP_YEAR_SUBSTITUTIONS.get(year, year)
+
+
+def vpp_substitutions() -> list[dict]:
+    """The catalogue's notice for each substituted year, worded for the page."""
+    return [{"year": year, "vpp_year": vpp, "label": f"växtfenologi från {vpp}",
+             "note": VPP_SUBSTITUTION_NOTE}
+            for year, vpp in sorted(VPP_YEAR_SUBSTITUTIONS.items())]
 
 
 @dataclass(frozen=True)
@@ -118,9 +148,10 @@ def public_provenance(entry: dict) -> dict:
 
     raw = entry["auxiliary_provenance"]
     aux = {}
+    vpp_year = vpp_year_for(entry["year"])
     if "vpp" in raw:
         vpp = raw["vpp"]
-        if type(vpp["year"]) is not int or vpp["year"] != entry["year"] or vpp["season"] != 1:
+        if type(vpp["year"]) is not int or vpp["year"] != vpp_year or vpp["season"] != 1:
             raise ValueError("Provenance must name the exact HR-VPP year and season")
         aux["vpp"] = {"year": vpp["year"], "season": 1,
                       "index": public_identity(vpp["index"]),
@@ -150,7 +181,8 @@ def public_provenance(entry: dict) -> dict:
     for name in ("download_budget_bytes", "uncached_source_bytes", "blocks"):
         if name in raw_embedding:
             embedding[name] = count(raw_embedding[name])
-    return {"auxiliary_provenance": aux, "embedding_provenance": embedding}
+    return {"vpp_year": vpp_year, "vpp_year_substituted": vpp_year != entry["year"],
+            "auxiliary_provenance": aux, "embedding_provenance": embedding}
 
 
 def verify_file(record: dict, base: Path) -> Path:
@@ -173,8 +205,10 @@ def validate_bundle(path: Path, record: dict, grid: Grid, year: int) -> dict:
     data, buffer = _load_npz_for_inference(
         path, expected_sha256=record["sha256"], expected_size=record["size"])
     try:
-        if any(int(data[key]) != year for key in ("year", "tessera_year", "vpp_year")):
-            raise ValueError("Input years must exactly match the requested year")
+        if (int(data["year"]) != year or int(data["tessera_year"]) != year
+                or int(data["vpp_year"]) != vpp_year_for(year)):
+            raise ValueError("Input years must exactly match the requested year "
+                             "and its HR-VPP year")
         if (str(data["crs"].item()) != "EPSG:3006"
                 or not np.array_equal(data["transform"], list(grid.transform())[:6])):
             raise ValueError("Input affine/CRS does not match the snapped 512px grid")
@@ -509,7 +543,10 @@ class LcluService:
                 write_json(temporary / "provenance.json", provenance)
                 files = {name: public_identity(file_identity(temporary / name)) for name in
                          ("classification.tif", "overlay.png", "legend.json", "provenance.json")}
-                result = {"request_key": request_key, "cache_key": key, "year": year, "geometry": grid.describe(),
+                result = {"request_key": request_key, "cache_key": key, "year": year,
+                          "vpp_year": sources["vpp_year"],
+                          "vpp_year_substituted": sources["vpp_year_substituted"],
+                          "geometry": grid.describe(),
                           "files": files, "quality": quality, **details,
                           "timing_ms": provenance["timing_ms"]}
                 write_json(temporary / "result.json", result)

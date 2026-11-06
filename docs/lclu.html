@@ -7,10 +7,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css?v=5">
   <link rel="stylesheet" href="css/leaflet.css">
-  <link rel="stylesheet" href="css/lclu.css?v=3">
+  <link rel="stylesheet" href="css/lclu.css?v=4">
   <script defer src="js/vendor/leaflet.min.js"></script>
   <script defer src="js/lclu-config.js"></script>
-  <script defer src="js/lclu.js?v=2"></script>
+  <script defer src="js/lclu.js?v=3"></script>
 </head>
 <body>
 <header class="header">
@@ -18,7 +18,7 @@
   <nav class="header-nav" aria-label="Showcase"><a class="theme-tab" href="index.html">← Showcase</a><span class="theme-tab active">🗺️ Marktäcke</span></nav>
 </header>
 <main>
-  <section class="intro"><p class="eyebrow" id="area-title">SVERIGE / HISTORISKA ÅR</p><h2>Markanvändning och marktäcke 2017&#8288;–&#8288;2024.</h2>
+  <section class="intro"><p class="eyebrow" id="area-title">SVERIGE / HISTORISKA ÅR</p><h2>Markanvändning och marktäcke <span id="year-span">2017&#8288;–&#8288;2024</span>.</h2>
     <p>Klicka i kartan och välj ett tillgängligt år. Varje karta täcker 5,04 × 5,04 km i 10 meters upplösning.</p>
   </section>
   <div class="workspace">
@@ -49,6 +49,7 @@
       <progress id="progress" aria-label="Bearbetning" hidden></progress>
       <section id="result" hidden>
         <h3 id="result-title">Årskarta klar</h3>
+        <p id="vpp-note" hidden></p>
         <p id="coverage"></p>
         <p id="timing"></p>
         <p>Klicka på en karta för att visa markklass. Klicka utanför kartorna eller använd koordinatfälten för en ny plats.</p>
