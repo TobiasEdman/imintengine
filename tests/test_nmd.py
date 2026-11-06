@@ -12,6 +12,7 @@ import pytest
 from imint.analyzers.base import AnalysisResult
 from imint.analyzers.nmd import (
     NMDAnalyzer,
+    NMD2018_LEGEND,
     NMD_LEVEL1,
     NMD_LEVEL2,
     L2_CLASSES,
@@ -144,6 +145,43 @@ class TestNMDRasterToL2:
         assert l2.dtype == np.uint8
 
 
+class TestNMD2018LegendMatchesTheTables:
+    """The 2018 legend reproduces the per-code loops it replaced, for every uint8 code."""
+
+    @staticmethod
+    def _loop_index(raster, groups):
+        out = np.zeros_like(raster, dtype=np.uint8)
+        for idx, codes in enumerate(groups.values(), start=1):
+            for code in codes:
+                out[raster == code] = idx
+        return out
+
+    def test_index_rasters_equal_the_loops(self):
+        every_code = np.arange(256, dtype=np.uint8).reshape(16, 16)
+        np.testing.assert_array_equal(
+            nmd_raster_to_l1(every_code), self._loop_index(every_code, NMD_LEVEL1))
+        np.testing.assert_array_equal(
+            nmd_raster_to_l2(every_code), self._loop_index(every_code, NMD_LEVEL2))
+
+    def test_stats_equal_the_isin_counts(self):
+        rng = np.random.default_rng(0)
+        codes = sorted(set().union(*NMD_LEVEL2.values()) | {0, 2, 99, 255})
+        raster = rng.choice(np.array(codes, dtype=np.uint8), size=(40, 30))
+        stats = _compute_class_stats(raster, NMD2018_LEGEND)
+        known_l1 = set().union(*NMD_LEVEL1.values())
+        expected_l1 = {name: int(np.isin(raster, list(c)).sum()) for name, c in NMD_LEVEL1.items()}
+        expected_l1["unclassified"] = int((~np.isin(raster, list(known_l1))).sum())
+        expected_l2 = {name: int(np.isin(raster, list(c)).sum()) for name, c in NMD_LEVEL2.items()}
+        assert {k: v["pixel_count"] for k, v in stats["level1"].items()} == {
+            k: v for k, v in expected_l1.items() if v}
+        assert {k: v["pixel_count"] for k, v in stats["level2"].items()} == {
+            k: v for k, v in expected_l2.items() if v}
+        assert list(stats["level1"])[-1] == "unclassified"
+
+    def test_2018_tolerates_unknown_codes(self):
+        NMD2018_LEGEND.check(np.array([[0, 99, 255]], dtype=np.uint8))
+
+
 # ── Class statistics tests ───────────────────────────────────────────────────
 
 class TestNMDClassStats:
@@ -152,7 +190,7 @@ class TestNMDClassStats:
     def test_single_class(self):
         """Raster with a single class should return 100% for that class."""
         raster = np.full((10, 10), 111, dtype=np.uint8)  # All forest pine
-        stats = _compute_class_stats(raster)
+        stats = _compute_class_stats(raster, NMD2018_LEGEND)
 
         assert "forest" in stats["level1"]
         assert stats["level1"]["forest"]["fraction"] == 1.0
@@ -168,7 +206,7 @@ class TestNMDClassStats:
         raster[5:, :5] = 3     # 25 pixels cropland
         raster[5:, 5:] = 61    # 25 pixels water
 
-        stats = _compute_class_stats(raster)
+        stats = _compute_class_stats(raster, NMD2018_LEGEND)
         assert stats["level1"]["forest"]["fraction"] == 0.5
         assert stats["level1"]["cropland"]["fraction"] == 0.25
         assert stats["level1"]["water"]["fraction"] == 0.25
@@ -176,14 +214,14 @@ class TestNMDClassStats:
     def test_unclassified(self):
         """Unknown codes should be counted as unclassified."""
         raster = np.full((10, 10), 255, dtype=np.uint8)
-        stats = _compute_class_stats(raster)
+        stats = _compute_class_stats(raster, NMD2018_LEGEND)
         assert "unclassified" in stats["level1"]
         assert stats["level1"]["unclassified"]["fraction"] == 1.0
 
     def test_empty_classes_not_in_stats(self):
         """Classes with 0 pixels should not appear in stats."""
         raster = np.full((10, 10), 111, dtype=np.uint8)
-        stats = _compute_class_stats(raster)
+        stats = _compute_class_stats(raster, NMD2018_LEGEND)
         assert "water" not in stats["level1"]
         assert "cropland" not in stats["level1"]
 
@@ -212,7 +250,7 @@ class TestNMDCrossReference:
             outputs={"indices": {"NDVI": ndvi, "NDWI": ndvi * -1}},
         )
 
-        result = _spectral_cross_ref(nmd, spectral)
+        result = _spectral_cross_ref(nmd, spectral, NMD2018_LEGEND)
         assert abs(result["forest_pine"]["mean_ndvi"] - 0.8) < 0.01
         assert abs(result["water_lakes"]["mean_ndvi"] - (-0.2)) < 0.01
 
@@ -227,7 +265,7 @@ class TestNMDCrossReference:
             outputs={"change_mask": change_mask},
         )
 
-        result = _change_cross_ref(nmd, change)
+        result = _change_cross_ref(nmd, change, NMD2018_LEGEND)
         assert result["forest_pine"]["change_fraction"] == 0.5  # 25/50
         assert result["forest_pine"]["changed_pixels"] == 25
         assert result["water_lakes"]["change_fraction"] == 0.0
@@ -242,7 +280,7 @@ class TestNMDCrossReference:
             outputs={"change_mask": change_mask},
         )
 
-        result = _change_cross_ref(nmd, change)
+        result = _change_cross_ref(nmd, change, NMD2018_LEGEND)
         assert result == {}
 
     def test_anomaly_cross_ref(self):
@@ -258,7 +296,7 @@ class TestNMDCrossReference:
             outputs={"regions": regions},
         )
 
-        result = _anomaly_cross_ref(nmd, objdet)
+        result = _anomaly_cross_ref(nmd, objdet, NMD2018_LEGEND)
         assert result["forest_pine"]["count"] == 1
         assert result["water_lakes"]["count"] == 1
 
@@ -270,7 +308,7 @@ class TestNMDCrossReference:
             outputs={"regions": []},
         )
 
-        result = _anomaly_cross_ref(nmd, objdet)
+        result = _anomaly_cross_ref(nmd, objdet, NMD2018_LEGEND)
         assert result == {}
 
     def test_full_cross_reference(self):
@@ -291,7 +329,7 @@ class TestNMDCrossReference:
             ),
         ]
 
-        cross_ref = _cross_reference(nmd, results)
+        cross_ref = _cross_reference(nmd, results, NMD2018_LEGEND)
         assert "change_detection" in cross_ref
         assert "spectral" in cross_ref
         # object_detection returns {} for empty regions, but key should not be present
@@ -308,7 +346,7 @@ class TestNMDCrossReference:
             ),
         ]
 
-        cross_ref = _cross_reference(nmd, results)
+        cross_ref = _cross_reference(nmd, results, NMD2018_LEGEND)
         assert "spectral" not in cross_ref
 
 
