@@ -16,6 +16,8 @@ const map = L.map('map', {minZoom: 4, maxZoom: 18, zoomAnimation: false, fadeAni
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }).addTo(map);
+// In the showcase the map sits in a sub-tab: redraw it when the tab is shown again.
+new ResizeObserver(([entry]) => { if (entry.contentRect.width) map.invalidateSize(); }).observe($('map'));
 // place: the chosen window {key, lat, lon, years}; key is the server's grid centre.
 let place = null, footprint = null, generation = 0, busy = false, ready = false, inspection = 0, clicks = 0;
 let latestYear = 0, candidateYears = [], areaLayers = [], areaNames = [], substitutions = new Map();

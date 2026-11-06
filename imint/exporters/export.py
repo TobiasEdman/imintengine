@@ -13,6 +13,8 @@ import numpy as np
 from PIL import Image
 from datetime import datetime, timezone
 
+from ..schema.nmd2023 import NMD2023_CLASSES
+
 
 def save_rgb_png(rgb: np.ndarray, path: str) -> str:
     """Save an (H, W, 3) float32 [0,1] RGB array as a PNG file."""
@@ -406,56 +408,43 @@ def save_summary_report(
     return path
 
 
-def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
-    """Render NMD land cover classes as a color-coded PNG overlay.
+# Raw NMD 2018 Generell (10 m) code → display colour (R, G, B).
+_NMD2018_RAW_COLORS = {
+    # Skog utanför våtmark
+    111: (0, 100, 0),       # Tallskog
+    112: (34, 139, 34),     # Granskog
+    113: (20, 120, 20),     # Barrblandskog
+    114: (60, 179, 113),    # Lövblandad barrskog
+    115: (50, 205, 50),     # Triviallövskog
+    116: (80, 180, 60),     # Ädellövskog
+    117: (100, 200, 80),    # Triviallövskog med ädellövinslag
+    118: (70, 160, 100),    # Temporärt ej skog
+    # Skog på våtmark
+    121: (46, 79, 46),      # Tallskog våtmark
+    122: (58, 95, 58),      # Granskog våtmark
+    123: (50, 85, 50),      # Barrblandskog våtmark
+    124: (90, 143, 90),     # Lövblandad barrskog våtmark
+    125: (74, 127, 74),     # Triviallövskog våtmark
+    126: (85, 140, 80),     # Ädellövskog våtmark
+    127: (95, 155, 90),     # Triviallövskog med ädellövinslag våtmark
+    128: (80, 130, 80),     # Temporärt ej skog våtmark
+    # Öppen mark
+    2:   (139, 90, 43),     # Öppen våtmark
+    3:   (255, 215, 0),     # Åkermark
+    41:  (200, 173, 127),   # Övrig öppen mark utan vegetation
+    42:  (210, 180, 140),   # Övrig öppen mark med vegetation
+    # Bebyggelse
+    51:  (255, 0, 0),       # Exploaterad mark, byggnad
+    52:  (255, 69, 0),      # Exploaterad mark, ej byggnad/väg
+    53:  (255, 99, 71),     # Exploaterad mark, övrig hårdgjord
+    # Vatten
+    61:  (0, 0, 255),       # Sjö och vattendrag
+    62:  (30, 144, 255),    # Hav
+}
 
-    Handles both raw NMD codes (e.g. 111, 112, 3, 42, 61, …) and
-    pre-remapped sequential codes (0-19).  If max value > 19 the raw
-    NMD coding system is assumed and mapped to display colours.
-
-    Args:
-        l2_raster: 2D uint8/uint16 array with NMD class codes.
-        path: Output PNG path.
-
-    Returns:
-        The output file path.
-    """
-    # Raw NMD Generell (10 m) code → display colour (R, G, B)
-    _RAW_NMD_COLORS = {
-        # Skog utanför våtmark
-        111: (0, 100, 0),       # Tallskog
-        112: (34, 139, 34),     # Granskog
-        113: (20, 120, 20),     # Barrblandskog
-        114: (60, 179, 113),    # Lövblandad barrskog
-        115: (50, 205, 50),     # Triviallövskog
-        116: (80, 180, 60),     # Ädellövskog
-        117: (100, 200, 80),    # Triviallövskog med ädellövinslag
-        118: (70, 160, 100),    # Temporärt ej skog
-        # Skog på våtmark
-        121: (46, 79, 46),      # Tallskog våtmark
-        122: (58, 95, 58),      # Granskog våtmark
-        123: (50, 85, 50),      # Barrblandskog våtmark
-        124: (90, 143, 90),     # Lövblandad barrskog våtmark
-        125: (74, 127, 74),     # Triviallövskog våtmark
-        126: (85, 140, 80),     # Ädellövskog våtmark
-        127: (95, 155, 90),     # Triviallövskog med ädellövinslag våtmark
-        128: (80, 130, 80),     # Temporärt ej skog våtmark
-        # Öppen mark
-        2:   (139, 90, 43),     # Öppen våtmark
-        3:   (255, 215, 0),     # Åkermark
-        41:  (200, 173, 127),   # Övrig öppen mark utan vegetation
-        42:  (210, 180, 140),   # Övrig öppen mark med vegetation
-        # Bebyggelse
-        51:  (255, 0, 0),       # Exploaterad mark, byggnad
-        52:  (255, 69, 0),      # Exploaterad mark, ej byggnad/väg
-        53:  (255, 99, 71),     # Exploaterad mark, övrig hårdgjord
-        # Vatten
-        61:  (0, 0, 255),       # Sjö och vattendrag
-        62:  (30, 144, 255),    # Hav
-    }
-
-    # Sequential L2 palette (for pre-remapped rasters, indices 0-19)
-    _SEQ_PALETTE = np.array([
+# Level-2 index raster (NMDLegend.l2_raster) → display colour, per palette.
+_NMD_L2_COLORS = {
+    "nmd2018_l2": np.array([
         [128, 128, 128],  # 0: unclassified
         [0, 100, 0],      # 1: forest_pine
         [34, 139, 34],    # 2: forest_spruce
@@ -476,21 +465,51 @@ def save_nmd_overlay(l2_raster: np.ndarray, path: str) -> str:
         [255, 99, 71],    # 17: developed_roads
         [0, 0, 255],      # 18: water_lakes
         [30, 144, 255],   # 19: water_sea
-    ], dtype=np.uint8)
+    ], dtype=np.uint8),
+    # 0: outside NMD 2023 coverage; 1-55: the official QML classes, in order.
+    "nmd2023_l2": np.array(
+        [[128, 128, 128]] + [list(bytes.fromhex(color[1:])) for _, color in NMD2023_CLASSES.values()],
+        dtype=np.uint8,
+    ),
+}
 
-    max_val = int(l2_raster.max())
-    if max_val > 19:
-        # Raw NMD codes — map via lookup
-        h, w = l2_raster.shape[:2]
-        rgb = np.full((h, w, 3), 128, dtype=np.uint8)  # default gray
-        for code, color in _RAW_NMD_COLORS.items():
-            mask = l2_raster == code
-            if mask.any():
-                rgb[mask] = color
+NMD_OVERLAY_PALETTES = ("nmd2018_raw", *_NMD_L2_COLORS)
+
+
+def save_nmd_overlay(raster: np.ndarray, path: str, *, palette: str) -> str:
+    """Render an NMD raster as a colour-coded PNG overlay.
+
+    The caller states what the raster holds; nothing is inferred from its
+    values.
+
+    Args:
+        raster: 2D array of level-2 indices or raw codes, as ``palette`` says.
+        path: Output PNG path.
+        palette: ``"nmd2018_l2"`` — NMD 2018 level-2 indices 0-19
+            (``nmd_raster_to_l2``); ``"nmd2023_l2"`` — NMD 2023 level-2
+            indices 0-55 (``NMD2023_LEGEND.l2_raster``) in Naturvårdsverket's
+            colours, grey outside coverage; ``"nmd2018_raw"`` — raw NMD 2018
+            codes, grey where a code has no colour.
+
+    Returns:
+        The output file path.
+
+    Raises:
+        ValueError: unknown palette, or a level-2 index the palette lacks.
+    """
+    if palette == "nmd2018_raw":
+        rgb = np.full((*raster.shape[:2], 3), 128, dtype=np.uint8)  # grey
+        for code, color in _NMD2018_RAW_COLORS.items():
+            rgb[raster == code] = color
+    elif palette in _NMD_L2_COLORS:
+        colors = _NMD_L2_COLORS[palette]
+        if raster.size and int(raster.max()) >= len(colors):
+            raise ValueError(
+                f"{palette} has {len(colors)} entries; raster holds index {int(raster.max())}"
+            )
+        rgb = colors[raster]
     else:
-        # Pre-remapped sequential codes
-        clamped = np.clip(l2_raster, 0, len(_SEQ_PALETTE) - 1)
-        rgb = _SEQ_PALETTE[clamped]
+        raise ValueError(f"unknown NMD overlay palette {palette!r}; expected {NMD_OVERLAY_PALETTES}")
 
     Image.fromarray(rgb).save(path)
     print(f"    saved: {path}")
@@ -531,6 +550,21 @@ _NMD_L2_PALETTE = {
     "water_sea":                {"color": "#1E90FF", "name": "Hav"},
 }
 
+# Level-2 key → display colour and Swedish name, per NMD product, in level-2
+# index order (index 0, no class, is grey). NMD 2023 uses its official QML.
+_NMD_L2_DISPLAY = {
+    2018: _NMD_L2_PALETTE,
+    2023: {str(code): {"color": color, "name": name}
+           for code, (name, color) in NMD2023_CLASSES.items()},
+}
+
+
+def _nmd_l2_display(product: int) -> dict:
+    try:
+        return _NMD_L2_DISPLAY[product]
+    except KeyError:
+        raise ValueError(f"no NMD level-2 display table for product {product!r}") from None
+
 
 def save_nmd_visualization(
     l2_raster: np.ndarray,
@@ -538,6 +572,8 @@ def save_nmd_visualization(
     class_stats: dict,
     cross_ref: dict | None,
     path: str,
+    *,
+    product: int,
 ) -> str:
     """Create a comprehensive NMD land cover visualization.
 
@@ -548,11 +584,12 @@ def save_nmd_visualization(
         Panel 4: Cross-reference — mean NDVI/NDWI per LULC class (Level 2)
 
     Args:
-        l2_raster: 2D uint8 array with Level 2 class codes (0-19).
+        l2_raster: 2D uint8 array of level-2 indices (``NMDLegend.l2_raster``).
         rgb: (H, W, 3) float32 [0,1] RGB reference image.
         class_stats: Dict with "level1" and "level2" sub-dicts from NMDAnalyzer.
         cross_ref: Cross-reference dict (spectral, change, object per class).
         path: Output PNG path.
+        product: NMD edition (2018 or 2023) the raster and stats come from.
 
     Returns:
         The output file path.
@@ -563,6 +600,7 @@ def save_nmd_visualization(
     import matplotlib.patches as mpatches
     from matplotlib.gridspec import GridSpec
 
+    l2_display = _nmd_l2_display(product)
     has_spectral = cross_ref and "spectral" in cross_ref
 
     # Layout: 2 rows x 2 columns
@@ -578,27 +616,28 @@ def save_nmd_visualization(
     # ── Panel 2: NMD Level 2 map with legend ─────────────────────────────
     ax_nmd = fig.add_subplot(gs[0, 1])
 
-    # Build L2 palette array: index 0 = unclassified, 1-19 = L2 classes
-    l2_palette_list = [(128, 128, 128)]  # 0: unclassified
-    l2_keys = list(_NMD_L2_PALETTE.keys())
+    # Build L2 palette array: index 0 = no class, then the L2 classes in order
+    l2_palette_list = [(128, 128, 128)]  # 0: unclassified / outside coverage
+    l2_keys = list(l2_display.keys())
     for key in l2_keys:
-        hex_c = _NMD_L2_PALETTE[key]["color"]
+        hex_c = l2_display[key]["color"]
         r, g, b = int(hex_c[1:3], 16), int(hex_c[3:5], 16), int(hex_c[5:7], 16)
         l2_palette_list.append((r, g, b))
     palette_arr = np.array(l2_palette_list, dtype=np.uint8)
 
-    clamped = np.clip(l2_raster, 0, len(palette_arr) - 1)
-    nmd_rgb = palette_arr[clamped]
+    if l2_raster.size and int(l2_raster.max()) >= len(palette_arr):
+        raise ValueError(f"NMD {product} level-2 raster holds index {int(l2_raster.max())}")
+    nmd_rgb = palette_arr[l2_raster]
 
     ax_nmd.imshow(nmd_rgb)
-    ax_nmd.set_title("NMD Markt\u00e4cke (Niv\u00e5 2)", fontsize=13, fontweight="bold")
+    ax_nmd.set_title(f"NMD {product} Markt\u00e4cke (Niv\u00e5 2)", fontsize=13, fontweight="bold")
     ax_nmd.axis("off")
 
     # Legend with L2 class names and fractions
     l2_stats = class_stats.get("level2", {})
     legend_patches = []
     for key in l2_keys:
-        info = _NMD_L2_PALETTE[key]
+        info = l2_display[key]
         stats = l2_stats.get(key)
         if stats and stats["fraction"] > 0.001:
             pct = stats["fraction"] * 100
@@ -630,7 +669,7 @@ def save_nmd_visualization(
         fracs_l2 = []
         colors_l2 = []
         for key, stats in l2_sorted:
-            info = _NMD_L2_PALETTE.get(key, {"color": "#808080", "name": key})
+            info = l2_display.get(key, {"color": "#808080", "name": key})
             names_l2.append(info["name"])
             fracs_l2.append(stats["fraction"] * 100)
             colors_l2.append(info["color"])
@@ -678,7 +717,7 @@ def save_nmd_visualization(
 
         for key in l2_keys:
             if key in spectral_xref:
-                info = _NMD_L2_PALETTE[key]
+                info = l2_display[key]
                 xref_classes.append(info["name"])
                 ndvi_vals.append(spectral_xref[key].get("mean_ndvi", 0))
                 ndwi_vals.append(spectral_xref[key].get("mean_ndwi", 0))
@@ -721,7 +760,7 @@ def save_nmd_visualization(
                      ha="center", va="center", fontsize=14)
         ax_xref.axis("off")
 
-    fig.suptitle("NMD Markt\u00e4ckeanalys \u2014 Nationellt Markt\u00e4ckedata",
+    fig.suptitle(f"NMD {product} Markt\u00e4ckeanalys \u2014 Nationellt Markt\u00e4ckedata",
                  fontsize=15, fontweight="bold", y=0.98)
 
     fig.savefig(path, dpi=150, bbox_inches="tight")
@@ -793,6 +832,8 @@ def save_nmd_stats(
     class_stats: dict,
     cross_ref: dict | None,
     path: str,
+    *,
+    product: int,
 ) -> str:
     """Save NMD class statistics and cross-reference data as JSON.
 
@@ -800,11 +841,14 @@ def save_nmd_stats(
         class_stats: Dict with "level1" and "level2" sub-dicts.
         cross_ref: Cross-reference dict (spectral, change, object per class).
         path: Output JSON path.
+        product: NMD edition (2018 or 2023); recorded so readers pick the
+            right class table (2023 level-2 keys are codes, e.g. "4211").
 
     Returns:
         The output file path.
     """
     data = {
+        "product": product,
         "class_stats": class_stats,
         "cross_reference": cross_ref or {},
     }

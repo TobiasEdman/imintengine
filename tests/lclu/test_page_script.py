@@ -56,6 +56,25 @@ def test_the_page_versions_its_script():
     assert re.search(r'<link rel="stylesheet" href="css/lclu\.css\?v=\d+">', page)
 
 
+def test_the_stylesheet_reaches_only_the_page():
+    # The showcase loads lclu.css into index.html for its Marktäckekartering
+    # sub-tab, so every rule must be scoped to .lclu (lclu.html's body, the tab).
+    css = re.sub(r'/\*.*?\*/', '', (ROOT/'docs/css/lclu.css').read_text(), flags=re.S)
+    preludes = re.findall(r'([^{}]+)\{', re.sub(r'@media[^{]*\{', '', css))
+    selectors = [s.strip() for prelude in preludes for s in prelude.split(',')]
+    assert selectors and [s for s in selectors if s != '.lclu' and not s.startswith('.lclu ')] == []
+    assert '<body class="lclu">' in (ROOT/'docs/lclu.html').read_text()
+
+
+def test_the_showcase_tab_shows_this_page_first():
+    index = (ROOT/'docs/index.html').read_text()
+    nav = re.search(r'id="tab-lulc">\s*<div class="sub-tab-nav">(.*?)</div>', index, re.S)[1]
+    assert re.findall(r'data-subtab="(\w+)"', nav)[0] == 'lclu'
+    assert re.findall(r'class="sub-tab active" data-subtab="(\w+)"', nav) == ['lclu']
+    assert re.search(r'<div class="sub-tab-content active lclu" id="tab-lclu" data-src="lclu\.html"></div>', index)
+    assert "loadAnnualMap();" in (ROOT/'docs/js/app.js').read_text()
+
+
 LABEL = '2025 · växtfenologi från 2024'
 NOTE = 'Uppskattningsvis ~7 % av pixlarna kan avvika jämfört med en karta med årets växtfenologi.'
 

@@ -17,7 +17,8 @@ bands, SCL cloud mask, and RGB composites. Date discovery uses DES STAC
 for both backends.
 
 Also provides NMD (Nationellt Marktäckedata) fetching for LULC analysis.
-NMD is a static 10m land cover dataset from Naturvårdsverket.
+NMD is a static 10m land cover dataset from Naturvårdsverket: NMD 2018
+from DES openEO, NMD 2023 from the national GeoTIFF ($NMD2023_PATH).
 
 Sjökort (nautical chart) data can be fetched from Sjöfartsverket via
 SLU GET (Geodata Extraction Tool). This provides S-57 vector data for
@@ -41,8 +42,8 @@ Usage:
         # Use result.rgb and result.bands for analysis
         ...
 
-    nmd = fetch_nmd_data(coords={...}, target_shape=(H, W))
-    # nmd.nmd_raster is uint8 with NMD class codes
+    nmd = fetch_nmd_data(coords={...}, target_shape=(H, W), product=2023)
+    # nmd.nmd_raster: raw NMD 2023 codes (uint16); product=2018 → DES, uint8
 
     sjokort = fetch_sjokort_data(coords={...}, email="user@org.se", session=shibboleth_session)
     # sjokort.s57_paths contains downloaded S-57 (.000) files
@@ -73,6 +74,7 @@ import numpy as np
 
 from .utils import dn_to_reflectance, des_to_imint_bands, bands_to_rgb, haversine_m
 from .job import GeoContext
+from .schema.nmd2023 import NMD2023_OUTSIDE
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -5642,10 +5644,74 @@ def ensure_baseline(
 
 # ── NMD (Nationellt Marktäckedata) ────────────────────────────────────────────
 
-# Default cache directory (project root/.nmd_cache)
+#: NMD products the engine reads. DES openEO serves only NMD 2018
+#: (NMD_COLLECTION); NMD 2023 is read from Naturvårdsverket's national GeoTIFF.
+NMD_PRODUCTS = (2018, 2023)
+
+#: The NMD 2023 basskikt v2.1 raster: ``$NMD2023_PATH``, else the ICE copy.
+#: A local checkout sets NMD2023_PATH=data/nmd2023/NMD2023bas_v2_1.tif.
+NMD2023_PATH_ENV = "NMD2023_PATH"
+NMD2023_DEFAULT_PATH = "/data/nmd2023/NMD2023bas_v2_1.tif"
+
+# Default cache directory (project root/.nmd_cache). Only NMD 2018 is cached.
 NMD_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".nmd_cache"
 )
+
+
+class NMD2023RasterMissingError(RuntimeError):
+    """The NMD 2023 raster is not at the configured path."""
+
+
+def nmd2023_raster_path(raster_path: str | None = None) -> Path:
+    """The NMD 2023 raster: ``raster_path``, else ``$NMD2023_PATH``, else the ICE path.
+
+    Exactly one location is used. If that file is missing this raises; it
+    never tries another path and never falls back to NMD 2018.
+    """
+    path = Path(raster_path or os.environ.get(NMD2023_PATH_ENV) or NMD2023_DEFAULT_PATH)
+    if not path.is_file():
+        raise NMD2023RasterMissingError(
+            f"NMD 2023 raster not found at {path}. Set ${NMD2023_PATH_ENV} "
+            f"(ICE: {NMD2023_DEFAULT_PATH}; local checkout: "
+            f"data/nmd2023/NMD2023bas_v2_1.tif)."
+        )
+    return path
+
+
+def read_nmd2023_window(bbox_3006: dict, raster_path: str | None = None):
+    """Read raw NMD 2023 codes for an EPSG:3006 bbox on the 10 m lattice.
+
+    Codes stay uint16 (they reach 4233). Pixels beyond the raster's extent
+    read as 0, the raster's own value for no coverage. A bbox off the
+    raster's lattice raises instead of being resampled, which would shift
+    every class boundary.
+
+    Returns:
+        ``(raster, transform, crs)`` of the window.
+    """
+    import rasterio
+    from rasterio.windows import Window, from_bounds
+
+    path = nmd2023_raster_path(raster_path)
+    with rasterio.open(path) as src:
+        if src.crs is None or src.crs.to_epsg() != 3006 or src.dtypes[0] != "uint16":
+            raise ValueError(
+                f"{path} is not an NMD 2023 raster (EPSG:3006, uint16): "
+                f"crs={src.crs}, dtype={src.dtypes[0]}"
+            )
+        win = from_bounds(
+            bbox_3006["west"], bbox_3006["south"], bbox_3006["east"], bbox_3006["north"],
+            src.transform,
+        )
+        parts = (win.col_off, win.row_off, win.width, win.height)
+        if any(abs(v - round(v)) > 1e-6 for v in parts):
+            raise ValueError(
+                f"bbox {bbox_3006} is not on the {path.name} 10 m lattice (window {parts})"
+            )
+        window = Window(*(round(v) for v in parts))
+        raster = src.read(1, window=window, boundless=True, fill_value=NMD2023_OUTSIDE)
+        return raster, src.window_transform(window), src.crs
 
 
 @dataclass
@@ -5653,7 +5719,8 @@ class NMDFetchResult:
     """Result of an NMD data fetch.
 
     Attributes:
-        nmd_raster: 2D uint8 array (H, W) with NMD class codes.
+        nmd_raster: 2D array (H, W) of raw NMD codes: uint8 for NMD 2018,
+            uint16 for NMD 2023.
         crs: Coordinate reference system from the GeoTIFF.
         transform: Affine transform from the GeoTIFF.
         from_cache: True if loaded from local cache.
@@ -5703,32 +5770,64 @@ def fetch_nmd_data(
     target_shape: tuple | None = None,
     token: str | None = None,
     cache_dir: str | None = None,
+    *,
+    product: int,
+    raster_path: str | None = None,
 ) -> NMDFetchResult:
-    """Fetch NMD (Nationellt Marktäckedata) from DES via openEO.
+    """Fetch NMD (Nationellt Marktäckedata) raw class codes for a WGS84 bbox.
 
-    NMD is a static 10m land cover dataset — safe to cache locally.
+    ``product`` names the NMD edition; nothing is inferred from the data:
+
+    - ``2018``: NMD 2018 basskikt v1.1 from DES openEO, uint8 codes, cached
+      under ``cache_dir``. The cache file name predates product selection
+      and is kept, so existing entries stay valid; NMD 2023 never reads it.
+    - ``2023``: NMD 2023 basskikt v2.1, a window of the national GeoTIFF
+      (:func:`nmd2023_raster_path`), uint16 codes up to 4233, 0 outside
+      coverage. Not cached: the read is local, and a cache would keep
+      serving old data after the raster is replaced by a newer version.
+
     Coords are projected to EPSG:3006 and snapped to the NMD 10m grid
     before fetching, ensuring pixel-perfect alignment with Sentinel-2.
-
-    The cache is keyed by the snapped EPSG:3006 coordinates for stability.
 
     Args:
         coords: WGS84 bounding box dict with keys: west, south, east, north.
         target_shape: Optional (H, W) to resample the NMD raster to.
                       Uses nearest-neighbor to preserve category values.
-        token: Optional DES access token. Falls back to env/file/OIDC.
-        cache_dir: Directory for the NMD cache. Defaults to .nmd_cache/.
+        token: DES access token (2018 only). Falls back to env/file/OIDC.
+        cache_dir: Directory for the NMD 2018 cache. Defaults to .nmd_cache/.
+        product: 2018 or 2023.
+        raster_path: NMD 2023 raster, overriding ``$NMD2023_PATH`` (2023 only).
 
     Returns:
-        NMDFetchResult with nmd_raster (uint8 class codes).
+        NMDFetchResult with nmd_raster (raw class codes).
 
     Raises:
-        FetchError: If NMD data fetching fails.
+        ValueError: Unknown product, or an argument the product does not use.
+        NMD2023RasterMissingError: The NMD 2023 raster is not at its path.
+        FetchError: If the NMD 2018 fetch from DES fails.
     """
     import rasterio
 
+    if product not in NMD_PRODUCTS:
+        raise ValueError(f"NMD product must be one of {NMD_PRODUCTS}, got {product!r}")
+
     # Project and snap to NMD grid — same grid as Sentinel-2
     projected_coords = _to_nmd_grid(coords)
+
+    if product == 2023:
+        if token is not None or cache_dir is not None:
+            raise ValueError("token and cache_dir apply to NMD 2018 (DES) only")
+        raster, transform, crs = read_nmd2023_window(projected_coords, raster_path)
+        if target_shape and raster.shape != tuple(target_shape):
+            from rasterio.transform import Affine
+            transform = transform @ Affine.scale(
+                raster.shape[1] / target_shape[1], raster.shape[0] / target_shape[0]
+            )
+            raster = _resample_nearest(raster, tuple(target_shape))
+        return NMDFetchResult(nmd_raster=raster, crs=crs, transform=transform)
+
+    if raster_path is not None:
+        raise ValueError("raster_path applies to NMD 2023 only; NMD 2018 comes from DES")
 
     resolved_cache = cache_dir or NMD_CACHE_DIR
     # Cache key based on snapped EPSG:3006 coords (deterministic, no float drift)

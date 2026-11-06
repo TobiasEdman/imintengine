@@ -26,6 +26,8 @@ from pathlib import Path
 from urllib.request import urlopen
 from urllib.error import URLError
 
+from ..schema.nmd2023 import NMD2023_CLASSES, NMD2023_LEVEL1, NMD2023_OUTSIDE_NAME
+
 # Project root for library cache
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _LIB_CACHE_DIR = _PROJECT_ROOT / ".lib_cache"
@@ -80,6 +82,31 @@ def _img_to_base64(path: str) -> str:
 
 # ── Map viewer definitions ────────────────────────────────────────────────────
 
+# NMD 2018 level-2 legend of the NMD map viewer. NMD 2023 builds its legend
+# from the classes present (_nmd_map_legend).
+_NMD2018_MAP_LEGEND = [
+    {"color": "#006400", "label": "Tallskog"},
+    {"color": "#228B22", "label": "Granskog"},
+    {"color": "#32CD32", "label": "Lövskog"},
+    {"color": "#3CB371", "label": "Blandskog"},
+    {"color": "#90EE90", "label": "Temp. ej skog"},
+    {"color": "#2E4F2E", "label": "Sumpsk. tall"},
+    {"color": "#3A5F3A", "label": "Sumpsk. gran"},
+    {"color": "#4A7F4A", "label": "Sumpsk. löv"},
+    {"color": "#5A8F5A", "label": "Sumpsk. bland"},
+    {"color": "#7AAF7A", "label": "Sumpsk. temp"},
+    {"color": "#8B5A2B", "label": "Öpp. våtmark"},
+    {"color": "#FFD700", "label": "Åkermark"},
+    {"color": "#C8AD7F", "label": "Öpp. mark bar"},
+    {"color": "#D2B48C", "label": "Öpp. mark veg."},
+    {"color": "#FF0000", "label": "Byggnader"},
+    {"color": "#FF4500", "label": "Infrastruktur"},
+    {"color": "#FF6347", "label": "Vägar"},
+    {"color": "#0000FF", "label": "Sjöar"},
+    {"color": "#1E90FF", "label": "Hav"},
+]
+
+# The "nmd" viewer's title and legend are set per NMD product in save_html_report.
 MAP_VIEWERS = [
     {
         "id": "map-rgb",
@@ -91,27 +118,7 @@ MAP_VIEWERS = [
         "id": "map-nmd",
         "title": "NMD Marktäcke (Nivå 2)",
         "key": "nmd",
-        "legend": [
-            {"color": "#006400", "label": "Tallskog"},
-            {"color": "#228B22", "label": "Granskog"},
-            {"color": "#32CD32", "label": "Lövskog"},
-            {"color": "#3CB371", "label": "Blandskog"},
-            {"color": "#90EE90", "label": "Temp. ej skog"},
-            {"color": "#2E4F2E", "label": "Sumpsk. tall"},
-            {"color": "#3A5F3A", "label": "Sumpsk. gran"},
-            {"color": "#4A7F4A", "label": "Sumpsk. löv"},
-            {"color": "#5A8F5A", "label": "Sumpsk. bland"},
-            {"color": "#7AAF7A", "label": "Sumpsk. temp"},
-            {"color": "#8B5A2B", "label": "Öpp. våtmark"},
-            {"color": "#FFD700", "label": "Åkermark"},
-            {"color": "#C8AD7F", "label": "Öpp. mark bar"},
-            {"color": "#D2B48C", "label": "Öpp. mark veg."},
-            {"color": "#FF0000", "label": "Byggnader"},
-            {"color": "#FF4500", "label": "Infrastruktur"},
-            {"color": "#FF6347", "label": "Vägar"},
-            {"color": "#0000FF", "label": "Sjöar"},
-            {"color": "#1E90FF", "label": "Hav"},
-        ],
+        "legend": [],
     },
     {
         "id": "map-ndvi",
@@ -252,6 +259,50 @@ L2_ORDER = [
 ]
 
 
+def _rgba(hex_color: str, alpha: float = 0.85) -> str:
+    r, g, b = bytes.fromhex(hex_color[1:])
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+# NMD 2023: Naturvårdsverket's classes and colours, keyed by code as the
+# analyzer's level-2 statistics are.
+NMD2023_L2_CHART = {
+    str(code): {"label": name, "color": _rgba(color), "border": color}
+    for code, (name, color) in NMD2023_CLASSES.items()
+}
+
+# Per product: level-2 order, level-2 chart entries, level-1 labels.
+_NMD_CHART_TABLES = {
+    2018: (L2_ORDER, NMD_L2_CHART, {key: info["label"] for key, info in NMD_L1_CHART.items()}),
+    2023: (list(NMD2023_L2_CHART), NMD2023_L2_CHART,
+           {key: name for key, (name, _codes) in NMD2023_LEVEL1.items()}
+           | {"outside": NMD2023_OUTSIDE_NAME}),
+}
+
+
+def _nmd_chart_tables(product: int | None) -> tuple[list[str], dict, dict]:
+    try:
+        return _NMD_CHART_TABLES[product]
+    except KeyError:
+        raise ValueError(
+            f"NMD content needs its product (2018 or 2023), got {product!r}"
+        ) from None
+
+
+def _nmd_map_legend(product: int, nmd_stats: dict) -> list[dict]:
+    """Legend of the NMD map: the 19 NMD 2018 groups, or the NMD 2023 classes present."""
+    order, chart, l1_labels = _nmd_chart_tables(product)
+    if product == 2018:
+        return _NMD2018_MAP_LEGEND
+    class_stats = nmd_stats.get("class_stats", {})
+    present = class_stats.get("level2", {})
+    legend = [{"color": chart[key]["border"], "label": chart[key]["label"]}
+              for key in order if key in present]
+    if "outside" in class_stats.get("level1", {}):
+        legend.append({"color": "#808080", "label": l1_labels["outside"]})
+    return legend
+
+
 def save_html_report(
     image_paths: dict[str, str],
     nmd_stats: dict,
@@ -259,6 +310,8 @@ def save_html_report(
     image_shape: tuple[int, int],
     date: str,
     output_path: str,
+    *,
+    nmd_product: int | None,
 ) -> str:
     """Generate a self-contained interactive HTML analysis report.
 
@@ -278,6 +331,8 @@ def save_html_report(
         image_shape: (height, width) of analysis images.
         date: Analysis date string (e.g. "2018-07-24").
         output_path: Output HTML file path.
+        nmd_product: NMD edition (2018 or 2023) of the NMD image and stats;
+            None only when the report has no NMD content.
 
     Returns:
         The output file path.
@@ -290,14 +345,19 @@ def save_html_report(
         if os.path.exists(path):
             images_b64[key] = _img_to_base64(path)
 
-    # Filter map viewers to those with available images
-    active_viewers = [v for v in MAP_VIEWERS if v["key"] in images_b64]
+    # Filter map viewers to those with available images; NMD gets its product's legend
+    active_viewers = [
+        {**v, "title": f"NMD {nmd_product} Marktäcke (Nivå 2)",
+         "legend": _nmd_map_legend(nmd_product, nmd_stats)} if v["key"] == "nmd" else v
+        for v in MAP_VIEWERS if v["key"] in images_b64
+    ]
 
     # Build HTML
     html = _build_html(
         viewers=active_viewers,
         images_b64=images_b64,
         nmd_stats=nmd_stats,
+        nmd_product=nmd_product,
         imint_summary=imint_summary,
         img_h=img_h,
         img_w=img_w,
@@ -315,6 +375,7 @@ def _build_html(
     viewers: list[dict],
     images_b64: dict[str, str],
     nmd_stats: dict,
+    nmd_product: int | None,
     imint_summary: dict,
     img_h: int,
     img_w: int,
@@ -357,10 +418,10 @@ def _build_html(
         </div>"""
 
     # ── Analyzer summary cards ────────────────────────────────────────────
-    summary_cards_html = _build_summary_cards(imint_summary)
+    summary_cards_html = _build_summary_cards(imint_summary, nmd_product)
 
     # ── Chart data JSON ───────────────────────────────────────────────────
-    chart_data = _build_chart_data(nmd_stats)
+    chart_data = _build_chart_data(nmd_stats, nmd_product)
     chart_data_json = json.dumps(chart_data, ensure_ascii=False)
 
     # ── Image data JS object ──────────────────────────────────────────────
@@ -404,7 +465,7 @@ def _build_html(
     if chart_sections_html:
         chart_sections_html = f"""
     <div class="section-header" id="charts-section">
-        <h2>Korsreferens mot NMD (Nationellt Marktäckedata)</h2>
+        <h2>Korsreferens mot NMD {nmd_product} (Nationellt Marktäckedata)</h2>
     </div>
     <div class="charts-grid">
         {chart_sections_html}
@@ -922,8 +983,8 @@ def _build_html(
     return html
 
 
-def _build_summary_cards(imint_summary: dict) -> str:
-    """Build HTML for analyzer summary info cards."""
+def _build_summary_cards(imint_summary: dict, nmd_product: int | None) -> str:
+    """Build HTML for analyzer summary info cards (NMD labels per ``nmd_product``)."""
     analyzers = imint_summary.get("analyzers", [])
     if not analyzers:
         return ""
@@ -993,10 +1054,10 @@ def _build_summary_cards(imint_summary: dict) -> str:
                     dom_frac = cinfo["fraction"]
                     dom_name = cname
             if dom_name:
-                label = NMD_L1_CHART.get(dom_name, {}).get("label", dom_name)
+                label = _nmd_chart_tables(nmd_product)[2].get(dom_name, dom_name)
                 cards.append(
                     '<div class="summary-card">'
-                    '<h4>NMD Marktäcke</h4>'
+                    f'<h4>NMD {nmd_product} Marktäcke</h4>'
                     f'<div class="value">{dom_frac*100:.1f}% {label}</div>'
                     f'<div class="detail">{len(l1)} klasser</div>'
                     '</div>'
@@ -1253,8 +1314,11 @@ def _build_kustlinje_summary_cards(kustlinje_dir: str) -> str:
     return '<div class="summary-section">' + "".join(cards) + "</div>"
 
 
-def _build_chart_data(nmd_stats: dict) -> dict:
-    """Extract chart data from nmd_stats JSON structure."""
+def _build_chart_data(nmd_stats: dict, product: int | None) -> dict:
+    """Extract chart data from nmd_stats JSON, labelled with ``product``'s classes."""
+    if not nmd_stats:
+        return {}
+    l2_order, l2_chart, _ = _nmd_chart_tables(product)
     cross_ref = nmd_stats.get("cross_reference", {})
     class_stats = nmd_stats.get("class_stats", {})
 
@@ -1268,9 +1332,9 @@ def _build_chart_data(nmd_stats: dict) -> dict:
         dnbr_vals = []
         colors = []
         borders = []
-        for key in L2_ORDER:
+        for key in l2_order:
             if key in change:
-                info = NMD_L2_CHART.get(key, {"label": key, "color": "gray", "border": "gray"})
+                info = l2_chart.get(key, {"label": key, "color": "gray", "border": "gray"})
                 labels.append(info["label"])
                 fractions.append(round(change[key].get("change_fraction", 0) * 100, 1))
                 dnbr_vals.append(round(change[key].get("mean_dnbr", 0), 4))
@@ -1296,9 +1360,9 @@ def _build_chart_data(nmd_stats: dict) -> dict:
                 class_keys.append(k.replace("_fraction", ""))
 
         class_datasets = {cn: [] for cn in class_keys}
-        for key in L2_ORDER:
+        for key in l2_order:
             if key in prithvi:
-                info = NMD_L2_CHART.get(key, {"label": key})
+                info = l2_chart.get(key, {"label": key})
                 labels.append(info["label"])
                 for cn in class_keys:
                     frac = prithvi[key].get(f"{cn}_fraction", 0)
@@ -1340,7 +1404,7 @@ def _build_chart_data(nmd_stats: dict) -> dict:
         fractions = []
         colors = []
         for key, stats in sorted_l2:
-            info = NMD_L2_CHART.get(key, {"label": key, "color": "#808080"})
+            info = l2_chart.get(key, {"label": key, "color": "#808080"})
             labels.append(info["label"])
             fractions.append(round(stats["fraction"] * 100, 1))
             colors.append(info["color"])
@@ -2187,13 +2251,20 @@ def save_tabbed_report(
             _ks = _km.get("shape", [450, 900])
             kustlinje_h, kustlinje_w = _ks[0], _ks[1]
 
-    # NMD stats for fire charts
+    # NMD stats for fire charts. The showcase tabs keep their NMD 2018
+    # legends until they are regenerated on NMD 2023; NMD 2023 output is
+    # refused rather than drawn with the wrong legend. Stats without a
+    # "product" predate NMD 2023 in the engine and are NMD 2018.
     nmd_path = os.path.join(fire_dir, f"{fire_prefix}nmd_stats.json")
     nmd_stats = {}
     if os.path.isfile(nmd_path):
         with open(nmd_path) as f:
             nmd_stats = json.load(f)
-    fire_chart_data = _build_chart_data(nmd_stats)
+    if nmd_stats.get("product", 2018) != 2018:
+        raise ValueError(
+            f"{nmd_path} is NMD {nmd_stats['product']}; the showcase tabs have NMD 2018 legends"
+        )
+    fire_chart_data = _build_chart_data(nmd_stats, 2018)
     fire_chart_json = json.dumps(fire_chart_data, ensure_ascii=False)
 
     # Summary cards for fire
@@ -2202,7 +2273,7 @@ def save_tabbed_report(
     if os.path.isfile(summary_path):
         with open(summary_path) as f:
             imint_summary = json.load(f)
-    fire_summary_html = _build_summary_cards(imint_summary)
+    fire_summary_html = _build_summary_cards(imint_summary, 2018)
 
     # Summary cards for marine
     marine_summary_path = os.path.join(marine_dir, f"{marine_prefix}imint_summary.json")

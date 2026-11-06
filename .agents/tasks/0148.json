@@ -1,0 +1,13 @@
+{
+  "id": "0148",
+  "subject": "Order the Markt\u00e4cke sub-tab buttons by relevance",
+  "description": "Tobias asked on 2026-11-06 to order the buttons in the showcase Markt\u00e4cke tab by relevance, with the interactive land-cover map (lclu.html) first. Order: Markt\u00e4ckekartering, V\u00e5tmark \u2014 Pirinen-stack, Betesmark, Brand \u2014 K\u00e5rb\u00f6lebranden. The default sub-tab shown stays V\u00e5tmark. Not in scope: other tabs' button order and the sub-tab content. Review: Codex or owner.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/showcase-lulc-order",
+  "created_at": "2026-11-06T08:39:51Z",
+  "updated_at": "2026-11-06T08:39:59Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-06T08:39:59Z"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "0154",
+  "subject": "Fix showcase PNG counts and note the \u00d6resund area in the marine log",
+  "description": "Requested by Tobias on 2026-11-06, following the #146 review. docs/DEVELOPMENT.md's file tree gives stale PNG counts for docs/showcase/ (fire 10, marine 8 + sjokort, marine_commercial 9 + sjokort, grazing 7, kustlinje 11 on main). docs/conversation_log/19_marine_commercial_showcase.md records the commercial tab as Kalmarsund, but scripts/generate_marine_commercial_showcase.py has used \u00d6resund (Helsingborg-Helsing\u00f8r) since its first commit 5c44f44; add a dated note and keep the log as written. Review: fresh Claude reviewer + owner verdict (Codex unavailable).",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/dev-doc-counts-log-note",
+  "created_at": "2026-11-06T14:10:00Z",
+  "updated_at": "2026-11-06T14:22:27Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-06T14:22:27Z"
+}

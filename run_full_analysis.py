@@ -117,7 +117,7 @@ def main():
             "task_head": args.task_head,
             "device": args.device,
         },
-        "nmd": {"enabled": True},
+        "nmd": {"enabled": True, "product": 2023},
         "cot": {"enabled": True, "device": args.device},
     }
     config_path = os.path.join(output_dir, "analyzers_full.yaml")

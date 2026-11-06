@@ -559,7 +559,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     nmd_pool.acquire()
                     try:
                         t0_nmd = time.monotonic()
-                        nmd_result = fetch_nmd_data(coords=coords_nmd)
+                        nmd_result = fetch_nmd_data(coords=coords_nmd, product=2018)
                         latency = time.monotonic() - t0_nmd
                     finally:
                         nmd_pool.release()
@@ -911,6 +911,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                     nmd_result = fetch_nmd_data(
                         coords=coords,
                         target_shape=image.shape[1:],
+                        product=2018,
                     )
                     labels = nmd_raster_to_lulc(
                         nmd_result.nmd_raster,
@@ -1296,6 +1297,7 @@ def prepare_training_data(config: TrainingConfig) -> None:
                 nmd_result = fetch_nmd_data(
                     coords=coords,
                     target_shape=ref_shape,
+                    product=2018,
                 )
                 labels = nmd_raster_to_lulc(
                     nmd_result.nmd_raster,

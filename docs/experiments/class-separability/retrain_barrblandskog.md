@@ -169,6 +169,83 @@ i en egen omträning, en ändring i taget.
    rättvis; sekundärt redovisas 28 som egen kolumn i förväxlingsmatrisen.
    Sanningen ändras inte. Kontrollkörningen och R4 poängsätts med samma regel.
 4. **LUCAS** på samma sätt, med 28 räknad som barrskog.
+5. **Blandklasserna: egen klass eller härledd ur andelar.** Förregistrerad
+   2026-11-06 på Tobias begäran, under fullkörningarna och innan något
+   utvärderingsresultat finns. Frågan gäller både barrblandskog (28) och
+   blandskog (4). Blandning definieras på beståndsnivå, medan en 10 m-pixel
+   bara rymmer några kronor. Är klasserna meningsfulla på pixelnivå, eller
+   fångas blandningen bättre av fraktionshuvudets trädslagsandelar?
+   - **Sanning:** NFI-provytornas volym per trädslag, samma fält som sanning
+     v1 (`derive_nfi_forest_class`). Sanning v1 ändras inte.
+     - Blandskog: sanning v1:s klass 4, där varken barr eller löv når 0,7 av
+       volymen.
+     - Barrblandskog: härleds ur samma fält. Barr når 0,7 av volymen, men
+       varken tall (tall + contorta) eller gran når 0,7 av barrvolymen.
+     - Ytor utan volym utesluts, som i v1.
+   - **Prediktorer**, på samma pixelurval som den primära NFI-poängsättningen:
+     - a) main:s hårda huvud (klass 4 respektive 28);
+     - b) control:s hårda huvud (klass 4; 28 finns inte);
+     - c) andelsregeln på control:s fraktionshuvud;
+     - d) andelsregeln på main:s fraktionshuvud.
+
+     Andelsregeln är `collapse_fractions_to_nfi_class` för blandskog, med
+     samma skogsgolv (0,1). För barrblandskog tillämpas samma regel ett steg
+     ner, med samma golv: barr når 0,7, men varken tall- eller granandelen
+     når 0,7 av barrandelen. R4 poängsätts som b och c.
+   - **Mått:** recall, precision och F1 för blandskog, barrblandskog, tall och
+     gran. Jämförelser görs som parade skillnader ΔF1 med samma rumsliga
+     blockbootstrap som NFI-protokollet (`nfi_fieldtruth_0103.md`: 50 km-rutor,
+     10 000 dragningar, seed 20260818) och samma minsta relevanta skillnad,
+     SESOI = 0,02. En icke-signifikant skillnad räknas inte som likvärdighet.
+   - **Barrblandskog, läsning bestämd i förväg.** Klassen bedöms onödig som
+     egen pixelklass om båda villkoren gäller:
+     1. ΔF1 = F1(c) − F1(a) för barrblandskog har undre gräns över −0,02.
+        Andelsregeln på control:s fraktionshuvud, alltså en modell utan
+        klass 28, är då inte sämre än main:s klass 28. Jämförelsen är
+        bestämd: c mot a. d redovisas bara.
+     2. För tall eller gran har ΔF1 = F1(a) − F1(b) övre gräns under −0,02.
+        Main är då sämre än control med mer än SESOI. Sanningen är v1:s tall
+        och gran utan de härledda barrblandskogsytorna, alltså rena
+        bestånd. I a räknas en pixel som förutsägs som 28 som 28 och inte
+        som ihopslagen. Villkoret mäter vad klassen kostar de rena klasserna.
+
+     Gäller båda rekommenderas härledning ur andelar i stället, annars
+     behålls klassen.
+   - **Blandskog, läsning bestämd i förväg.** Båda körningarna har klass 4,
+     så villkor 2 går inte att pröva: ingen körning saknar klassen. Bara
+     villkor 1 gäller, inom control: ΔF1 = F1(c) − F1(b) för blandskog. Är
+     den undre gränsen över −0,02 kan blandskog härledas ur andelar utan
+     förlust. Ska klass 4 tas bort ur schemat krävs en egen körning utan
+     den; det avgörs inte här. Main:s motsvarighet, d mot a, redovisas bara.
+   - **Känd skillnad:** sanningens tall är tall + contorta, men
+     fraktionshuvudets tallandel har ingen contorta (`build_tradslag_fracs.py`
+     använder NMD Trädslag: tall, gran, triviallöv, ädellöv). Det gäller också
+     den primära regeln. Som känslighetsanalys redovisas resultaten även utan
+     ytor där contorta är minst 30 % av tallvolymen. Den ändrar inte
+     beslutet.
+   - Inga trösklar läggs till eller ändras efter att resultat har setts.
+   - Poängsättning mot den förseglade holdouten körs bara på Tobias
+     klartecken, som tidigare.
+
+**Beslut (Tobias 2026-11-06), före all poängsättning.** Tobias har gett
+klartecken till utvärderingen, inklusive den förseglade NFI-holdouten. Den
+befintliga koden kan inte poängsätta en modell med 29 klasser rätt: tiles
+med klass 28 hoppas över, och NFI räknar 28 som icke-skog. Därför gäller:
+
+- **Moment 1:** huvudjämförelsen mot R4 och control görs mot de
+  ursprungliga NMD-etiketterna. Där slås main:s klass 28 ihop till klass 3,
+  som NMD 113 hade i R4:s etiketter. Sekundärt poängsätts main mot
+  `nmd2023_labels_b28` med 28 som egen klass. Bootstrapintervallen bygger på
+  en förväxlingsmatris per tile.
+- **Moment 3 och 5:** NFI-frysningen från 2026-10-27 får ett tillägg, inte en
+  ändring. Tillägget har ett eget manifest med celler för main och control
+  mot samma holdout och sanning v1, med ny kod och image. Fraktionshuvudet
+  tillåts för den primära regeln och för moment 5. Den ursprungliga
+  frysningen och dess celler lämnas orörda.
+- **Moment 4:** i LUCAS slås klass 28 ihop till tall eller gran efter
+  fraktionshuvudets tall- mot granandel, samma princip som NFI:s primära
+  regel. Klass 28 redovisas också som en egen kolumn utan poäng.
+- **Ordning:** moment 1 och 2 körs först, eftersom de inte berör frysningen.
 
 ### 4. Demon (efter godkänd utvärdering)
 

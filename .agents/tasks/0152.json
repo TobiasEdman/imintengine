@@ -1,0 +1,13 @@
+{
+  "id": "0152",
+  "subject": "Correct showcase places in DEVELOPMENT.md and the marine script",
+  "description": "Follow-up to task 0147 (PR #141), requested by Tobias on 2026-11-06. docs/DEVELOPMENT.md still carries the old tab table and wrong places: grazing is at Munkarp in Sk\u00e5ne (not \u00d6land), and commercial marine is in \u00d6resund between Helsingborg and Helsing\u00f8r (not Kalmarsund/\u00d6land). scripts/generate_marine_commercial_showcase.py's docstring and CLI description still say Kalmarsund although its bbox is \u00d6resund. Scope: replace the tab table with a short accurate summary, fix the place annotations in the file tree and command comments, and fix the script's docstring and description. Not in scope: the rest of the file tree inventory. Review: owner verdict (Codex unavailable).",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/dev-doc-showcase-places",
+  "created_at": "2026-11-06T12:40:00Z",
+  "updated_at": "2026-11-06T12:26:10Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-06T12:26:10Z"
+}

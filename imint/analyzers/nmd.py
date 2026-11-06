@@ -5,6 +5,17 @@ Cross-references other analyzer results with land cover classes from NMD.
 Instead of just reporting "40% change", we can say "change occurred in
 60% forest, 30% cropland, 10% developed land".
 
+The NMD edition is the analyzer config's ``product`` (2018 or 2023); there
+is no default. The engine configs choose 2023.
+
+- NMD 2023 basskikt v2.1: Naturvårdsverket's own 55 classes and colours
+  (``imint.schema.nmd2023``). Level 2 is each class, keyed by its code as
+  a string ("111", "4211"); level 1 is the klassgrupp. 0 is outside
+  coverage, reported as "outside"; any other code outside the legend makes
+  the analyzer fail.
+- NMD 2018 basskikt v1.1: the 19 level-2 groups below; unknown codes count
+  as "unclassified".
+
 NMD 2018 Basskikt class codes:
     111      Tallskog (pine forest)
     112      Granskog (spruce forest)
@@ -32,10 +43,15 @@ spectral, and object_detection analyzers.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+from functools import cached_property
+
 import numpy as np
 
 from .base import BaseAnalyzer, AnalysisResult
 from ..fetch import fetch_nmd_data, FetchError
+from ..schema.nmd2023 import NMD2023_CLASSES, NMD2023_LEVEL1, NMD2023_OUTSIDE
 
 
 # ── NMD Class Mapping ────────────────────────────────────────────────────────
@@ -88,8 +104,106 @@ NMD_COLORS_L1 = {
 }
 
 
+@dataclass(frozen=True)
+class NMDLegend:
+    """Class tables of one NMD product, as the analyzer and its exports use them.
+
+    ``level1`` and ``level2`` map a stable key to the raw raster codes it
+    covers. Their order fixes the L1/L2 raster indices: class ``i`` is index
+    ``i + 1``; index 0 is ``unmapped_key``, the codes in no class.
+
+    ``unmapped_codes`` lists the raw codes allowed outside the tables; any
+    other code makes :meth:`check` raise. ``None`` allows every code, which
+    is how the NMD 2018 tables have always treated unknown codes.
+    """
+
+    product: int
+    level1: Mapping[str, frozenset[int]]
+    level2: Mapping[str, frozenset[int]]
+    unmapped_key: str
+    unmapped_codes: frozenset[int] | None = None
+
+    def check(self, nmd_raster: np.ndarray) -> None:
+        """Raise ``ValueError`` if the raster holds a code the legend refuses."""
+        if self.unmapped_codes is None:
+            return
+        allowed = frozenset().union(*self.level2.values()) | self.unmapped_codes
+        unknown = sorted(set(np.unique(nmd_raster).tolist()) - allowed)
+        if unknown:
+            raise ValueError(
+                f"NMD {self.product} raster holds codes outside its legend: {unknown}"
+            )
+
+    @cached_property
+    def _l1_lut(self) -> np.ndarray:
+        return _index_lut(self.level1)
+
+    @cached_property
+    def _l2_lut(self) -> np.ndarray:
+        return _index_lut(self.level2)
+
+    def l1_raster(self, nmd_raster: np.ndarray) -> np.ndarray:
+        """Raw codes → uint8 Level 1 indices (0 = ``unmapped_key``)."""
+        return _apply_lut(self._l1_lut, nmd_raster)
+
+    def l2_raster(self, nmd_raster: np.ndarray) -> np.ndarray:
+        """Raw codes → uint8 Level 2 indices (0 = ``unmapped_key``)."""
+        return _apply_lut(self._l2_lut, nmd_raster)
+
+    def code_to_l1(self, code: int) -> str:
+        return next((k for k, codes in self.level1.items() if code in codes), self.unmapped_key)
+
+    def code_to_l2(self, code: int) -> str:
+        return next((k for k, codes in self.level2.items() if code in codes), self.unmapped_key)
+
+
+def _index_lut(groups: Mapping[str, frozenset[int]]) -> np.ndarray:
+    """Lookup table raw code → 1-based group index, 0 for codes in no group."""
+    lut = np.zeros(max(max(codes) for codes in groups.values()) + 1, dtype=np.uint8)
+    for idx, codes in enumerate(groups.values(), start=1):
+        lut[sorted(codes)] = idx
+    return lut
+
+
+def _apply_lut(lut: np.ndarray, nmd_raster: np.ndarray) -> np.ndarray:
+    raw = np.asarray(nmd_raster)
+    out = np.zeros(raw.shape, dtype=np.uint8)
+    inside = (raw >= 0) & (raw < lut.size)
+    out[inside] = lut[raw[inside].astype(np.int64)]
+    return out
+
+
+NMD2018_LEGEND = NMDLegend(
+    product=2018,
+    level1={name: frozenset(codes) for name, codes in NMD_LEVEL1.items()},
+    level2={name: frozenset(codes) for name, codes in NMD_LEVEL2.items()},
+    unmapped_key="unclassified",
+)
+
+NMD2023_LEGEND = NMDLegend(
+    product=2023,
+    level1={key: codes for key, (_name, codes) in NMD2023_LEVEL1.items()},
+    level2={str(code): frozenset({code}) for code in NMD2023_CLASSES},
+    unmapped_key="outside",
+    unmapped_codes=frozenset({NMD2023_OUTSIDE}),
+)
+
+NMD_LEGENDS = {2018: NMD2018_LEGEND, 2023: NMD2023_LEGEND}
+
+
+def nmd_legend(product: int) -> NMDLegend:
+    """The class tables of NMD ``product`` (2018 or 2023); anything else raises."""
+    try:
+        return NMD_LEGENDS[product]
+    except (KeyError, TypeError):
+        raise ValueError(
+            f"NMD product must be one of {tuple(NMD_LEGENDS)}, got {product!r}; "
+            "set 'product' in the nmd analyzer config"
+        ) from None
+
+
 def nmd_code_to_l1(code: int) -> str:
-    """Map an NMD class code to its Level 1 category name.
+    """Map an NMD 2018 class code to its Level 1 category name.
 
     Args:
         code: NMD class code (e.g. 111, 3, 61).
@@ -97,14 +211,11 @@ def nmd_code_to_l1(code: int) -> str:
     Returns:
         Level 1 category name (e.g. "forest", "cropland", "water").
     """
-    for name, codes in NMD_LEVEL1.items():
-        if code in codes:
-            return name
-    return "unclassified"
+    return NMD2018_LEGEND.code_to_l1(code)
 
 
 def nmd_code_to_l2(code: int) -> str:
-    """Map an NMD class code to its Level 2 category name.
+    """Map an NMD 2018 class code to its Level 2 category name.
 
     Args:
         code: NMD class code (e.g. 111, 3, 61).
@@ -112,14 +223,11 @@ def nmd_code_to_l2(code: int) -> str:
     Returns:
         Level 2 category name (e.g. "forest_pine", "cropland").
     """
-    for name, codes in NMD_LEVEL2.items():
-        if code in codes:
-            return name
-    return "unclassified"
+    return NMD2018_LEGEND.code_to_l2(code)
 
 
 def nmd_raster_to_l1(nmd_raster: np.ndarray) -> np.ndarray:
-    """Convert NMD class codes to Level 1 integer codes.
+    """Convert NMD 2018 class codes to Level 1 integer codes.
 
     Mapping:
         0 = unclassified, 1 = forest, 2 = wetland, 3 = cropland,
@@ -131,15 +239,7 @@ def nmd_raster_to_l1(nmd_raster: np.ndarray) -> np.ndarray:
     Returns:
         2D uint8 array with Level 1 codes (0-6).
     """
-    l1 = np.zeros_like(nmd_raster, dtype=np.uint8)
-    l1_names = ["unclassified", "forest", "wetland", "cropland",
-                "open_land", "developed", "water"]
-    for idx, name in enumerate(l1_names):
-        if name == "unclassified":
-            continue
-        for code in NMD_LEVEL1[name]:
-            l1[nmd_raster == code] = idx
-    return l1
+    return NMD2018_LEGEND.l1_raster(nmd_raster)
 
 
 # Level 2 class order (matches NMD_LEVEL2 dict order)
@@ -147,7 +247,7 @@ L2_CLASSES = list(NMD_LEVEL2.keys())
 
 
 def nmd_raster_to_l2(nmd_raster: np.ndarray) -> np.ndarray:
-    """Convert NMD class codes to Level 2 integer codes.
+    """Convert NMD 2018 class codes to Level 2 integer codes.
 
     Mapping:
         0 = unclassified, 1 = forest_pine, 2 = forest_spruce, ..., 19 = water_sea
@@ -158,11 +258,7 @@ def nmd_raster_to_l2(nmd_raster: np.ndarray) -> np.ndarray:
     Returns:
         2D uint8 array with Level 2 codes (0-19).
     """
-    l2 = np.zeros_like(nmd_raster, dtype=np.uint8)
-    for idx, name in enumerate(L2_CLASSES):
-        for code in NMD_LEVEL2[name]:
-            l2[nmd_raster == code] = idx + 1  # 0 reserved for unclassified
-    return l2
+    return NMD2018_LEGEND.l2_raster(nmd_raster)
 
 
 # ── Analyzer ─────────────────────────────────────────────────────────────────
@@ -170,9 +266,11 @@ def nmd_raster_to_l2(nmd_raster: np.ndarray) -> np.ndarray:
 class NMDAnalyzer(BaseAnalyzer):
     """NMD Land Cover analyzer.
 
-    Fetches NMD data from DES, computes per-class statistics, and
-    cross-references with previous analyzer results (change detection,
-    spectral indices, object detection).
+    Reads the NMD edition named by config ``product`` (2018 from DES, 2023
+    from the national raster; optional ``raster_path`` overrides
+    ``$NMD2023_PATH``), computes per-class statistics, and cross-references
+    with previous analyzer results (change detection, spectral indices,
+    object detection).
     """
 
     name = "nmd"
@@ -186,6 +284,7 @@ class NMDAnalyzer(BaseAnalyzer):
         output_dir="outputs",
         previous_results: list[AnalysisResult] | None = None,
     ) -> AnalysisResult:
+        legend = nmd_legend(self.config.get("product"))
         if coords is None:
             return AnalysisResult(
                 analyzer=self.name,
@@ -200,6 +299,8 @@ class NMDAnalyzer(BaseAnalyzer):
             nmd_result = fetch_nmd_data(
                 coords=coords,
                 target_shape=(h, w),
+                product=legend.product,
+                raster_path=self.config.get("raster_path"),
             )
             nmd_raster = nmd_result.nmd_raster
         except (FetchError, ImportError) as e:
@@ -209,24 +310,26 @@ class NMDAnalyzer(BaseAnalyzer):
                 outputs={"nmd_available": False},
                 metadata={"reason": f"fetch_failed: {e}"},
             )
+        legend.check(nmd_raster)
 
         # Compute class statistics
-        class_stats = _compute_class_stats(nmd_raster)
+        class_stats = _compute_class_stats(nmd_raster, legend)
 
         # Build Level 1 and Level 2 rasters for exports
-        l1_raster = nmd_raster_to_l1(nmd_raster)
-        l2_raster = nmd_raster_to_l2(nmd_raster)
+        l1_raster = legend.l1_raster(nmd_raster)
+        l2_raster = legend.l2_raster(nmd_raster)
 
         # Cross-reference with previous results
         cross_ref = {}
         if previous_results:
-            cross_ref = _cross_reference(nmd_raster, previous_results)
+            cross_ref = _cross_reference(nmd_raster, previous_results, legend)
 
         return AnalysisResult(
             analyzer=self.name,
             success=True,
             outputs={
                 "nmd_available": True,
+                "product": legend.product,
                 "nmd_raster": nmd_raster,
                 "l1_raster": l1_raster,
                 "l2_raster": l2_raster,
@@ -242,8 +345,11 @@ class NMDAnalyzer(BaseAnalyzer):
 
 # ── Statistics ────────────────────────────────────────────────────────────────
 
-def _compute_class_stats(nmd_raster: np.ndarray) -> dict:
-    """Compute per-class pixel counts and fractions.
+def _compute_class_stats(nmd_raster: np.ndarray, legend: NMDLegend) -> dict:
+    """Compute per-class pixel counts and fractions over the whole raster.
+
+    Level 1 also reports ``legend.unmapped_key`` (pixels in no class), so
+    its fractions sum to 1. Level 2 reports classes only.
 
     Returns:
         Dict with "level1" and "level2" sub-dicts, each mapping
@@ -251,39 +357,22 @@ def _compute_class_stats(nmd_raster: np.ndarray) -> dict:
     """
     total = max(nmd_raster.size, 1)
 
-    # Level 1
-    l1_stats = {}
-    for name, codes in NMD_LEVEL1.items():
-        mask = np.isin(nmd_raster, list(codes))
-        count = int(mask.sum())
-        if count > 0:
-            l1_stats[name] = {
-                "pixel_count": count,
-                "fraction": round(count / total, 4),
-            }
-
-    # Unclassified (anything not in known classes)
-    all_known = set()
-    for codes in NMD_LEVEL1.values():
-        all_known |= codes
-    unclassified_mask = ~np.isin(nmd_raster, list(all_known))
-    unc_count = int(unclassified_mask.sum())
-    if unc_count > 0:
-        l1_stats["unclassified"] = {
-            "pixel_count": unc_count,
-            "fraction": round(unc_count / total, 4),
+    def _stats(index_raster: np.ndarray, keys: list[str]) -> tuple[dict, int]:
+        counts = np.bincount(index_raster.ravel(), minlength=len(keys) + 1)
+        stats = {
+            key: {"pixel_count": int(counts[i]), "fraction": round(int(counts[i]) / total, 4)}
+            for i, key in enumerate(keys, start=1)
+            if counts[i] > 0
         }
+        return stats, int(counts[0])
 
-    # Level 2
-    l2_stats = {}
-    for name, codes in NMD_LEVEL2.items():
-        mask = np.isin(nmd_raster, list(codes))
-        count = int(mask.sum())
-        if count > 0:
-            l2_stats[name] = {
-                "pixel_count": count,
-                "fraction": round(count / total, 4),
-            }
+    l1_stats, unmapped = _stats(legend.l1_raster(nmd_raster), list(legend.level1))
+    if unmapped > 0:
+        l1_stats[legend.unmapped_key] = {
+            "pixel_count": unmapped,
+            "fraction": round(unmapped / total, 4),
+        }
+    l2_stats, _ = _stats(legend.l2_raster(nmd_raster), list(legend.level2))
 
     return {"level1": l1_stats, "level2": l2_stats}
 
@@ -293,6 +382,7 @@ def _compute_class_stats(nmd_raster: np.ndarray) -> dict:
 def _cross_reference(
     nmd_raster: np.ndarray,
     previous_results: list[AnalysisResult],
+    legend: NMDLegend,
 ) -> dict:
     """Cross-reference NMD classes with other analyzer outputs.
 
@@ -311,27 +401,29 @@ def _cross_reference(
     # Spectral cross-reference
     spectral = results_by_name.get("spectral")
     if spectral:
-        cross_ref["spectral"] = _spectral_cross_ref(nmd_raster, spectral)
+        cross_ref["spectral"] = _spectral_cross_ref(nmd_raster, spectral, legend)
 
     # Change detection cross-reference
     change = results_by_name.get("change_detection")
     if change:
-        cross_ref["change_detection"] = _change_cross_ref(nmd_raster, change)
+        cross_ref["change_detection"] = _change_cross_ref(nmd_raster, change, legend)
 
     # Object detection cross-reference
     objdet = results_by_name.get("object_detection")
     if objdet:
-        cross_ref["object_detection"] = _anomaly_cross_ref(nmd_raster, objdet)
+        cross_ref["object_detection"] = _anomaly_cross_ref(nmd_raster, objdet, legend)
 
     # Prithvi segmentation cross-reference (burn scars / flood)
     prithvi = results_by_name.get("prithvi")
     if prithvi and prithvi.outputs.get("seg_mask") is not None:
-        cross_ref["prithvi"] = _prithvi_cross_ref(nmd_raster, prithvi)
+        cross_ref["prithvi"] = _prithvi_cross_ref(nmd_raster, prithvi, legend)
 
     return cross_ref
 
 
-def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dict:
+def _spectral_cross_ref(
+    nmd_raster: np.ndarray, spectral: AnalysisResult, legend: NMDLegend,
+) -> dict:
     """Compute mean spectral indices per NMD Level 2 class.
 
     For each Level 2 LULC class, reports:
@@ -356,7 +448,7 @@ def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dic
     ]
 
     result = {}
-    for name, codes in NMD_LEVEL2.items():
+    for name, codes in legend.level2.items():
         mask = np.isin(nmd_raster, list(codes))
         n_pixels = int(mask.sum())
         if n_pixels == 0:
@@ -374,7 +466,9 @@ def _spectral_cross_ref(nmd_raster: np.ndarray, spectral: AnalysisResult) -> dic
     return result
 
 
-def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
+def _change_cross_ref(
+    nmd_raster: np.ndarray, change: AnalysisResult, legend: NMDLegend,
+) -> dict:
     """Compute change fraction per NMD Level 2 class.
 
     For each Level 2 LULC class, reports the fraction of pixels
@@ -397,7 +491,7 @@ def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
     dnbr = change.outputs.get("dnbr")
 
     result = {}
-    for name, codes in NMD_LEVEL2.items():
+    for name, codes in legend.level2.items():
         lulc_mask = np.isin(nmd_raster, list(codes))
         n_pixels = int(lulc_mask.sum())
         if n_pixels == 0:
@@ -419,7 +513,9 @@ def _change_cross_ref(nmd_raster: np.ndarray, change: AnalysisResult) -> dict:
     return result
 
 
-def _anomaly_cross_ref(nmd_raster: np.ndarray, objdet: AnalysisResult) -> dict:
+def _anomaly_cross_ref(
+    nmd_raster: np.ndarray, objdet: AnalysisResult, legend: NMDLegend,
+) -> dict:
     """Count detected anomalies/objects per NMD Level 2 class.
 
     Uses the center point of each detection's bounding box to determine
@@ -449,7 +545,7 @@ def _anomaly_cross_ref(nmd_raster: np.ndarray, objdet: AnalysisResult) -> dict:
         cx = min(max(cx, 0), w - 1)
 
         code = int(nmd_raster[cy, cx])
-        l2_name = nmd_code_to_l2(code)
+        l2_name = legend.code_to_l2(code)
 
         if l2_name not in result:
             result[l2_name] = {"count": 0, "detections": []}
@@ -464,7 +560,9 @@ def _anomaly_cross_ref(nmd_raster: np.ndarray, objdet: AnalysisResult) -> dict:
     return result
 
 
-def _prithvi_cross_ref(nmd_raster: np.ndarray, prithvi: AnalysisResult) -> dict:
+def _prithvi_cross_ref(
+    nmd_raster: np.ndarray, prithvi: AnalysisResult, legend: NMDLegend,
+) -> dict:
     """Compute Prithvi segmentation fraction per NMD Level 2 class.
 
     For each Level 2 LULC class, reports the fraction of pixels
@@ -493,7 +591,7 @@ def _prithvi_cross_ref(nmd_raster: np.ndarray, prithvi: AnalysisResult) -> dict:
     task_head = prithvi.metadata.get("task_head", "unknown")
 
     result = {}
-    for name, codes in NMD_LEVEL2.items():
+    for name, codes in legend.level2.items():
         lulc_mask = np.isin(nmd_raster, list(codes))
         n_pixels = int(lulc_mask.sum())
         if n_pixels == 0:

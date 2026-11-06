@@ -604,6 +604,49 @@
         }
     }
 
+    // ── Annual land-cover map (Marktäckekartering) ───────────────────
+    // The sub-tab shows the <main> of lclu.html, the page the annual-map API
+    // also serves, with that page's own stylesheet, config and script. The
+    // script runs as a module, so its top-level names stay out of this page.
+
+    function appendAndWait(parent, element) {
+        return new Promise(function(resolve, reject) {
+            element.onload = resolve;
+            element.onerror = function() { reject(new Error('Failed to load ' + (element.href || element.src))); };
+            parent.appendChild(element);
+        });
+    }
+
+    function loadAnnualMap() {
+        var tab = document.getElementById('tab-lclu');
+        if (!tab) return;
+        fetch(tab.dataset.src).then(function(response) {
+            if (!response.ok) throw new Error(tab.dataset.src + ': HTTP ' + response.status);
+            return response.text();
+        }).then(function(html) {
+            var page = new DOMParser().parseFromString(html, 'text/html');
+            var asset = function(selector, attribute) {
+                return new URL(page.querySelector(selector).getAttribute(attribute), document.baseURI).href;
+            };
+            var style = document.createElement('link');
+            style.rel = 'stylesheet';
+            style.href = asset('link[href^="css/lclu.css"]', 'href');
+            var config = document.createElement('script');
+            config.src = asset('script[src^="js/lclu-config.js"]', 'src');
+            var script = asset('script[src^="js/lclu.js"]', 'src');
+            return appendAndWait(document.head, style).then(function() {
+                tab.appendChild(document.adoptNode(page.querySelector('main')));
+                return appendAndWait(document.body, config);
+            }).then(function() {
+                return import(script);
+            });
+        }).catch(function(error) {
+            console.error('Annual map:', error);
+            tab.innerHTML = '<p class="tab-note">Årskartan kunde inte visas här. ' +
+                '<a href="' + tab.dataset.src + '">Öppna den som egen sida</a>.</p>';
+        });
+    }
+
     // ── LULC Chart initialization ────────────────────────────────────
 
     function initLulcCharts() {
@@ -1010,6 +1053,7 @@
     bindGlossHover();
     bindTabSwitching();
     bindSubTabSwitching();
+    loadAnnualMap();
 
     // Render and initialize all tabs
     var tabIds = Object.keys(TAB_CONFIG);

@@ -11,6 +11,13 @@
         /* Section byline (used by section-header on multiple tabs) */
         .section-byline { color: #6b7280; font-size: 13px; margin-top: 4px; }
 
+        /* Marktäckekartering sub-tab (content from lclu.html): the page's intro
+           becomes a section header like the other tabs'. */
+        #tab-lclu main { padding-top: 0; }
+        #tab-lclu .intro { max-width: none; text-align: center; padding: 28px 20px 10px; margin-bottom: 16px; }
+        #tab-lclu .intro h2 { font-size: 20px; font-weight: 700; letter-spacing: 0; color: #171717; margin-bottom: 4px; }
+        #tab-lclu .intro > p:last-child { font-size: 13px; color: #6b7280; }
+
         /* ERA5 strategy-set tabs — match .sub-tab styling for consistency */
         .era5-set-tab {
             display: inline-block;
@@ -1401,13 +1408,17 @@ python demos/cloud_models/run_comparison.py</pre>
     <!-- ── Marktäcke tab (parent with sub-tabs) ────────────────── -->
     <div class="tab-content active" id="tab-lulc">
         <div class="sub-tab-nav">
-            <a href="#" class="sub-tab active" data-subtab="wetland_pirinen">🪻 Våtmark — Pirinen-stack</a>
-            <a href="#" class="sub-tab" data-subtab="fire">🔥 Brand — Kårbölebranden</a>
+            <a href="#" class="sub-tab active" data-subtab="lclu">🌲 Marktäckekartering</a>
             <a href="#" class="sub-tab" data-subtab="grazing">🐄 Betesmark</a>
-            <a href="lclu.html" class="sub-tab">🌲 Marktäckekartering ↗</a>
+            <a href="#" class="sub-tab" data-subtab="fire">🔥 Brand — Kårbölebranden</a>
+            <a href="#" class="sub-tab" data-subtab="wetland_pirinen">🪻 Våtmark</a>
         </div>
 
-        <div class="sub-tab-content active" id="tab-wetland_pirinen">
+        <!-- Filled from lclu.html by app.js (loadAnnualMap): the page and the
+             API-hosted service share that one source. -->
+        <div class="sub-tab-content active lclu" id="tab-lclu" data-src="lclu.html"></div>
+
+        <div class="sub-tab-content" id="tab-wetland_pirinen">
             <div class="tab-dynamic"></div>
             <div class="tab-description">
 
@@ -1760,7 +1771,7 @@ python demos/cloud_models/run_comparison.py</pre>
     <script src="js/vendor/leaflet-sync.js"></script>
     <script src="js/vendor/chart.min.js"></script>
     <script src="js/tab-data.js?v=26"></script>
-    <script src="js/app.js?v=18"></script>
+    <script src="js/app.js?v=19"></script>
     <script src="js/films.js?v=2"></script>
     <script src="js/era5-gallery.js?v=2"></script>
     <script src="js/cloud-models-gallery.js?v=1"></script>
