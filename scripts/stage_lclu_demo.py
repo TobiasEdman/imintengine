@@ -153,7 +153,9 @@ def snapshot_vpp(index_path: Path, selected: dict, snapshots: Path) -> Path:
 def stage(scope_path: Path, year: int, data: Path, root: Path, *,
           shared_root: Path | None = None, max_blocks: int = 32,
           max_original_bytes: int = 3_000_000_000,
-          reuse_roots: tuple[Path, ...] = ()) -> None:
+          reuse_roots: tuple[Path, ...] = (), vpp_index: Path | None = None) -> None:
+    """Stage and qualify one scope/year; ``vpp_index`` names a separately
+    prefetched WEkEO cache (default: the shared ``data/vpp_wekeo``)."""
     start = time.perf_counter()
     scope_identity = file_identity(scope_path)
     scope = json.loads(scope_path.read_text())
@@ -168,7 +170,7 @@ def stage(scope_path: Path, year: int, data: Path, root: Path, *,
     (shared/'cogs').mkdir(parents=True, exist_ok=True)
     bounds = scope['bounds_3006']
     wgs = transform_bounds('EPSG:3006', 'EPSG:4326', *bounds, densify_pts=41)
-    index_path = data / 'vpp_wekeo/index.json'
+    index_path = vpp_index if vpp_index is not None else data / 'vpp_wekeo/index.json'
     vpp_year = vpp_year_for(year)
     selected = select_vpp(json.loads(index_path.read_text()), vpp_year, wgs)
     index_path = snapshot_vpp(index_path, selected, shared / 'vpp')
