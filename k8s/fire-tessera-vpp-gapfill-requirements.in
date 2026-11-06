@@ -1,0 +1,12 @@
+# Packages for k8s/fire-tessera-vpp-gapfill-job.yaml (task 0151): the WEkEO
+# HR-VPP prefetch on the imint-sen2cor image (Ubuntu 22.04, apt python3 3.10).
+# Lock: uv pip compile k8s/fire-tessera-vpp-gapfill-requirements.in
+#   --python-version 3.10 --python-platform x86_64-manylinux_2_28
+#   --generate-hashes -o k8s/fire-tessera-vpp-gapfill-requirements.lock
+numpy
+rasterio
+pyproj
+shapely
+affine
+requests
+hda

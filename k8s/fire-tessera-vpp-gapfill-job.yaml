@@ -14,9 +14,11 @@
 # then fails the Job unless every year has all five season-1 metrics as files,
 # and records each file's SHA256 in
 # /data/showcase_fire_tessera/audits/vpp-gapfill-0151/coverage.json.
-# Image, install and checkout follow k8s/lclu-vpp-gapfill-job.yaml (task 0128,
-# which filled the shared cache). SRC_SHA is origin/main: the prefetch code is
-# unchanged by task 0151. Expected: 20 COGs, ~3.1 GB (33VWJ years are ~760 MB).
+# Image and checkout follow k8s/lclu-vpp-gapfill-job.yaml (task 0128, which
+# filled the shared cache). Unlike 0128, the Python packages are installed from
+# the hash-locked k8s/fire-tessera-vpp-gapfill-requirements.lock in the
+# checkout (Tobias 2026-11-06: pin before running), so SRC_SHA must contain it.
+# Expected: 20 COGs, ~3.1 GB (33VWJ years are ~760 MB).
 #
 # Step 2, after this Job succeeds: k8s/fire-tessera-render-job.yaml.
 #
@@ -81,13 +83,14 @@ spec:
 
               apt-get update -qq
               apt-get install -y -qq git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
-              pip3 install --quiet --no-cache-dir numpy rasterio pyproj shapely affine requests hda 2>&1 | tail -3
 
               mkdir -p /workspace "${AUDIT}" && cd /workspace
               git init -q imintengine && cd imintengine
               git fetch -q --depth 1 https://github.com/TobiasEdman/imintengine.git "${SRC_SHA}"
               git checkout -q FETCH_HEAD
               [ "$(git rev-parse HEAD)" = "${SRC_SHA}" ] || { echo "ABORT: checkout is not ${SRC_SHA}"; exit 1; }
+              pip3 install --quiet --no-cache-dir --require-hashes --no-deps \
+                -r k8s/fire-tessera-vpp-gapfill-requirements.lock 2>&1 | tail -3
               export PYTHONPATH=/workspace/imintengine
               pip3 freeze > "${AUDIT}/pip-freeze.txt"
 

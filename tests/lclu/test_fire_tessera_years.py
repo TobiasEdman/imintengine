@@ -358,3 +358,18 @@ def test_render_runs_the_service_runtime_read_only_and_without_credentials():
     script = container['command'][-1]
     assert '--require-hashes' in script and 'docker/lclu/requirements.lock' in script
     assert "archive.pax_headers.get('comment') != sha" in script
+
+
+def test_gapfill_installs_only_its_hash_locked_packages():
+    # Tobias 2026-11-06: pin the gap-fill's packages before it runs.
+    script = _container('fire-tessera-vpp-gapfill-job.yaml')['command'][-1]
+    installs = [line for line in script.splitlines() if 'pip3 install' in line]
+    assert len(installs) == 1 and '--require-hashes' in installs[0] and '--no-deps' in installs[0]
+    lock = (ROOT / 'k8s/fire-tessera-vpp-gapfill-requirements.lock').read_text()
+    wanted = {line.strip() for line in (ROOT / 'k8s/fire-tessera-vpp-gapfill-requirements.in').read_text()
+              .splitlines() if line.strip() and not line.startswith('#')}
+    hashed = re.findall(r'^([a-z0-9_.-]+)==\S+(?: \\\n    --hash=sha256:[0-9a-f]{64})+', lock, re.M)
+    assert wanted <= set(hashed)
+    assert len(hashed) == len(re.findall(r'^[a-z0-9_.-]+==', lock, re.M))  # every pin carries hashes
+    # The lock lives in the checkout, so the install must come after it.
+    assert script.index('git checkout -q FETCH_HEAD') < script.index('pip3 install')
