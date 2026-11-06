@@ -61,7 +61,7 @@ def process_tile(tile_path: str) -> dict:
         coords = {"west": w84_w, "south": w84_s, "east": w84_e, "north": w84_n}
 
         # Fetch NMD via DES openEO
-        nmd_result = fetch_nmd_data(coords=coords, target_shape=(256, 256))
+        nmd_result = fetch_nmd_data(coords=coords, target_shape=(256, 256), product=2018)
 
         if nmd_result is None or nmd_result.nmd_raster is None:
             return {"name": name, "status": "error", "msg": "NMD fetch returned None"}

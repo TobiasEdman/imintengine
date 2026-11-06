@@ -265,6 +265,7 @@ class NMDAnalyzer(BaseAnalyzer):
             nmd_result = fetch_nmd_data(
                 coords=coords,
                 target_shape=(h, w),
+                product=legend.product,
             )
             nmd_raster = nmd_result.nmd_raster
         except (FetchError, ImportError) as e:

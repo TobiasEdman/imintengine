@@ -16,7 +16,10 @@ from imint.fetch import (
     _resample_nearest,
     _to_nmd_grid,
     fetch_nmd_data,
+    read_nmd2023_window,
     NMDFetchResult,
+    NMD2023RasterMissingError,
+    NMD2023_DEFAULT_PATH,
     FetchError,
     NMD_GRID_SIZE,
     TARGET_CRS,
@@ -202,7 +205,7 @@ class TestFetchNMDData:
         nmd_data = np.full((50, 50), 111, dtype=np.uint8)
         np.save(os.path.join(cache_dir, f"nmd_{cache_key}.npy"), nmd_data)
 
-        result = fetch_nmd_data(coords=coords, cache_dir=cache_dir)
+        result = fetch_nmd_data(coords=coords, cache_dir=cache_dir, product=2018)
         assert result.from_cache is True
         assert result.nmd_raster.shape == (50, 50)
         np.testing.assert_array_equal(result.nmd_raster, 111)
@@ -217,7 +220,8 @@ class TestFetchNMDData:
         nmd_data = np.full((50, 50), 3, dtype=np.uint8)  # Cropland
         np.save(os.path.join(cache_dir, f"nmd_{cache_key}.npy"), nmd_data)
 
-        result = fetch_nmd_data(coords=coords, target_shape=(100, 100), cache_dir=cache_dir)
+        result = fetch_nmd_data(coords=coords, target_shape=(100, 100), cache_dir=cache_dir,
+                                product=2018)
         assert result.from_cache is True
         assert result.nmd_raster.shape == (100, 100)
         assert result.nmd_raster.dtype == np.uint8
@@ -237,7 +241,7 @@ class TestFetchNMDData:
         cache_dir = str(tmp_path / "empty_cache")
 
         with pytest.raises(FetchError, match="No DES connection"):
-            fetch_nmd_data(coords=coords, cache_dir=cache_dir)
+            fetch_nmd_data(coords=coords, cache_dir=cache_dir, product=2018)
 
     def test_result_dataclass(self):
         """NMDFetchResult should have correct fields."""
@@ -247,6 +251,220 @@ class TestFetchNMDData:
         assert result.from_cache is True
         assert result.crs is None
         assert result.transform is None
+
+    def test_product_is_required_and_checked(self):
+        coords = {"west": 15.0, "south": 57.0, "east": 15.1, "north": 57.1}
+        with pytest.raises(TypeError, match="product"):
+            fetch_nmd_data(coords=coords)
+        for product in ("2023", 2020, None):
+            with pytest.raises(ValueError, match="NMD product must be one of"):
+                fetch_nmd_data(coords=coords, product=product)
+
+    def test_2018_refuses_a_raster_path(self):
+        coords = {"west": 15.0, "south": 57.0, "east": 15.1, "north": 57.1}
+        with pytest.raises(ValueError, match="raster_path applies to NMD 2023 only"):
+            fetch_nmd_data(coords=coords, product=2018, raster_path="nmd.tif")
+
+
+# ── NMD 2023 (local national raster) ─────────────────────────────────────────
+
+# The fire showcase AOI in WGS84; the raster is built around its snapped bbox.
+_FIRE_WGS84 = {"west": 15.42, "south": 61.92, "east": 15.47, "north": 61.97}
+
+
+def _write_nmd2023(path, west, north, data, *, dtype="uint16", crs="EPSG:3006"):
+    """Write a synthetic NMD 2023-like GeoTIFF on the 10 m lattice."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    with rasterio.open(
+        path, "w", driver="GTiff", width=data.shape[1], height=data.shape[0], count=1,
+        dtype=dtype, crs=crs, transform=from_origin(west, north, 10, 10),
+    ) as dst:
+        dst.write(data.astype(dtype), 1)
+    return str(path)
+
+
+class TestFetchNMD2023:
+    """NMD 2023 is a window of the national GeoTIFF, never DES or the 2018 cache."""
+
+    MARGIN = 5  # px of raster beyond the bbox on every side
+
+    @pytest.fixture
+    def bbox(self):
+        return _to_nmd_grid(_FIRE_WGS84)
+
+    @pytest.fixture
+    def raster(self, tmp_path, bbox):
+        """A raster around the bbox: 4211 everywhere, 62 in the bbox's first row,
+        and 4233 in its last column, so values above 255 and placement are both checked."""
+        m = self.MARGIN
+        h = (bbox["north"] - bbox["south"]) // 10
+        w = (bbox["east"] - bbox["west"]) // 10
+        data = np.full((h + 2 * m, w + 2 * m), 4211, dtype=np.uint16)
+        data[m, m:m + w] = 62
+        data[m:m + h, m + w - 1] = 4233
+        path = _write_nmd2023(
+            tmp_path / "NMD2023bas_test.tif", bbox["west"] - 10 * m, bbox["north"] + 10 * m, data)
+        return path, data[m:m + h, m:m + w]
+
+    @pytest.fixture(autouse=True)
+    def _no_des(self, monkeypatch):
+        import imint.fetch as fetch_module
+
+        def _connect(**kwargs):
+            raise AssertionError("NMD 2023 must not contact DES")
+
+        monkeypatch.setattr(fetch_module, "_connect", _connect)
+        monkeypatch.delenv("NMD2023_PATH", raising=False)
+
+    def test_codes_above_255_survive_as_uint16(self, raster, bbox):
+        path, expected = raster
+        result = fetch_nmd_data(coords=_FIRE_WGS84, product=2023, raster_path=path)
+        assert result.nmd_raster.dtype == np.uint16
+        np.testing.assert_array_equal(result.nmd_raster, expected)
+        assert result.nmd_raster[5, 5] == 4211   # would be 115 through uint8
+        assert result.nmd_raster[5, -1] == 4233
+        assert result.from_cache is False
+        assert result.crs.to_epsg() == 3006
+        assert (result.transform.c, result.transform.f) == (bbox["west"], bbox["north"])
+        assert (result.transform.a, result.transform.e) == (10, -10)
+
+    def test_never_served_from_the_2018_cache(self, raster, tmp_path, monkeypatch):
+        """A 2018 entry for the same bbox exists; 2023 must ignore it and write none."""
+        import imint.fetch as fetch_module
+
+        path, expected = raster
+        cache_dir = tmp_path / "nmd_cache"
+        cache_dir.mkdir()
+        key = _nmd_cache_key(_to_nmd_grid(_FIRE_WGS84))
+        np.save(cache_dir / f"nmd_{key}.npy", np.full(expected.shape, 111, dtype=np.uint8))
+        monkeypatch.setattr(fetch_module, "NMD_CACHE_DIR", str(cache_dir))
+
+        result = fetch_nmd_data(coords=_FIRE_WGS84, product=2023, raster_path=path)
+        np.testing.assert_array_equal(result.nmd_raster, expected)
+        assert sorted(p.name for p in cache_dir.iterdir()) == [f"nmd_{key}.npy"]
+        cached_2018 = fetch_nmd_data(coords=_FIRE_WGS84, product=2018)
+        assert cached_2018.from_cache is True
+        np.testing.assert_array_equal(cached_2018.nmd_raster, 111)
+        with pytest.raises(ValueError, match="2018 \\(DES\\) only"):
+            fetch_nmd_data(coords=_FIRE_WGS84, product=2023, raster_path=path,
+                           cache_dir=str(cache_dir))
+
+    def test_path_comes_from_the_environment_and_the_argument_wins(self, raster, tmp_path,
+                                                                    monkeypatch):
+        path, expected = raster
+        monkeypatch.setenv("NMD2023_PATH", path)
+        np.testing.assert_array_equal(
+            fetch_nmd_data(coords=_FIRE_WGS84, product=2023).nmd_raster, expected)
+        with pytest.raises(NMD2023RasterMissingError, match="elsewhere.tif"):
+            fetch_nmd_data(coords=_FIRE_WGS84, product=2023,
+                           raster_path=str(tmp_path / "elsewhere.tif"))
+
+    def test_missing_raster_is_loud_and_tries_one_path(self, raster, tmp_path, monkeypatch):
+        """A missing file raises; no second location is tried, DES is not contacted."""
+        import imint.fetch as fetch_module
+
+        path, expected = raster
+        monkeypatch.setenv("NMD2023_PATH", str(tmp_path / "absent.tif"))
+        monkeypatch.setattr(fetch_module, "NMD2023_DEFAULT_PATH", path)  # exists, must not be used
+        with pytest.raises(NMD2023RasterMissingError, match="absent.tif"):
+            fetch_nmd_data(coords=_FIRE_WGS84, product=2023)
+        # Unset: the documented default (the ICE path) is used, and only it.
+        monkeypatch.delenv("NMD2023_PATH")
+        np.testing.assert_array_equal(
+            fetch_nmd_data(coords=_FIRE_WGS84, product=2023).nmd_raster, expected)
+        monkeypatch.setattr(fetch_module, "NMD2023_DEFAULT_PATH", str(tmp_path / "ice.tif"))
+        with pytest.raises(NMD2023RasterMissingError, match="ice.tif"):
+            fetch_nmd_data(coords=_FIRE_WGS84, product=2023)
+        assert NMD2023_DEFAULT_PATH == "/data/nmd2023/NMD2023bas_v2_1.tif"
+
+    def test_beyond_the_raster_reads_as_outside(self, tmp_path, bbox):
+        """Only the bbox's western half lies on the raster; the rest is 0, not an error."""
+        h = (bbox["north"] - bbox["south"]) // 10
+        w = (bbox["east"] - bbox["west"]) // 10
+        half = w // 2
+        path = _write_nmd2023(tmp_path / "west.tif", bbox["west"], bbox["north"],
+                              np.full((h, half), 4232, dtype=np.uint16))
+        raster, transform, _ = read_nmd2023_window(bbox, path)
+        assert raster.shape == (h, w) and raster.dtype == np.uint16
+        assert (raster[:, :half] == 4232).all() and (raster[:, half:] == 0).all()
+        assert transform.c == bbox["west"]
+
+    def test_off_lattice_bbox_raises_instead_of_resampling(self, raster, bbox):
+        path, _ = raster
+        shifted = {**bbox, "west": bbox["west"] + 5, "east": bbox["east"] + 5}
+        with pytest.raises(ValueError, match="not on the"):
+            read_nmd2023_window(shifted, path)
+
+    def test_a_2018_raster_is_refused(self, tmp_path, bbox):
+        """Pointing NMD2023_PATH at the uint8 2018 file must not read it as 2023."""
+        path = _write_nmd2023(tmp_path / "nmd2018.tif", bbox["west"], bbox["north"],
+                              np.full((4, 4), 111), dtype="uint8")
+        with pytest.raises(ValueError, match="not an NMD 2023 raster"):
+            read_nmd2023_window(bbox, path)
+
+    def test_target_shape_resamples_nearest_and_scales_the_transform(self, raster, bbox):
+        path, expected = raster
+        h, w = expected.shape
+        result = fetch_nmd_data(coords=_FIRE_WGS84, product=2023, raster_path=path,
+                                target_shape=(h // 2, w // 2))
+        assert result.nmd_raster.shape == (h // 2, w // 2)
+        assert result.nmd_raster.dtype == np.uint16
+        assert set(np.unique(result.nmd_raster)) <= {62, 4211, 4233}
+        assert result.transform.a == pytest.approx(10 * w / (w // 2))
+        assert result.transform.c == bbox["west"]
+
+
+class TestTrainingCallersStayOnNMD2018:
+    """Training/label and showcase callers name NMD 2018; the r1 rung compares it with 2023."""
+
+    CALLERS = (
+        "imint/training/prepare_data.py",
+        "imint/training/tile_fetch.py",
+        "executors/seasonal_fetch.py",
+        "executors/s2_seasonal_fetch.py",
+        "scripts/submit_s2_jobs.py",
+        "scripts/enrich_tiles_nmd.py",
+        "scripts/generate_grazing_showcase.py",
+    )
+
+    def test_every_call_passes_product_2018(self):
+        import ast
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        seen = {}
+        for rel in self.CALLERS:
+            calls = [
+                node for node in ast.walk(ast.parse((root / rel).read_text()))
+                if isinstance(node, ast.Call)
+                and getattr(node.func, "id", getattr(node.func, "attr", None)) == "fetch_nmd_data"
+            ]
+            seen[rel] = [
+                next((ast.literal_eval(k.value) for k in c.keywords if k.arg == "product"), None)
+                for c in calls
+            ]
+        assert all(seen.values()), seen  # every listed file still fetches NMD
+        assert {p for products in seen.values() for p in products} == {2018}, seen
+
+    def test_remote_label_fallback_requests_2018(self, monkeypatch):
+        import imint.fetch as fetch_module
+        from imint.training.tile_config import TileConfig
+        from imint.training.tile_fetch import _fetch_nmd_label_remote
+
+        calls = []
+
+        def _fake(coords, **kwargs):
+            calls.append(kwargs)
+            return NMDFetchResult(nmd_raster=np.full((4, 4), 111, dtype=np.uint8))
+
+        monkeypatch.setattr(fetch_module, "fetch_nmd_data", _fake)
+        tile = TileConfig(size_px=4)
+        bbox = {"west": 500000, "south": 6500000, "east": 500040, "north": 6500040}
+        out = _fetch_nmd_label_remote(bbox, tile)
+        assert calls == [{"target_shape": (4, 4), "product": 2018}]
+        np.testing.assert_array_equal(out, 111)
 
 
 # ── Export tests ──────────────────────────────────────────────────────────────

@@ -155,17 +155,18 @@ def generate_synthetic_data(h: int, w: int, seed: int = 42) -> tuple:
 
 # ---- Step 3: Generate a synthetic NMD raster ------------------------------
 
-def generate_synthetic_nmd(h: int, w: int) -> np.ndarray:
+def generate_synthetic_nmd(h: int, w: int, product: int) -> np.ndarray:
     """Generate a synthetic NMD raster matching the scene layout.
 
-    NMD class codes used:
+    NMD class codes used (same in 2018 and 2023 unless noted):
         111 = Forest (pine)
         61  = Water (lakes)
         51  = Developed land (buildings)
         3   = Cropland
-        41  = Open land (bare)
+        41 (2018) / 411 (2023) = Open land without vegetation
     """
-    nmd = np.full((h, w), 3, dtype=np.uint8)  # Default: cropland
+    open_bare, dtype = {2018: (41, np.uint8), 2023: (411, np.uint16)}[product]
+    nmd = np.full((h, w), 3, dtype=dtype)  # Default: cropland
     mid_h, mid_w = h // 2, w // 2
 
     nmd[:mid_h, :mid_w] = 111   # Forest (pine) - matches vegetation quadrant
@@ -174,17 +175,18 @@ def generate_synthetic_nmd(h: int, w: int) -> np.ndarray:
     nmd[mid_h:, mid_w:] = 3     # Cropland/bare soil - matches bare soil quadrant
 
     # Add a small patch of open land in the bare soil area
-    nmd[mid_h + 5:mid_h + 15, mid_w + 5:mid_w + 15] = 41
+    nmd[mid_h + 5:mid_h + 15, mid_w + 5:mid_w + 15] = open_bare
 
     return nmd
 
 
 # ---- Step 4: Mock NMD fetch -----------------------------------------------
 
-def mock_fetch_nmd_data(coords, target_shape=None, token=None, cache_dir=None):
-    """Mock NMD fetch that returns synthetic data instead of calling DES."""
+def mock_fetch_nmd_data(coords, target_shape=None, token=None, cache_dir=None, *,
+                        product, raster_path=None):
+    """Mock NMD fetch that returns synthetic data instead of reading NMD."""
     h, w = target_shape if target_shape else (IMG_SIZE, IMG_SIZE)
-    nmd_raster = generate_synthetic_nmd(h, w)
+    nmd_raster = generate_synthetic_nmd(h, w, product)
     return NMDFetchResult(
         nmd_raster=nmd_raster,
         crs=CRS.from_epsg(3006),

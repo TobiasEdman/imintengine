@@ -264,6 +264,7 @@ def _run_local(
                 nmd_result = fetch_nmd_data(
                     coords=coords_wgs84,
                     target_shape=ref_shape,
+                    product=2018,
                 )
                 labels = nmd_raster_to_lulc(
                     nmd_result.nmd_raster,
