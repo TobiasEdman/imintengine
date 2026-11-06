@@ -10,8 +10,11 @@ grid, and the MANIFEST.
 
 TESSERA and HR-VPP come from the map year, except where
 ``lclu.VPP_YEAR_SUBSTITUTIONS`` names another HR-VPP year (2025 -> 2024); the
-MANIFEST labels that year. Nothing else is substituted, filled or skipped: a
-missing source stops the run before any download.
+MANIFEST labels that year. Nothing else is substituted, filled or skipped.
+The preflight stops the run before any download if a year lacks HR-VPP
+coverage or TESSERA blocks; the checkpoint, forestry/markfukt mirror and DEM
+are checked by ``stage`` and the service, so a problem there fails the run
+during staging of the first year.
 
   scope   write config/lclu/fire_karbole.json from the pinned TESSERA registry
           (operator machine; needs pyarrow, like inventory_lclu_demo.py)
