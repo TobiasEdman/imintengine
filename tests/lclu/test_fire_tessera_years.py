@@ -1,9 +1,11 @@
 """Fire-tab TESSERA years (task 0151): layout, stitch, year plan, manifest."""
 import json
 from pathlib import Path
+import re
 
 import numpy as np
 import pytest
+import yaml
 from affine import Affine
 
 from imint.data.wekeo_vpp import _VPP_PRODUCT_TYPES
@@ -297,3 +299,62 @@ def test_render_stitches_service_windows_into_years_and_a_manifest(tmp_path, mon
     with pytest.raises(FileExistsError):  # a run directory is never reused
         fire.render(ROOT / 'config/lclu/fire_karbole.json', [2024], data, out, 'r1',
                     image=IMAGE, git_sha='1' * 40, run_args={})
+
+
+JOBS = {name: yaml.safe_load((ROOT / 'k8s' / name).read_text())
+        for name in ('fire-tessera-vpp-gapfill-job.yaml', 'fire-tessera-render-job.yaml')}
+
+
+def _container(name: str) -> dict:
+    (container,) = JOBS[name]['spec']['template']['spec']['containers']
+    return container
+
+
+@pytest.mark.parametrize('name', sorted(JOBS))
+def test_jobs_are_bounded_digest_pinned_cpu_jobs(name):
+    job = JOBS[name]
+    assert job['kind'] == 'Job' and job['metadata']['namespace'] == 'prithvi-training-default'
+    spec, pod = job['spec'], job['spec']['template']['spec']
+    assert 0 < spec['activeDeadlineSeconds'] <= 4 * 3600 and spec['backoffLimit'] == 0
+    assert spec['ttlSecondsAfterFinished'] > 0
+    assert pod['restartPolicy'] == 'Never' and pod['automountServiceAccountToken'] is False
+    container = _container(name)
+    assert re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}', container['image'])
+    assert container['resources']['limits'] == container['resources']['requests']
+    assert set(container['resources']['limits']) == {'cpu', 'memory'}  # no GPU
+    env = {e['name']: e['value'] for e in container['env']}
+    assert env['VPP_SOURCE'] == 'wekeo' and re.fullmatch(r'[0-9a-f]{40}', env['SRC_SHA'])
+    assert 'cdse' not in container['command'][-1].lower()
+
+
+def test_gapfill_fetches_exactly_the_scopes_separate_cache_years():
+    container = _container('fire-tessera-vpp-gapfill-job.yaml')
+    env = {e['name']: e['value'] for e in container['env']}
+    separate = sorted(int(y) for y, index in SCOPE['vpp_index_by_year'].items()
+                      if index == 'vpp_wekeo_fire/index.json')
+    assert env['FIRE_VPP_YEARS'] == ','.join(map(str, separate)) == '2017,2019,2020,2023'
+    assert env['FIRE_MGRS_TILE'] == SCOPE['mgrs_tile'] and env['VPP_WEKEO_DIR'] == '/data/vpp_wekeo_fire'
+    assert container['envFrom'] == [{'secretRef': {'name': 'wekeo-creds'}}]
+    # Only its own two subPaths are visible: the shared /data/vpp_wekeo cannot be written.
+    assert {m['mountPath']: m['subPath'] for m in container['volumeMounts']} == {
+        '/data/vpp_wekeo_fire': 'vpp_wekeo_fire',
+        '/data/showcase_fire_tessera': 'showcase_fire_tessera'}
+    assert '--dest-dir "${DEST}"' in container['command'][-1]
+
+
+def test_render_runs_the_service_runtime_read_only_and_without_credentials():
+    pod = JOBS['fire-tessera-render-job.yaml']['spec']['template']['spec']
+    container = _container('fire-tessera-render-job.yaml')
+    base = (ROOT / 'docker/lclu/Dockerfile').read_text().splitlines()[0].split()[1]
+    env = {e['name']: e['value'] for e in container['env']}
+    assert container['image'] == env['IMAGE'] == base  # the service's Python base digest
+    assert 'envFrom' not in container and 'imagePullSecrets' not in pod
+    assert all('persistentVolumeClaim' in v or 'emptyDir' in v for v in pod['volumes'])
+    mounts = {m['mountPath']: m for m in container['volumeMounts']}
+    assert mounts['/data']['readOnly'] is True and 'subPath' not in mounts['/data']
+    assert mounts['/out']['subPath'] == 'showcase_fire_tessera' and not mounts['/out'].get('readOnly')
+    assert container['securityContext']['capabilities']['drop'] == ['ALL']
+    assert [int(y) for y in env['FIRE_YEARS'].split()] == SCOPE['years']
+    script = container['command'][-1]
+    assert '--require-hashes' in script and 'docker/lclu/requirements.lock' in script
+    assert "archive.pax_headers.get('comment') != sha" in script

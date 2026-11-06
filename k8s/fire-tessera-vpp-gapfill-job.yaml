@@ -1,0 +1,145 @@
+# Task 0151: HR-VPP for the fire-tab TESSERA years (Kårbölebranden), step 1 of 2.
+#
+# The fire AOI's model inputs lie in S2 tile 33VWJ only. /data/vpp_wekeo (read
+# 2026-11-06) holds 33VWJ for 2018, 2021, 2022 and 2024; this Job fetches the
+# missing 2017, 2019, 2020 and 2023 into their own cache, /data/vpp_wekeo_fire,
+# with its own index.json. The serving release (r10) pins the shared
+# /data/vpp_wekeo index, so this Job cannot see that directory: it mounts only
+# two subPaths of the PVC. config/lclu/fire_karbole.json names this cache for
+# exactly these years (vpp_index_by_year; tests/lclu/test_fire_tessera_years.py
+# checks the two agree).
+#
+# WEkEO HDA only (scripts/prefetch_vpp_wekeo.py), never CDSE PU (CLAUDE.md VPP
+# rule). Idempotent: a re-created Job skips complete COGs. A coverage check
+# then fails the Job unless every year has all five season-1 metrics as files,
+# and records each file's SHA256 in
+# /data/showcase_fire_tessera/audits/vpp-gapfill-0151/coverage.json.
+# Image, install and checkout follow k8s/lclu-vpp-gapfill-job.yaml (task 0128,
+# which filled the shared cache). SRC_SHA is origin/main: the prefetch code is
+# unchanged by task 0151. Expected: 20 COGs, ~3.1 GB (33VWJ years are ~760 MB).
+#
+# Step 2, after this Job succeeds: k8s/fire-tessera-render-job.yaml.
+#
+#   kubectl --context icekube -n prithvi-training-default create --dry-run=server -f k8s/fire-tessera-vpp-gapfill-job.yaml
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/fire-tessera-vpp-gapfill-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fire-tessera-vpp-gapfill-0151
+  namespace: prithvi-training-default
+  labels:
+    app: fire-tessera
+    task: "0151"
+    purpose: vpp-gapfill
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 10800   # 3 h; task 0128 fetched ~20 COGs well within 1 h
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: fire-tessera
+        task: "0151"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: prefetch
+          image: ghcr.io/tobiasedman/imint-sen2cor@sha256:528adef18445404c6f491ff2f8a81f3d75f908280704d69c2c507f820f59de28
+          env:
+            - { name: VPP_SOURCE,     value: "wekeo" }
+            - { name: VPP_WEKEO_DIR,  value: "/data/vpp_wekeo_fire" }
+            - { name: SRC_SHA,        value: "72b39c9c33d76e4c58dd52358ef9608c1800aead" }
+            - { name: FIRE_MGRS_TILE, value: "33VWJ" }
+            - { name: FIRE_VPP_YEARS, value: "2017,2019,2020,2023" }
+          envFrom:
+            - secretRef:
+                name: wekeo-creds
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              DEST=/data/vpp_wekeo_fire
+              export AUDIT=/data/showcase_fire_tessera/audits/vpp-gapfill-0151
+              echo "=== fire HR-VPP gap-fill (task 0151): ${FIRE_MGRS_TILE} ${FIRE_VPP_YEARS} at ${SRC_SHA}: $(date -u) ==="
+
+              FREE_GB=$(df -BG --output=avail "${DEST}" | tail -1 | tr -dc 0-9)
+              echo "free: ${FREE_GB} GB (needs ~3.1 GB)"
+              [ "${FREE_GB}" -ge 20 ] || { echo "ABORT: under 20 GB free"; exit 1; }
+
+              apt-get update -qq
+              apt-get install -y -qq git python3 python3-pip libgdal-dev gdal-bin > /dev/null 2>&1
+              pip3 install --quiet --no-cache-dir numpy rasterio pyproj shapely affine requests hda 2>&1 | tail -3
+
+              mkdir -p /workspace "${AUDIT}" && cd /workspace
+              git init -q imintengine && cd imintengine
+              git fetch -q --depth 1 https://github.com/TobiasEdman/imintengine.git "${SRC_SHA}"
+              git checkout -q FETCH_HEAD
+              [ "$(git rev-parse HEAD)" = "${SRC_SHA}" ] || { echo "ABORT: checkout is not ${SRC_SHA}"; exit 1; }
+              export PYTHONPATH=/workspace/imintengine
+              pip3 freeze > "${AUDIT}/pip-freeze.txt"
+
+              python3 scripts/prefetch_vpp_wekeo.py --mgrs-tiles "${FIRE_MGRS_TILE}" \
+                --years "${FIRE_VPP_YEARS}" --dest-dir "${DEST}"
+
+              python3 - <<'PY'
+              """Fail unless each year has every season-1 metric as a file; pin them."""
+              import hashlib, json, os, sys
+              from imint.data.wekeo_vpp import _VPP_PRODUCT_TYPES
+
+              dest = os.environ['VPP_WEKEO_DIR']
+              tile = 'T' + os.environ['FIRE_MGRS_TILE']
+              years = [int(y) for y in os.environ['FIRE_VPP_YEARS'].split(',')]
+              index = json.load(open(os.path.join(dest, 'index.json')))
+              files, missing = {}, []
+              for year in years:
+                  for metric in _VPP_PRODUCT_TYPES:
+                      names = [n for n, m in index.items()
+                               if (m['tileId'], m['year'], m['season'], m['metric']) == (tile, year, 1, metric)
+                               and os.path.isfile(os.path.join(dest, n))]
+                      if not names:
+                          missing.append(f'{year}/{metric}')
+                      for name in names:
+                          digest = hashlib.sha256()
+                          with open(os.path.join(dest, name), 'rb') as stream:
+                              for block in iter(lambda: stream.read(1 << 20), b''):
+                                  digest.update(block)
+                          files[name] = {'year': year, 'metric': metric, 'sha256': digest.hexdigest(),
+                                         'size': os.path.getsize(os.path.join(dest, name))}
+              with open(os.path.join(os.environ['AUDIT'], 'coverage.json'), 'w') as stream:
+                  json.dump({'tile': tile, 'years': years, 'files': files, 'missing': missing},
+                            stream, indent=2, sort_keys=True)
+              print('COVERAGE', json.dumps({'files': len(files), 'missing': missing}), flush=True)
+              sys.exit(1 if missing else 0)
+              PY
+              echo "=== done: $(date -u) ==="
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "2"
+              memory: "8Gi"
+          volumeMounts:
+            - name: training-data
+              mountPath: /data/vpp_wekeo_fire
+              subPath: vpp_wekeo_fire
+            - name: training-data
+              mountPath: /data/showcase_fire_tessera
+              subPath: showcase_fire_tessera
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
