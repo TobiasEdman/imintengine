@@ -395,6 +395,50 @@
             flex-shrink: 0;
         }
 
+        /* ── Year selector and panel notes (panels with years / notes) ── */
+        .year-control {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 4px 8px;
+            padding: 8px 14px;
+            border-bottom: 1px solid #245045;
+            background: #163930;
+            font-size: 11px;
+            color: rgba(207,248,228,0.5);
+        }
+        .year-control label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .year-value {
+            font-size: 13px;
+            font-weight: 600;
+            color: #cff8e4;
+        }
+        .year-slider {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-basis: 100%;
+            font-variant-numeric: tabular-nums;
+        }
+        .year-slider input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            accent-color: #cff8e4;
+        }
+        .panel-notes {
+            padding: 8px 14px 8px 30px;
+            border-bottom: 1px solid #245045;
+            background: #163930;
+            font-size: 11px;
+            line-height: 1.45;
+            color: rgba(207,248,228,0.7);
+        }
+        .panel-notes li + li { margin-top: 2px; }
+
         /* ── Charts ──────────────────────────────────────────────────── */
         .charts-grid {
             display: grid;

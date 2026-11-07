@@ -60,6 +60,61 @@
         return html;
     }
 
+    // ── Year selector ───────────────────────────────────────────────
+    // A panel with `years` shows one image per year instead of
+    // config.images[panel.id]: years = {<year>: {image, legend, label?}}
+    // and defaultYear names the year shown first. A range input steps
+    // through the years in order; the image and the legend follow it.
+    // `label` replaces the plain year wherever the year is shown.
+    // `notes` (any panel) is a short list shown under the controls.
+    var yearPanels = {};
+
+    function panelYears(panel) {
+        return Object.keys(panel.years).map(Number).sort(function(a, b) { return a - b; });
+    }
+
+    function yearLabel(panel, year) {
+        return panel.years[year].label || String(year);
+    }
+
+    function renderYearControl(panel) {
+        if (!panel.years) return '';
+        if (!panel.years[panel.defaultYear]) {
+            throw new Error(panel.id + ': defaultYear ' + panel.defaultYear + ' is not in years');
+        }
+        var years = panelYears(panel);
+        var inputId = 'year-' + panel.id;
+        var label = yearLabel(panel, panel.defaultYear);
+        return '<div class="year-control">' +
+            '<label for="' + inputId + '">År</label>' +
+            '<output class="year-value" id="year-val-' + panel.id + '" for="' + inputId + '">' +
+            label + '</output>' +
+            '<div class="year-slider"><span>' + years[0] + '</span>' +
+            '<input type="range" id="' + inputId + '" min="0" max="' + (years.length - 1) +
+            '" step="1" value="' + years.indexOf(panel.defaultYear) + '" data-map-id="' +
+            panel.id + '" aria-valuetext="' + label + '">' +
+            '<span>' + years[years.length - 1] + '</span></div>' +
+            '</div>';
+    }
+
+    function renderPanelNotes(panel) {
+        if (!panel.notes || !panel.notes.length) return '';
+        return '<ul class="panel-notes">' + panel.notes.map(function(note) {
+            return '<li>' + note + '</li>';
+        }).join('') + '</ul>';
+    }
+
+    function renderPanelLegend(panel) {
+        // A year panel's legend is replaced when the year changes.
+        if (panel.years) {
+            return '<div id="legend-' + panel.id + '">' +
+                renderLegend(panel.years[panel.defaultYear].legend) + '</div>';
+        }
+        // One LEGENDS key, or several when the overlay and a toggled
+        // background use different class schemes.
+        return panel.legend ? [].concat(panel.legend).map(renderLegend).join('') : '';
+    }
+
     function renderMapCell(panel) {
         var html = '<div class="map-cell" data-panel-id="' + panel.id + '">' +
             '<div class="map-cell-header">' +
@@ -75,10 +130,10 @@
             '<button class="hide-panel-btn" data-panel-id="' + panel.id +
             '" title="Dölj panel">&#x2715;</button>' +
             '</div></div>' +
+            renderYearControl(panel) +
+            renderPanelNotes(panel) +
             '<div id="' + panel.id + '" class="map-container"></div>' +
-            // legend: one LEGENDS key, or several when the overlay and a
-            // toggled background use different class schemes.
-            (panel.legend ? [].concat(panel.legend).map(renderLegend).join('') : '') +
+            renderPanelLegend(panel) +
             '</div>';
         return html;
     }
@@ -341,7 +396,8 @@
         panels.forEach(function(panel) {
             var container = document.getElementById(panel.id);
             var isVector = panel.vector || false;
-            if (!container || (!images[panel.id] && !isVector)) return;
+            var imageUrl = panel.years ? panel.years[panel.defaultYear].image : images[panel.id];
+            if (!container || (!imageUrl && !isVector)) return;
 
             // Native-zoom panels lock at zoom 0 and disable all zoom
             // interactions (scroll, dblclick, pinch, +/- buttons). At zoom 0
@@ -397,7 +453,8 @@
                     allOverlays[panel.id] = makeGeoJSON(gjData, map, imgH);
                 }
             } else {
-                allOverlays[panel.id] = L.imageOverlay(images[panel.id], bounds, {zIndex:1}).addTo(map);
+                allOverlays[panel.id] = L.imageOverlay(imageUrl, bounds, {zIndex:1}).addTo(map);
+                if (panel.years) yearPanels[panel.id] = panel;
             }
 
             // Native-zoom mode: pin the map at zoom 0 (1 bound-unit = 1
@@ -437,6 +494,24 @@
                     if (ov.setOpacity) ov.setOpacity(val / 100);
                     else if (ov.setStyle) ov.setStyle(fadedStyle(val / 100));
                 }
+            });
+        });
+    }
+
+    // Year panels: swap the overlay's image (its opacity and the synced
+    // view stay), the shown year and the legend.
+    function bindYearSelectors() {
+        document.querySelectorAll('.year-control input[type="range"]').forEach(function(slider) {
+            slider.addEventListener('input', function() {
+                var mapId = this.dataset.mapId;
+                var panel = yearPanels[mapId];
+                if (!panel) return;
+                var year = panelYears(panel)[parseInt(this.value)];
+                var label = yearLabel(panel, year);
+                allOverlays[mapId].setUrl(panel.years[year].image);
+                this.setAttribute('aria-valuetext', label);
+                document.getElementById('year-val-' + mapId).textContent = label;
+                document.getElementById('legend-' + mapId).innerHTML = renderLegend(panel.years[year].legend);
             });
         });
     }
@@ -1064,6 +1139,7 @@
     Promise.all(initPromises).then(function() {
         // Bind event handlers after all tabs are rendered
         bindOpacitySliders();
+        bindYearSelectors();
         bindBgToggles();
         bindPanelToggles();
 
