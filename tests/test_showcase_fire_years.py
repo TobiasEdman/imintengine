@@ -21,6 +21,8 @@ SCRIPT = REPO / "scripts/showcase_fire_years.py"
 AOI = json.loads((REPO / "config/lclu/fire_karbole.json").read_text())["aoi"]
 HEIGHT, WIDTH = AOI["shape"]
 PINE, BURNT = "#6d8b05", "#cdcd66"  # two colours of the service legend
+NMD2018_QML = REPO / "docs/verification/nmd2018/nmd2018bas_ogeneraliserad_v1_1.qml"
+NMD2018_QML_SHA256 = "8faa67351c71a641a7ee2f4e4d868c076e44e1810b9dfeec99241e3769752dfd"
 
 
 def _sha(path: Path) -> str:
@@ -41,7 +43,8 @@ def _raster(path: Path, codes: np.ndarray) -> Path:
     return path
 
 
-def _inputs(tmp_path: Path, *, nmd2023_code: int = 118, tamper: bool = False) -> list[str]:
+def _inputs(tmp_path: Path, *, nmd2018_code: int = 113, nmd2023_code: int = 118,
+            tamper: bool = False) -> list[str]:
     run = tmp_path / "run"
     legend = [{"id": 1, "name": "Tallskog på fastmark", "color": PINE},
               {"id": 6, "name": "Temporärt ej skog på fastmark", "color": BURNT},
@@ -79,9 +82,11 @@ def _inputs(tmp_path: Path, *, nmd2023_code: int = 118, tamper: bool = False) ->
     }
     (run / "MANIFEST.json").write_text(json.dumps(manifest))
     shape = (HEIGHT + 20, WIDTH + 20)
-    nmd2018 = _raster(tmp_path / "nmd2018.tif", np.full(shape, 111, np.uint8))
+    codes_2018 = np.full(shape, 111, np.uint8)
+    codes_2018[10, 10] = nmd2018_code  # the AOI's north-west pixel
+    nmd2018 = _raster(tmp_path / "nmd2018.tif", codes_2018)
     codes_2023 = np.full(shape, 118, np.uint16)
-    codes_2023[10, 10] = nmd2023_code  # the AOI's north-west pixel
+    codes_2023[10, 10] = nmd2023_code
     nmd2023 = _raster(tmp_path / "nmd2023.tif", codes_2023)
     return ["--tessera-run", str(run), "--nmd2018-raster", str(nmd2018),
             "--nmd2023-raster", str(nmd2023), "--out-dir", str(tmp_path / "out")]
@@ -108,6 +113,11 @@ def test_layers_are_bound_to_their_sources_and_name_no_input_path(tmp_path: Path
     nmd18, nmd23 = manifest["nmd_2018"], manifest["nmd_2023"]
     assert nmd18["level1"] == {"forest": {"pixels": HEIGHT * WIDTH, "fraction": 1.0}}
     assert nmd18["raster"] == {"file": "nmd2018.tif", **_identity(tmp_path / "nmd2018.tif")}
+    # NMD 2018 keeps its own classes too: 113 is barrblandskog, not the level-2 table's lövskog.
+    assert [(e["key"], e["name"], e["color"]) for e in nmd18["legend"]] == [
+        ("111", "Tallskog utanför våtmark", "#6e8c05"), ("113", "Barrblandskog utanför våtmark", "#4e7000")]
+    nw = Image.open(out / nmd18["file"]).convert("RGB").getpixel((0, 0))
+    assert "#%02x%02x%02x" % nw == "#4e7000"
     assert nmd23["codes"] == {"118": HEIGHT * WIDTH - 1, "4211": 1}
     assert [(e["name"], e["color"]) for e in nmd23["legend"]] == [
         ("Temporärt ej skog på fastmark", "#cdcd66"), ("Torr buskdominerad mark", "#ccd69e")]
@@ -121,6 +131,12 @@ def test_layers_are_bound_to_their_sources_and_name_no_input_path(tmp_path: Path
 def test_a_year_that_differs_from_its_run_manifest_is_refused_before_writing(tmp_path: Path) -> None:
     result = _run(_inputs(tmp_path, tamper=True))
     assert result.returncode != 0 and "2024: classification.png differs from the run MANIFEST" in result.stderr
+    assert not (tmp_path / "out").exists()
+
+
+def test_an_nmd_2018_code_without_an_official_class_is_refused_before_writing(tmp_path: Path) -> None:
+    result = _run(_inputs(tmp_path, nmd2018_code=7))  # listed in the style, but unnamed
+    assert result.returncode != 0 and "codes without a class in nmd2018bas_ogeneraliserad_v1_1.qml: [7]" in result.stderr
     assert not (tmp_path / "out").exists()
 
 

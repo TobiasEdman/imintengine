@@ -10,14 +10,18 @@ EPSG:3006. This script writes three kinds of layer there:
   once its sha256 matches the run's MANIFEST. The run's ``legend.json`` names
   the colours. A year whose HR-VPP comes from another year is labelled with
   the service's wording, e.g. "2025 · växtfenologi från 2024".
-- ``nmd_2018.png``: NMD 2018 basskikt, the baseline before the fire, in
-  today's level-2 table (``NMD2018_LEGEND``, palette ``nmd2018_l2``).
+- ``nmd_2018.png``: NMD 2018 basskikt, the baseline before the fire, drawn
+  from raw codes in Naturvårdsverket's own classes and colours: the style
+  shipped with the raster, pinned in docs/verification/nmd2018/. The
+  engine's NMD 2018 level-2 table is not used; it folds 113 barrblandskog
+  into lövskog.
 - ``nmd_2023.png``: NMD 2023 basskikt v2.1 with Naturvårdsverket's own classes
   and colours (``NMD2023_LEGEND``, palette ``nmd2023_l2``).
 
 Both NMD windows are read from the national rasters on their own 10 m
-lattice, never resampled. A code outside the product's table is refused.
-Everything is validated before the first file is written.
+lattice, never resampled. A code outside the product's classes is refused.
+Level-1 shares come from the engine's level-1 tables. Everything is
+validated before the first file is written.
 
 MANIFEST.json binds each file by sha256 to its source: the TESSERA run (id,
 git sha, image digest, the run MANIFEST's sha256) or the NMD raster (file
@@ -34,6 +38,7 @@ import json
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,23 +46,26 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from imint.analyzers.nmd import NMD2018_LEGEND, NMD2023_LEGEND, NMDLegend  # noqa: E402
-from imint.exporters.export import _nmd_l2_display, save_nmd_overlay  # noqa: E402
+from imint.analyzers.nmd import NMD2023_LEGEND, nmd_legend  # noqa: E402
+from imint.exporters.export import save_nmd_overlay  # noqa: E402
 from imint.fetch import read_nmd2023_window  # noqa: E402
-from imint.schema.nmd2023 import NMD2023_OUTSIDE_NAME, NMD2023_QML_SHA256  # noqa: E402
+from imint.schema.nmd2023 import (  # noqa: E402
+    NMD2023_CLASSES, NMD2023_OUTSIDE, NMD2023_OUTSIDE_NAME, NMD2023_QML_SHA256)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCOPE = ROOT / "config/lclu/fire_karbole.json"
 OUT_DIR = ROOT / "docs/showcase/fire"
 RES = 10
 
-#: The two NMD layers: product, raster dtype, class tables, overlay palette and
-#: the product as Naturvårdsverket names it.
+#: Naturvårdsverket's style for NMD 2018 basskikt, from the official archive;
+#: docs/verification/nmd2018/README.md records the source and retrieval.
+NMD2018_QML = ROOT / "docs/verification/nmd2018/nmd2018bas_ogeneraliserad_v1_1.qml"
+NMD2018_QML_SHA256 = "8faa67351c71a641a7ee2f4e4d868c076e44e1810b9dfeec99241e3769752dfd"
+
+#: The two NMD layers: product, raster dtype and the product as Naturvårdsverket names it.
 NMD_LAYERS = {
-    "nmd_2018": (2018, "uint8", NMD2018_LEGEND, "nmd2018_l2",
-                 "NMD 2018 basskikt, ogeneraliserad, v1.1"),
-    "nmd_2023": (2023, "uint16", NMD2023_LEGEND, "nmd2023_l2",
-                 "NMD 2023 basskikt v2.1"),
+    "nmd_2018": (2018, "uint8", "NMD 2018 basskikt, ogeneraliserad, v1.1"),
+    "nmd_2023": (2023, "uint16", "NMD 2023 basskikt v2.1"),
 }
 
 
@@ -195,26 +203,27 @@ def plan_tessera(run: Path, aoi: dict) -> dict:
 
 # ── NMD 2018 and 2023 ────────────────────────────────────────────────────────
 
-def nmd_legend_entries(legend: NMDLegend, product: int, l2: np.ndarray) -> list[dict]:
-    """The level-2 classes present, in table order, with display colour and name."""
-    display = _nmd_l2_display(product)  # the table save_nmd_visualization draws from
-    keys = list(legend.level2)
-    entries = []
-    for index, pixels in enumerate(np.bincount(l2.ravel(), minlength=len(keys) + 1).tolist()):
-        if not pixels:
-            continue
-        if index == 0:  # NMD 2023 outside coverage; plan_nmd refuses unmapped 2018 codes
-            entries.append({"key": legend.unmapped_key, "color": "#808080",
-                            "name": NMD2023_OUTSIDE_NAME, "pixels": pixels})
-            continue
-        key = keys[index - 1]
-        entries.append({"key": key, "color": display[key]["color"].lower(),
-                        "name": display[key]["name"], "pixels": pixels})
-    return entries
+def nmd2018_classes() -> dict[int, tuple[str, str]]:
+    """code → (name, colour) of every named class in the pinned NMD 2018 style, in its order.
+
+    The style lists all 256 raster values; the classes are the entries whose
+    label carries a name after the code. The others are not classes.
+    """
+    if sha256_file(NMD2018_QML) != NMD2018_QML_SHA256:
+        raise ValueError(f"{NMD2018_QML.name} is not the pinned official style")
+    classes = {}
+    for entry in ET.parse(NMD2018_QML).iter("paletteEntry"):
+        code, _, name = entry.attrib["label"].partition(" ")
+        if int(code) != int(entry.attrib["value"]):
+            raise ValueError(f"{NMD2018_QML.name}: label {entry.attrib['label']!r} "
+                             f"does not start with its value {entry.attrib['value']}")
+        if name.strip():
+            classes[int(code)] = (name.strip(), entry.attrib["color"].lower())
+    return classes
 
 
 def plan_nmd(name: str, raster_path: Path, aoi: dict) -> dict:
-    product, dtype, legend, palette, title = NMD_LAYERS[name]
+    product, dtype, title = NMD_LAYERS[name]
     bbox = aoi_bbox(aoi)
     if product == 2023:
         raw, transform, _crs = read_nmd2023_window(bbox, str(raster_path))
@@ -224,36 +233,56 @@ def plan_nmd(name: str, raster_path: Path, aoi: dict) -> dict:
         raise ValueError(f"{name}: window {raw.shape} {list(transform)[:6]} is not the AOI grid")
     if raw.dtype != dtype:
         raise ValueError(f"{name}: expected {dtype} codes, got {raw.dtype}")
-    legend.check(raw)  # NMD 2023: refuses any code outside Naturvårdsverket's table
-    if product == 2018:
-        known = frozenset().union(*legend.level2.values())
-        unknown = sorted(set(np.unique(raw).tolist()) - known)
+    codes, counts = np.unique(raw, return_counts=True)
+    present = dict(zip(codes.tolist(), counts.tolist()))
+
+    if product == 2023:
+        NMD2023_LEGEND.check(raw)  # refuses any code outside Naturvårdsverket's table
+        classes, qml_sha256 = NMD2023_CLASSES, NMD2023_QML_SHA256
+        l2 = NMD2023_LEGEND.l2_raster(raw)
+        palette = "nmd2023_l2"
+        draw = lambda path: save_nmd_overlay(l2, str(path), palette=palette)  # noqa: E731
+        drawing = ("level 2 of imint.analyzers.nmd.NMD2023_LEGEND, "
+                   f"imint.exporters.export.save_nmd_overlay(palette={palette!r})")
+    else:
+        classes, qml_sha256 = nmd2018_classes(), NMD2018_QML_SHA256
+        unknown = sorted(set(present) - set(classes))
         if unknown:
-            raise ValueError(f"NMD 2018 window holds codes outside the level-2 table: {unknown}")
-    l2 = legend.l2_raster(raw)
+            raise ValueError(f"NMD 2018 window holds codes without a class in "
+                             f"{NMD2018_QML.name}: {unknown}")
+        lut = np.zeros((256, 3), dtype=np.uint8)
+        for code, (_name, colour) in classes.items():
+            lut[code] = list(bytes.fromhex(colour[1:]))
+        draw = lambda path: Image.fromarray(lut[raw]).save(path)  # noqa: E731
+        drawing = f"raw codes in the colours of {NMD2018_QML.relative_to(ROOT)}"
+    legend = [{"key": "outside", "color": "#808080", "name": NMD2023_OUTSIDE_NAME,
+               "pixels": present[NMD2023_OUTSIDE]}
+              ] if product == 2023 and NMD2023_OUTSIDE in present else []
+    legend += [{"key": str(code), "color": colour, "name": class_name, "pixels": present[code]}
+               for code, (class_name, colour) in classes.items() if code in present]
+
+    tables = nmd_legend(product)  # level 1 only: 2018 groups, 2023 klassgrupper
     total = raw.size
-    l1_keys = list(legend.level1)
-    l1_counts = np.bincount(legend.l1_raster(raw).ravel(), minlength=len(l1_keys) + 1)
+    l1_keys = list(tables.level1)
+    l1_counts = np.bincount(tables.l1_raster(raw).ravel(), minlength=len(l1_keys) + 1)
     if l1_counts[0] and product == 2018:
         raise ValueError("NMD 2018 window holds pixels outside the level-1 table")
     level1 = {key: {"pixels": int(n), "fraction": round(int(n) / total, 4)}
-              for key, n in zip([legend.unmapped_key, *l1_keys], l1_counts.tolist()) if n}
-    codes, counts = np.unique(raw, return_counts=True)
+              for key, n in zip([tables.unmapped_key, *l1_keys], l1_counts.tolist()) if n}
     return {
-        "l2": l2, "palette": palette,
+        "draw": draw,
         "record": {
             "file": f"{name}.png",
             "product": title,
             "raster": {"file": raster_path.name, **identity(raster_path)},
             "window": {"dtype": dtype,
                        "sha256": hashlib.sha256(np.ascontiguousarray(raw).tobytes()).hexdigest()},
-            **({"qml_sha256": NMD2023_QML_SHA256} if product == 2023 else {}),
-            "drawing": (f"level 2 of imint.analyzers.nmd.NMD{product}_LEGEND, "
-                        f"imint.exporters.export.save_nmd_overlay(palette={palette!r})"),
+            "qml_sha256": qml_sha256,
+            "drawing": drawing,
             "pixels": int(total),
-            "codes": {str(c): int(n) for c, n in zip(codes.tolist(), counts.tolist())},
+            "codes": {str(code): int(n) for code, n in present.items()},
             "level1": level1,
-            "legend": nmd_legend_entries(legend, product, l2),
+            "legend": legend,
         },
     }
 
@@ -271,7 +300,7 @@ def write_outputs(out_dir: Path, tessera: dict, nmd: dict) -> dict[str, dict]:
         written[name] = identity(out_dir / name)
     for layer in nmd.values():
         path = out_dir / layer["record"]["file"]
-        save_nmd_overlay(layer["l2"], str(path), palette=layer["palette"])
+        layer["draw"](path)
         with Image.open(path) as image:
             shown = opaque_colours(np.asarray(image))
         named = {entry["color"] for entry in layer["record"]["legend"]}
