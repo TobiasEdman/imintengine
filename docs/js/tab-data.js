@@ -443,8 +443,8 @@ var TAB_CONFIG = {
         summary: [
             {title:'Förändringsdetektering',value:'22.8%',detail:'49 regioner'},
             {title:'dNBR Hög svårighetsgrad',value:'1.2 km²',detail:'8.9% av området'},
-            {title:'NMD 2018 Marktäcke',value:'82.4% Skog',detail:'Före branden · 6 klasser'},
-            {title:'NMD 2023 Marktäcke',value:'77.9% Skog',detail:'Temporärt ej skog 54.2% (2018: 24.9%)'},
+            {title:'NMD 2018 Marktäcke',value:'82.4% Skog',detail:'Före branden · 6 klassgrupper'},
+            {title:'NMD 2023 Marktäcke',value:'77.9% Skog',detail:'Temporärt ej skog 56.2% av ytan (2018: 25.1%)'},
             {title:'Molnanalys (COT)',value:'99.9% klart',detail:'COT medel: 0.0017'}
         ],
         copy: {
@@ -454,7 +454,7 @@ var TAB_CONFIG = {
                 { heading: 'dNBR — brandsvårighetsgrad',
                   body: '<p>Skillnaden i Normalized Burn Ratio mellan bilden före och efter branden. Höga positiva värden = svår brandskada; nära noll = obränt. Tröskelvärden från Key & Benson är ursprungligen kalibrerade för västliga USA-barrskogar, så absolutgränserna för svensk borealskog ska tolkas som indikativa, inte definitiva.</p>' },
                 { heading: 'NDVI / NDWI / EVI / NMD',
-                  body: '<p>NDVI och EVI mäter vegetationens tillstånd; NDWI mäter fukt. Båda NMD-utgåvorna visas med Naturvårdsverkets egna klasser och färger. NMD 2018 visar marktäcket före branden: 82,4% av området var skog, vilket gör korsreferensen mot brandkartan informativ — vi vet exakt vilka skogstyper som drabbades hårdast. NMD 2023 visar området efter branden: 77,9% skog, och temporärt ej skog har ökat från 24,9% till 54,2% av området.</p>' },
+                  body: '<p>NDVI och EVI mäter vegetationens tillstånd; NDWI mäter fukt. Båda NMD-utgåvorna visas med Naturvårdsverkets egna klasser och färger. NMD 2018 visar marktäcket före branden: 82,4% av området var skog, vilket gör korsreferensen mot brandkartan informativ — vi vet exakt vilka skogstyper som drabbades hårdast. NMD 2023 visar området efter branden: 77,9% skog, och temporärt ej skog (på fastmark och våtmark) har ökat från 25,1% till 56,2% av området.</p>' },
                 { heading: 'Marktäcke per år (TESSERA R4)',
                   body: '<p>En marktäckekarta per år 2017–2025 från TESSERA R4, samma modell som årskartan under Marktäckekartering. Varje karta bygger på årets satellitdata och årets växtfenologi (HR-VPP), utom 2025 som använder växtfenologi från 2024 eftersom HR-VPP 2025 inte är publicerad.</p>' },
                 { heading: 'Förändring (gradient)',

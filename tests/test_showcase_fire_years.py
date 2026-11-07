@@ -298,15 +298,15 @@ def _pct(fraction: float) -> str:
 def test_the_tab_quotes_the_nmd_shares_of_the_manifest(tab: dict) -> None:
     manifest = _published()
     forest = {key: _pct(manifest[key]["level1"]["forest"]["fraction"]) for key in ("nmd_2018", "nmd_2023")}
-    # 118 is "temporärt ej skog" (på fastmark) in both editions.
-    temporary = {key: _pct(manifest[key]["codes"]["118"] / manifest[key]["pixels"])
+    # "Temporärt ej skog" is 118 (fastmark) + 128 (våtmark) in both editions; a share of the area.
+    temporary = {key: _pct((manifest[key]["codes"]["118"] + manifest[key]["codes"]["128"]) / manifest[key]["pixels"])
                  for key in ("nmd_2018", "nmd_2023")}
     cards = {card["title"]: card for card in tab["fire"]["summary"]}
     assert cards["NMD 2018 Marktäcke"]["value"] == f"{forest['nmd_2018']}% Skog"
-    assert cards["NMD 2018 Marktäcke"]["detail"] == f"Före branden · {len(manifest['nmd_2018']['level1'])} klasser"
+    assert cards["NMD 2018 Marktäcke"]["detail"] == f"Före branden · {len(manifest['nmd_2018']['level1'])} klassgrupper"
     assert cards["NMD 2023 Marktäcke"]["value"] == f"{forest['nmd_2023']}% Skog"
     assert cards["NMD 2023 Marktäcke"]["detail"] == (
-        f"Temporärt ej skog {temporary['nmd_2023']}% (2018: {temporary['nmd_2018']}%)")
+        f"Temporärt ej skog {temporary['nmd_2023']}% av ytan (2018: {temporary['nmd_2018']}%)")
     index = (REPO / "docs/index.html").read_text()
     description = re.search(r'id="tab-fire">(.*?)<div class="sub-tab-content" id="tab-grazing">', index, re.S).group(1)
     method = next(m["body"] for m in tab["fire"]["copy"]["methods"] if m["heading"] == "NDVI / NDWI / EVI / NMD")
