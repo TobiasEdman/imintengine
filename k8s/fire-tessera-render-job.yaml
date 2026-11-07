@@ -1,0 +1,136 @@
+# Task 0151: TESSERA R4 land-cover maps of the fire-tab AOI (Kårbölebranden)
+# for 2017-2025, step 2 of 2.
+#
+# Runs scripts/render_fire_tessera_years.py render: the annual LCLU service's
+# own path (stage_lclu_demo.stage, then LcluService.run with the R4 checkpoint
+# pinned by SHA256) for two 504 px windows per year, stitched onto the tab's
+# 267x559 EPSG:3006 grid. 2025 uses HR-VPP 2024 (lclu.VPP_YEAR_SUBSTITUTIONS,
+# PR #137), labelled in the MANIFEST. Any other missing input fails the Job
+# before downloading. Prithvi is not used.
+#
+# Runtime = the service's recipe runtime (docker/lclu/README.md): the same
+# Python base digest, docker/lclu/requirements.lock installed with
+# --require-hashes, the pinned libexpat and the export smoke check. The base
+# has no git, so the source is GitHub's archive of SRC_SHA. It is accepted only
+# if the archive's embedded commit id equals SRC_SHA.
+#
+# Requires: fire-tessera-vpp-gapfill-0151 succeeded, and SRC_SHA is reachable
+# on GitHub (push the branch). /data is mounted read-only. The only writable
+# path is the PVC subPath showcase_fire_tessera, mounted at /out:
+#   /data/showcase_fire_tessera/shared/    verified TESSERA/DEM downloads, COGs,
+#                                          receipts; reused by later runs
+#   /data/showcase_fire_tessera/<run-id>/  <year>/classification.{tif,png},
+#                                          window provenance, MANIFEST.json
+# Run ID = start time + SRC_SHA prefix, so a re-created Job never overwrites an
+# earlier run. Expected: ~1.4 GB TESSERA originals (18 blocks) + COGs + one
+# DEM tile (~3 GB shared) and ~1.5 GB of prepared inputs per run; well under
+# an hour on 4 CPU. No credentials, no GPU, no CDSE or DES.
+#
+#   kubectl --context icekube -n prithvi-training-default create --dry-run=server -f k8s/fire-tessera-render-job.yaml
+#   kubectl --context icekube -n prithvi-training-default create -f k8s/fire-tessera-render-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fire-tessera-render-0151
+  namespace: prithvi-training-default
+  labels:
+    app: fire-tessera
+    task: "0151"
+    purpose: render
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400   # 4 h hard stop
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: fire-tessera
+        task: "0151"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: render
+          image: python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+          env:
+            - { name: IMAGE,       value: "python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f" }
+            - { name: SRC_SHA,     value: "6abfb7bd684b738c49db53a69d7418cc98f533a0" }
+            - { name: FIRE_YEARS,  value: "2017 2018 2019 2020 2021 2022 2023 2024 2025" }
+            - { name: VPP_SOURCE,  value: "wekeo" }
+            - { name: PYTHONUNBUFFERED,        value: "1" }
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+            - { name: OMP_NUM_THREADS, value: "2" }
+            - { name: MKL_NUM_THREADS, value: "2" }
+            - { name: GDAL_CACHEMAX,   value: "256" }
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${SRC_SHA:0:12}"
+              echo "=== fire TESSERA years (task 0151) ${RUN_ID}: $(date -u) ==="
+              FREE_GIB=$(python -c 'import shutil; print(shutil.disk_usage("/out").free // 2**30)')
+              echo "free on /out: ${FREE_GIB} GiB (first run needs ~5 GiB)"
+              [ "${FREE_GIB}" -ge 30 ] || { echo "ABORT: under 30 GiB free"; exit 1; }
+
+              python - <<'PY'
+              """Extract the needed trees of GitHub's archive of SRC_SHA, verified by its commit id."""
+              import os, tarfile, urllib.request
+
+              sha = os.environ['SRC_SHA']
+              keep = ('imint/', 'scripts/', 'config/', 'docker/lclu/')
+              url = f'https://codeload.github.com/TobiasEdman/imintengine/tar.gz/{sha}'
+              with urllib.request.urlopen(url, timeout=600) as response, \
+                      tarfile.open(fileobj=response, mode='r|gz') as archive:
+                  for member in archive:
+                      if archive.pax_headers.get('comment') != sha:
+                          raise SystemExit(f'ABORT: archive is not commit {sha}')
+                      name = member.name.partition('/')[2]
+                      if name.startswith(keep):
+                          member.name = name
+                          archive.extract(member, '/scratch/src', filter='data')
+              print('source', sha, flush=True)
+              PY
+              cd /scratch/src
+              python -m venv /scratch/venv
+              /scratch/venv/bin/pip install --quiet --no-cache-dir --require-hashes \
+                -r docker/lclu/requirements.lock
+              /scratch/venv/bin/pip check
+              LD_LIBRARY_PATH="$(python docker/lclu/system_runtime.py /scratch/system)"
+              export LD_LIBRARY_PATH PYTHONPATH=/scratch/src
+              /scratch/venv/bin/python docker/lclu/smoke.py
+
+              # FIRE_YEARS is deliberately word-split into --years arguments.
+              # shellcheck disable=SC2086
+              /scratch/venv/bin/python scripts/render_fire_tessera_years.py render \
+                --scope config/lclu/fire_karbole.json --years ${FIRE_YEARS} \
+                --data /data --out /out --run-id "${RUN_ID}" --image "${IMAGE}" \
+                --git-sha "${SRC_SHA}" --output-location training-data-cephfs:/showcase_fire_tessera
+              echo "=== done ${RUN_ID}: $(date -u) ==="
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: training-data
+              mountPath: /data
+              readOnly: true
+            - name: training-data
+              mountPath: /out
+              subPath: showcase_fire_tessera
+            - name: scratch
+              mountPath: /scratch
+      volumes:
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: scratch
+          emptyDir: {}

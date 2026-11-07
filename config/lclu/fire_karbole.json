@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "name": "Kårbölebranden",
+  "task": "0151",
+  "aoi": {
+    "crs": "EPSG:3006",
+    "bounds_3006": [
+      521870,
+      6865550,
+      524540,
+      6871140
+    ],
+    "shape": [
+      559,
+      267
+    ],
+    "transform": [
+      10.0,
+      0.0,
+      521870.0,
+      0.0,
+      -10.0,
+      6871140.0
+    ]
+  },
+  "windows_center_3006": [
+    [
+      523200,
+      6869740
+    ],
+    [
+      523200,
+      6866960
+    ]
+  ],
+  "bounds_3006": [
+    520640,
+    6864400,
+    525760,
+    6872300
+  ],
+  "buffer_m": 0,
+  "municipality": {
+    "type": "Feature",
+    "properties": {
+      "name": "Kårbölebranden"
+    },
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [
+            15.41648373583417,
+            61.92190079297325
+          ],
+          [
+            15.467328276149276,
+            61.921737694657544
+          ],
+          [
+            15.468095786552077,
+            61.971915496884954
+          ],
+          [
+            15.417167748637384,
+            61.97207893811988
+          ],
+          [
+            15.41648373583417,
+            61.92190079297325
+          ]
+        ]
+      ]
+    }
+  },
+  "mgrs_tile": "33VWJ",
+  "vpp_index_by_year": {
+    "2017": "vpp_wekeo_fire/index.json",
+    "2018": "vpp_wekeo/index.json",
+    "2019": "vpp_wekeo_fire/index.json",
+    "2020": "vpp_wekeo_fire/index.json",
+    "2021": "vpp_wekeo/index.json",
+    "2022": "vpp_wekeo/index.json",
+    "2023": "vpp_wekeo_fire/index.json",
+    "2024": "vpp_wekeo/index.json"
+  },
+  "years": [
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022,
+    2023,
+    2024,
+    2025
+  ],
+  "registry": {
+    "sha256": "b7d0717c20f3955b4832ee006aa6d835f18b3a376083f7616205add134246c5a",
+    "size": 212614861
+  },
+  "registry_url": "https://data.source.coop/tessera/tessera/npy/v1/manifest.parquet",
+  "blocks": [
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2017,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2017,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2018,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2018,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2019,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2019,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2020,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2020,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2021,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2021,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2022,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2022,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2023,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2023,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2024,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2024,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2025,
+      "lon": 15.35,
+      "lat": 61.95,
+      "grid_size": 75920384,
+      "scales_size": 2372636
+    },
+    {
+      "version": "1.0",
+      "variant": "vultr",
+      "year": 2025,
+      "lon": 15.45,
+      "lat": 61.95,
+      "grid_size": 76131456,
+      "scales_size": 2379232
+    }
+  ]
+}
