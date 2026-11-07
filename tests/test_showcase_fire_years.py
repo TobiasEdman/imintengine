@@ -175,6 +175,39 @@ def test_every_opaque_colour_in_a_published_layer_is_named_in_its_legend() -> No
         assert all(entry["name"] for entry in layer["legend"]), layer["file"]
 
 
+def _official_nmd2018() -> dict[str, tuple[str, str]]:
+    """Code → (name, colour) of the named entries of Naturvårdsverket's pinned NMD 2018 style."""
+    import xml.etree.ElementTree as ET
+
+    classes = {}
+    for entry in ET.parse(NMD2018_QML).iter("paletteEntry"):
+        code, _, name = entry.attrib["label"].partition(" ")
+        if name.strip():
+            classes[code] = (name.strip(), entry.attrib["color"].lower())
+    return classes
+
+
+def test_the_nmd_2018_legend_is_the_pinned_official_style() -> None:
+    assert _sha(NMD2018_QML) == NMD2018_QML_SHA256
+    official = _official_nmd2018()
+    assert len(official) == 25  # the basskikt classes; the other 231 entries carry no name
+    layer = _published()["nmd_2018"]
+    assert layer["qml_sha256"] == NMD2018_QML_SHA256
+    assert all(official[e["key"]] == (e["name"], e["color"]) for e in layer["legend"])
+    # Only the classes present, in the style's order, each with its pixel count.
+    assert [e["key"] for e in layer["legend"]] == [k for k in official if k in layer["codes"]]
+    assert {e["key"]: e["pixels"] for e in layer["legend"]} == layer["codes"]
+
+
+def test_nmd_2018_draws_barrblandskog_as_its_own_class() -> None:
+    layer = _published()["nmd_2018"]
+    entry = next(e for e in layer["legend"] if e["key"] == "113")
+    assert (entry["name"], entry["color"]) == ("Barrblandskog utanför våtmark", "#4e7000")
+    rgb = np.asarray(Image.open(SHOWCASE / layer["file"]).convert("RGB")).reshape(-1, 3)
+    drawn = int((rgb == list(bytes.fromhex("4e7000"))).all(axis=1).sum())
+    assert drawn == entry["pixels"] == layer["codes"]["113"] > 0
+
+
 def _numbers(value):
     if isinstance(value, dict):
         for item in value.values():

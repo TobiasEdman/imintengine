@@ -232,8 +232,8 @@ Object.keys(S1_CHART_CREDITS).forEach(function(k) {
 // Fire tab (Kårbölebranden): land cover per year and NMD 2018/2023. Colours
 // and names are those of docs/showcase/fire/MANIFEST.json, written by
 // scripts/showcase_fire_years.py: TESSERA R4 in the annual-map service's
-// legend, NMD 2018 in the engine's level-2 table, NMD 2023 in
-// Naturvårdsverket's own classes. Each legend lists only the classes present
+// legend, NMD 2018 and NMD 2023 in Naturvårdsverket's own classes and
+// colours. Each legend lists only the classes present
 // in its image (checked by tests/test_showcase_fire_years.py).
 var TESSERA_R4_CLASSES = {
     1:  {color:'#6d8b05',label:'Tallskog på fastmark'},
@@ -275,24 +275,26 @@ Object.keys(FIRE_LULC_CLASSES).forEach(function(year) {
     });
 });
 LEGENDS.fire_nmd_2018 = [
-    {color:'#006400',label:'Tallskog'},
-    {color:'#228b22',label:'Granskog'},
-    {color:'#32cd32',label:'Lövskog'},
-    {color:'#3cb371',label:'Blandskog'},
-    {color:'#90ee90',label:'Temporärt ej skog'},
-    {color:'#2e4f2e',label:'Sumpskog tall'},
-    {color:'#3a5f3a',label:'Sumpskog gran'},
-    {color:'#4a7f4a',label:'Sumpskog löv'},
-    {color:'#5a8f5a',label:'Sumpskog bland'},
-    {color:'#7aaf7a',label:'Sumpskog temp'},
-    {color:'#8b5a2b',label:'Öppen våtmark'},
-    {color:'#ffd700',label:'Åkermark'},
-    {color:'#c8ad7f',label:'Öppen mark, bar'},
-    {color:'#d2b48c',label:'Öppen mark, veg.'},
-    {color:'#ff0000',label:'Byggnader'},
-    {color:'#ff4500',label:'Infrastruktur'},
-    {color:'#ff6347',label:'Vägar'},
-    {color:'#0000ff',label:'Sjöar'}
+    {color:'#c29ed7',label:'Våtmark'},
+    {color:'#ffffbe',label:'Åkermark'},
+    {color:'#e1e1e1',label:'Övrig öppen mark utan vegetation'},
+    {color:'#ffd37f',label:'Övrig öppen mark med vegetation'},
+    {color:'#5a1414',label:'Exploaterad mark, byggnad'},
+    {color:'#e5464b',label:'Exploaterad mark, ej byggnad eller väg/järnväg'},
+    {color:'#191919',label:'Exploaterad mark, väg/järnväg'},
+    {color:'#6699cd',label:'Sjö och vattendrag'},
+    {color:'#6e8c05',label:'Tallskog utanför våtmark'},
+    {color:'#2d5f00',label:'Granskog utanför våtmark'},
+    {color:'#4e7000',label:'Barrblandskog utanför våtmark'},
+    {color:'#38a800',label:'Lövblandad barrskog utanför våtmark'},
+    {color:'#4ce600',label:'Triviallövskog utanför våtmark'},
+    {color:'#cdcd66',label:'Temporärt ej skog utanför våtmark'},
+    {color:'#598c55',label:'Tallskog på våtmark'},
+    {color:'#305e50',label:'Granskog på våtmark'},
+    {color:'#23735a',label:'Barrblandskog på våtmark'},
+    {color:'#438870',label:'Lövblandad barrskog på våtmark'},
+    {color:'#89cd9b',label:'Triviallövskog på våtmark'},
+    {color:'#898944',label:'Temporärt ej skog på våtmark'}
 ];
 LEGENDS.fire_nmd_2023 = [
     {color:'#ffffbc',label:'Åkermark (underindelning saknas)'},
@@ -452,7 +454,7 @@ var TAB_CONFIG = {
                 { heading: 'dNBR — brandsvårighetsgrad',
                   body: '<p>Skillnaden i Normalized Burn Ratio mellan bilden före och efter branden. Höga positiva värden = svår brandskada; nära noll = obränt. Tröskelvärden från Key & Benson är ursprungligen kalibrerade för västliga USA-barrskogar, så absolutgränserna för svensk borealskog ska tolkas som indikativa, inte definitiva.</p>' },
                 { heading: 'NDVI / NDWI / EVI / NMD',
-                  body: '<p>NDVI och EVI mäter vegetationens tillstånd; NDWI mäter fukt. NMD 2018 visar marktäcket före branden: 82,4% av området var skog, vilket gör korsreferensen mot brandkartan informativ — vi vet exakt vilka skogstyper som drabbades hårdast. NMD 2023 visar området efter branden med Naturvårdsverkets egna klasser och färger: 77,9% skog, och temporärt ej skog har ökat från 24,9% till 54,2% av området.</p>' },
+                  body: '<p>NDVI och EVI mäter vegetationens tillstånd; NDWI mäter fukt. Båda NMD-utgåvorna visas med Naturvårdsverkets egna klasser och färger. NMD 2018 visar marktäcket före branden: 82,4% av området var skog, vilket gör korsreferensen mot brandkartan informativ — vi vet exakt vilka skogstyper som drabbades hårdast. NMD 2023 visar området efter branden: 77,9% skog, och temporärt ej skog har ökat från 24,9% till 54,2% av området.</p>' },
                 { heading: 'Marktäcke per år (TESSERA R4)',
                   body: '<p>En marktäckekarta per år 2017–2025 från TESSERA R4, samma modell som årskartan under Marktäckekartering. Varje karta bygger på årets satellitdata och årets växtfenologi (HR-VPP), utom 2025 som använder växtfenologi från 2024 eftersom HR-VPP 2025 inte är publicerad.</p>' },
                 { heading: 'Förändring (gradient)',

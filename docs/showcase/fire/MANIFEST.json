@@ -1,8 +1,8 @@
 {
   "description": "Fire tab (Kårbölebranden) layers on the AOI grid: TESSERA R4 land cover per year, copied from one render run, and NMD 2018 (before the fire) and NMD 2023 drawn from the national rasters. Files written by scripts/showcase_fire_years.py; the tab's other images predate it.",
-  "produced_at": "2026-11-07T18:40:30.135558+00:00",
+  "produced_at": "2026-11-07T19:20:15.117059+00:00",
   "produced_by": "scripts/showcase_fire_years.py",
-  "git_sha": "d79129059bac5669edd47583e91b21056596aead",
+  "git_sha": "c91fa2f02a0ad4c29a97716fbc3006d2f57d467e",
   "git_dirty": false,
   "aoi": {
     "crs": "EPSG:3006",
@@ -871,7 +871,8 @@
       "dtype": "uint8",
       "sha256": "8ecd160e9685f92a2e31627bed225f5a6287a5d02ce522a1c06551b825605cd5"
     },
-    "drawing": "level 2 of imint.analyzers.nmd.NMD2018_LEGEND, imint.exporters.export.save_nmd_overlay(palette='nmd2018_l2')",
+    "qml_sha256": "8faa67351c71a641a7ee2f4e4d868c076e44e1810b9dfeec99241e3769752dfd",
+    "drawing": "raw codes in the colours of docs/verification/nmd2018/nmd2018bas_ogeneraliserad_v1_1.qml",
     "pixels": 149253,
     "codes": {
       "2": 7847,
@@ -923,116 +924,128 @@
     },
     "legend": [
       {
-        "key": "forest_pine",
-        "color": "#006400",
-        "name": "Tallskog",
-        "pixels": 55546
-      },
-      {
-        "key": "forest_spruce",
-        "color": "#228b22",
-        "name": "Granskog",
-        "pixels": 2853
-      },
-      {
-        "key": "forest_deciduous",
-        "color": "#32cd32",
-        "name": "Lövskog",
-        "pixels": 11972
-      },
-      {
-        "key": "forest_mixed",
-        "color": "#3cb371",
-        "name": "Blandskog",
-        "pixels": 7881
-      },
-      {
-        "key": "forest_temp_non_forest",
-        "color": "#90ee90",
-        "name": "Temporärt ej skog",
-        "pixels": 37182
-      },
-      {
-        "key": "forest_wetland_pine",
-        "color": "#2e4f2e",
-        "name": "Sumpskog tall",
-        "pixels": 5164
-      },
-      {
-        "key": "forest_wetland_spruce",
-        "color": "#3a5f3a",
-        "name": "Sumpskog gran",
-        "pixels": 50
-      },
-      {
-        "key": "forest_wetland_deciduous",
-        "color": "#4a7f4a",
-        "name": "Sumpskog löv",
-        "pixels": 443
-      },
-      {
-        "key": "forest_wetland_mixed",
-        "color": "#5a8f5a",
-        "name": "Sumpskog bland",
-        "pixels": 1609
-      },
-      {
-        "key": "forest_wetland_temp",
-        "color": "#7aaf7a",
-        "name": "Sumpskog temp",
-        "pixels": 329
-      },
-      {
-        "key": "open_wetland",
-        "color": "#8b5a2b",
-        "name": "Öppen våtmark",
+        "key": "2",
+        "color": "#c29ed7",
+        "name": "Våtmark",
         "pixels": 7847
       },
       {
-        "key": "cropland",
-        "color": "#ffd700",
+        "key": "3",
+        "color": "#ffffbe",
         "name": "Åkermark",
         "pixels": 58
       },
       {
-        "key": "open_land_bare",
-        "color": "#c8ad7f",
-        "name": "Öppen mark, bar",
+        "key": "41",
+        "color": "#e1e1e1",
+        "name": "Övrig öppen mark utan vegetation",
         "pixels": 466
       },
       {
-        "key": "open_land_vegetated",
-        "color": "#d2b48c",
-        "name": "Öppen mark, veg.",
+        "key": "42",
+        "color": "#ffd37f",
+        "name": "Övrig öppen mark med vegetation",
         "pixels": 3332
       },
       {
-        "key": "developed_buildings",
-        "color": "#ff0000",
-        "name": "Byggnader",
+        "key": "51",
+        "color": "#5a1414",
+        "name": "Exploaterad mark, byggnad",
         "pixels": 13
       },
       {
-        "key": "developed_infrastructure",
-        "color": "#ff4500",
-        "name": "Infrastruktur",
+        "key": "52",
+        "color": "#e5464b",
+        "name": "Exploaterad mark, ej byggnad eller väg/järnväg",
         "pixels": 10
       },
       {
-        "key": "developed_roads",
-        "color": "#ff6347",
-        "name": "Vägar",
+        "key": "53",
+        "color": "#191919",
+        "name": "Exploaterad mark, väg/järnväg",
         "pixels": 3292
       },
       {
-        "key": "water_lakes",
-        "color": "#0000ff",
-        "name": "Sjöar",
+        "key": "61",
+        "color": "#6699cd",
+        "name": "Sjö och vattendrag",
         "pixels": 11206
+      },
+      {
+        "key": "111",
+        "color": "#6e8c05",
+        "name": "Tallskog utanför våtmark",
+        "pixels": 55546
+      },
+      {
+        "key": "112",
+        "color": "#2d5f00",
+        "name": "Granskog utanför våtmark",
+        "pixels": 2853
+      },
+      {
+        "key": "113",
+        "color": "#4e7000",
+        "name": "Barrblandskog utanför våtmark",
+        "pixels": 10175
+      },
+      {
+        "key": "114",
+        "color": "#38a800",
+        "name": "Lövblandad barrskog utanför våtmark",
+        "pixels": 7881
+      },
+      {
+        "key": "115",
+        "color": "#4ce600",
+        "name": "Triviallövskog utanför våtmark",
+        "pixels": 1797
+      },
+      {
+        "key": "118",
+        "color": "#cdcd66",
+        "name": "Temporärt ej skog utanför våtmark",
+        "pixels": 37182
+      },
+      {
+        "key": "121",
+        "color": "#598c55",
+        "name": "Tallskog på våtmark",
+        "pixels": 5164
+      },
+      {
+        "key": "122",
+        "color": "#305e50",
+        "name": "Granskog på våtmark",
+        "pixels": 50
+      },
+      {
+        "key": "123",
+        "color": "#23735a",
+        "name": "Barrblandskog på våtmark",
+        "pixels": 230
+      },
+      {
+        "key": "124",
+        "color": "#438870",
+        "name": "Lövblandad barrskog på våtmark",
+        "pixels": 1609
+      },
+      {
+        "key": "125",
+        "color": "#89cd9b",
+        "name": "Triviallövskog på våtmark",
+        "pixels": 213
+      },
+      {
+        "key": "128",
+        "color": "#898944",
+        "name": "Temporärt ej skog på våtmark",
+        "pixels": 329
       }
     ],
-    "sha256": "66d177c069b4e775932440845f742ffc0eac6846673ea59d3e27a56cb0db8435",
-    "size": 43704
+    "sha256": "1064fec36c4feab80527143d83a0e32ee1981a72e791327263bf1250a350a3fc",
+    "size": 44013
   },
   "nmd_2023": {
     "file": "nmd_2023.png",
