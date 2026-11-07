@@ -482,7 +482,7 @@ var TAB_CONFIG = {
                     '2018 års karta bygger på hela årets satellitdata och innehåller därför branden (14 juli 2018).',
                     'Skogliga grunddata, trädhöjd, markfukt och höjdmodell är fasta stödlager, samma för alla år.',
                     '2025 använder växtfenologi (HR-VPP) från 2024.',
-                    'Röda fläckar i brandytan 2019–2020 är troligen bränd bar mark som modellen läser som bebyggelse.'
+                    'Röda fläckar i brandytan 2019–2020 är troligen bränd bar mark som modellen läser som exploaterad mark.'
                 ]},
             {id:'f-nmd',    key:'nmd',     title:'NMD 2018 Marktäcke (före branden)', legend:'fire_nmd_2018'},
             {id:'f-nmd-2023',key:'nmd_2023',title:'NMD 2023 Marktäcke',               legend:'fire_nmd_2023'},
