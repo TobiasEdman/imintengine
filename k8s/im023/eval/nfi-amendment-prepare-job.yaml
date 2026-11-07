@@ -1,0 +1,104 @@
+---
+# IM-023 items 3 and 5: prepare the AMENDMENT to the 2026-10-27 NFI freeze
+# (docs/experiments/class-separability/retrain_barrblandskog.md, step 3, and
+# "Beslut (Tobias 2026-11-06)"). scripts/prepare_nfi_amendment.py verifies the
+# original freeze by its pinned digest (manifest, holdout and training
+# parquets, every frozen tile: a changed or missing tile refuses the run and
+# every such tile is listed), pins the three cells' checkpoints (r4 must be
+# the frozen tessera_r4), their input contracts, the protocol constants, the
+# amendment's source and the sealed runtime, and writes one new manifest. No
+# inference, no scoring.
+#
+# Runtime (Tobias 2026-11-07): the sealed ladder-crop-distill image rebuilt at
+# the amendment's merged commit (docker/ladder-crop-distill, published and
+# signed by .github/workflows/build-pipeline-images.yml on the merge to main):
+# the base and locked environments of the freeze's sha-4cb93b4 image, new
+# source. As k8s/nfi-holdout-freeze-job.yaml: the scoring interpreter, with
+# the checkpoints read by the model interpreter in a child process.
+#
+# Writes: /cephfs/nfi/im023_amendment_2026-11-06/freeze/manifest.json only;
+# the script refuses an existing --out-dir. Root, because nfi/ is root:root
+# 0755; the PVC is read-only except the new amendment directory. CPU only.
+# Placeholders, filled in the pin commit after the merge:
+#   REPLACE_WITH_SEALED_IMAGE_DIGEST  the published image's digest
+#   REPLACE_WITH_MERGED_SHA           the commit baked into that image
+# Not applied by the author: kubectl create --dry-run=server -f <this file>.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-nfi-amendment-prepare
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0156", purpose: im023-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0156", purpose: im023-eval}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: run
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              OUT=/cephfs/nfi/im023_amendment_2026-11-06/freeze
+              echo "=== IM-023 amendment prepare — $(date -u) ==="
+              /opt/venvs/scoring/bin/python -u /opt/imintengine/scripts/prepare_nfi_amendment.py \
+                --base-manifest /cephfs/nfi/nfi_holdout_freeze_2026-10-27/manifest.json \
+                --checkpoint-main /cephfs/checkpoints/im023/tessera_b28/best_model.pt \
+                --checkpoint-control /cephfs/checkpoints/im023/tessera_control/best_model.pt \
+                --checkpoint-r4 /cephfs/checkpoints/ladder/tessera_r4/best_model.pt \
+                --runtime-image "$IMAGE_REF" --runtime-manifest /opt/provenance/runtime.json \
+                --source-git-sha "$SOURCE_GIT_SHA" --out-dir "$OUT"
+              chmod 0755 "$OUT"
+              chmod 0644 "$OUT/manifest.json"
+              echo "manifest: $(sha256sum "$OUT/manifest.json" | cut -d' ' -f1)"
+              echo "=== done — $(date -u) ==="
+          env:
+            # The image again, and the commit baked into it: prepare records both.
+            - {name: IMAGE_REF, value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST"}
+            - {name: SOURCE_GIT_SHA, value: REPLACE_WITH_MERGED_SHA}
+            - {name: HOME, value: /scratch}
+            - {name: TMPDIR, value: /scratch}
+            - {name: XDG_CACHE_HOME, value: /scratch/.cache}
+            - {name: MPLCONFIGDIR, value: /scratch/.mpl}
+            - {name: TORCH_HOME, value: /scratch/.torch}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: CUDA_VISIBLE_DEVICES, value: ""}
+          resources:
+            requests: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+            limits: {cpu: "4", memory: 16Gi, ephemeral-storage: 24Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # Everything read-only except the new amendment directory.
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: data, mountPath: /cephfs/nfi/im023_amendment_2026-11-06, subPath: nfi/im023_amendment_2026-11-06}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: scratch
+          emptyDir: {sizeLimit: 20Gi}

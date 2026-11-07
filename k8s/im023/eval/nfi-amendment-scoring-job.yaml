@@ -1,0 +1,101 @@
+---
+# IM-023 items 3 and 5: score the amendment cells on the frozen NFI holdout,
+# after Tobias's go and after all three cells' dumps exist.
+# scripts/score_nfi_amendment.py re-verifies the amendment, the freeze it
+# references, the sealed source and runtime and every dump, samples the
+# frozen NMD rasters for the primary scoring's common coverage, and writes
+#   primary.json - item 3: 28 folded to tall/gran by the fraction head, the
+#                  frozen paired report, 28 as its own confusion column;
+#   mixed.json   - item 5: the prespecified conditions, their bounds and a
+#                  computed verdict per class (plus the contorta sensitivity).
+# No per-plot rows are written; the log prints sizes and digests only.
+#
+# Runtime: the sealed image the prepare Job recorded (see
+# nfi-amendment-prepare-job.yaml), under the model interpreter (NMD sampling
+# needs rasterio), as k8s/nfi-scoring-job.yaml for the frozen cells.
+#
+# Writes: /cephfs/nfi/im023_amendment_2026-11-06/scoring/ only, each report
+# opened with "x". Root, because nfi/ is root:root 0755. CPU only.
+# Placeholders: REPLACE_WITH_SEALED_IMAGE_DIGEST (pin commit after the merge)
+# and REPLACE_WITH_APPROVED_AMENDMENT_SHA256 (the digest Tobias approves after
+# prepare). Not applied by the author: kubectl create --dry-run=server -f <this file>.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-nfi-amendment-scoring
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0156", purpose: im023-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0156", purpose: im023-eval}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values: ["p02r09srv04", "p02r09srv06"]
+      containers:
+        - name: run
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              OUT=/cephfs/nfi/im023_amendment_2026-11-06/scoring
+              echo "=== IM-023 amendment scoring — $(date -u) ==="
+              chmod 0755 "$OUT"
+              for ANALYSIS in primary mixed; do
+                /opt/venvs/model/bin/python -u /opt/imintengine/scripts/score_nfi_amendment.py "$ANALYSIS" \
+                  --amendment-manifest "$MANIFEST" --expected-amendment-sha256 "$MANIFEST_SHA256" \
+                  --dump-dir /cephfs/nfi/im023_amendment_2026-11-06/inference \
+                  --nmd2023 /cephfs/nmd2023/NMD2023bas_v2_1.tif \
+                  --nmd2018 /cephfs/nmd/nmd2018bas_ogeneraliserad_v1_1.tif \
+                  --out "$OUT/$ANALYSIS.json"
+                chmod 0644 "$OUT/$ANALYSIS.json"
+                echo "$ANALYSIS: $(stat -c %s "$OUT/$ANALYSIS.json") bytes, sha256 $(sha256sum "$OUT/$ANALYSIS.json" | cut -d' ' -f1)"
+              done
+              echo "=== done — $(date -u) ==="
+          env:
+            - {name: MANIFEST, value: /cephfs/nfi/im023_amendment_2026-11-06/freeze/manifest.json}
+            # Placeholder: the digest Tobias approves after the prepare Job.
+            - {name: MANIFEST_SHA256, value: REPLACE_WITH_APPROVED_AMENDMENT_SHA256}
+            - {name: HOME, value: /scratch}
+            - {name: TMPDIR, value: /scratch}
+            - {name: XDG_CACHE_HOME, value: /scratch/.cache}
+            - {name: MPLCONFIGDIR, value: /scratch/.mpl}
+            - {name: TORCHINDUCTOR_CACHE_DIR, value: /scratch/.inductor}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+            - {name: CUDA_VISIBLE_DEVICES, value: ""}
+          resources:
+            requests: {cpu: "4", memory: 16Gi, ephemeral-storage: 4Gi}
+            limits: {cpu: "4", memory: 16Gi, ephemeral-storage: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # Everything read-only except the new scoring directory.
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: data, mountPath: /cephfs/nfi/im023_amendment_2026-11-06/scoring, subPath: nfi/im023_amendment_2026-11-06/scoring}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: scratch
+          emptyDir: {sizeLimit: 2Gi}

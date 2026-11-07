@@ -73,8 +73,9 @@ def smoke_nmd_sampler(source_root: Path = Path("/opt/imintengine")) -> None:
     print({"status": "ok", "environment": "nmd-sampler", "pixels": 2})
 
 
-def smoke_checkpoint_metadata(source_root: Path = Path("/opt/imintengine")) -> None:
-    """Exercise safe CPU meta loading in the real model environment."""
+def _run_checkpoint_child(script: str, cell: str, config: dict,
+                          source_root: Path = Path("/opt/imintengine")) -> dict:
+    """Run a checkpoint-metadata child on a synthetic CPU checkpoint, as prepare does."""
     import json
     import subprocess
     import tempfile
@@ -85,17 +86,33 @@ def smoke_checkpoint_metadata(source_root: Path = Path("/opt/imintengine")) -> N
         private = Path(directory) / "private"
         private.mkdir(mode=0o700)
         checkpoint = Path(directory) / "synthetic.pt"
-        torch.save({"config": {"enabled_aux_names": ["dem"], "n_aux_channels": 1},
-                    "model_state_dict": {"lidar_branch.net.0.conv.weight": torch.ones(2, 1, 3, 3)}}, checkpoint)
-        cells = {"clay_r1": {"checkpoint": {"path": str(checkpoint),
+        torch.save({"config": {"enabled_aux_names": ["dem"], "n_aux_channels": 1, **config},
+                    "model_state_dict": {"lidar_branch.net.0.conv.weight": torch.ones(2, 1, 3, 3),
+                                         "frac_head.weight": torch.ones(4, 2)}}, checkpoint)
+        cells = {cell: {"checkpoint": {"path": str(checkpoint),
                  "bytes": checkpoint.stat().st_size, "sha256": sha256_file(checkpoint)}}}
         result = subprocess.run(
-            [sys.executable, str(source_root / "scripts/nfi_checkpoint_inputs.py")],
+            [sys.executable, str(source_root / script)],
             input=json.dumps(cells), text=True, capture_output=True, check=True,
             env={**os.environ, "TMPDIR": str(private), "CUDA_VISIBLE_DEVICES": ""})
-        contract = json.loads(result.stdout)["cells"]["clay_r1"]
-        assert contract["enabled_aux_names"] == ["dem"] and contract["n_aux_channels"] == 1
+        return json.loads(result.stdout)
+
+
+def smoke_checkpoint_metadata() -> None:
+    """Exercise safe CPU meta loading in the real model environment."""
+    contract = _run_checkpoint_child("scripts/nfi_checkpoint_inputs.py", "clay_r1", {})["cells"]["clay_r1"]
+    assert contract["enabled_aux_names"] == ["dem"] and contract["n_aux_channels"] == 1
     print({"status": "ok", "environment": "checkpoint-metadata", "device": "meta"})
+
+
+def smoke_amendment_checkpoints() -> None:
+    """The IM-023 amendment's checkpoint child, as prepare_nfi_amendment calls it."""
+    cell = _run_checkpoint_child(
+        "scripts/nfi_amendment_checkpoints.py", "im023_main",
+        {"num_classes": 29, "enable_tradslag_head": True, "num_tradslag": 4})["im023_main"]
+    assert cell["num_classes"] == 29 and cell["fraction_head"] is True
+    assert cell["input_contract"]["enabled_aux_names"] == ["dem"]
+    print({"status": "ok", "environment": "amendment-checkpoints", "device": "meta"})
 
 
 def smoke_model() -> None:
@@ -168,9 +185,18 @@ def smoke_model() -> None:
     ):
         path = source_root / relative
         compile(path.read_text(encoding="utf-8"), relative, "exec")
+    # The IM-023 amendment and LUCAS Jobs' model-environment entrypoints:
+    # imported, so a missing or ABI-incompatible dependency fails the build.
+    for relative in (
+        "scripts/infer_nfi_amendment.py",
+        "scripts/score_nfi_amendment.py",
+        "scripts/validate_against_lucas.py",
+    ):
+        _load_script(source_root / relative)
 
     smoke_nmd_sampler()
     smoke_checkpoint_metadata()
+    smoke_amendment_checkpoints()
     print({"status": "ok", "environment": "model", **actual_versions})
 
 
@@ -213,6 +239,7 @@ def smoke_scoring() -> None:
         "scripts/run_lucas_crop_split_job.py",
         "scripts/validate_against_nfi.py",
         "scripts/prepare_nfi_holdout.py",
+        "scripts/prepare_nfi_amendment.py",
         "scripts/ladder_fieldtruth_standings.py",
     ):
         _load_script(source_root / relative)
@@ -222,12 +249,18 @@ def smoke_scoring() -> None:
 
 def smoke_preparation(source_git_sha: str) -> None:
     """Verify the actual sealed CPU runtime without reading field data."""
+    from imint.eval.nfi_amendment import sealed_runtime
     from scripts.prepare_nfi_holdout import preparation_runtime
 
+    image_ref = "local-build@sha256:" + "0" * 64
     result = preparation_runtime(
         Path("/opt/imintengine"), Path("/opt/provenance/runtime.json"),
-        source_git_sha, "local-build@sha256:" + "0" * 64)
+        source_git_sha, image_ref)
     assert result["source"]["git_sha"] == source_git_sha
+    # The IM-023 amendment's prepare step authenticates the same runtime.
+    assert sealed_runtime(Path("/opt/imintengine"), Path("/opt/provenance/runtime.json"),
+                          source_git_sha=source_git_sha, image_ref=image_ref,
+                          environment="scoring") == result
     assert "torch" not in sys.modules
     print({"status": "ok", "environment": "nfi-preparation",
            "source_git_sha": source_git_sha})

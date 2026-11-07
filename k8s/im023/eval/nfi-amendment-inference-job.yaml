@@ -1,0 +1,140 @@
+---
+# IM-023 items 3 and 5: per-plot predictions of the three amendment cells
+# (im023_main 29 classes, im023_control 28, r4 = the frozen tessera_r4) on the
+# frozen NFI holdout, after Tobias's go. scripts/infer_nfi_amendment.py
+# re-verifies the amendment manifest against its approved digest, the
+# original freeze it references, the sealed source and runtime, the cell's
+# checkpoint and every frozen tile, and dumps per plot-year the hard class
+# and the four fraction shares (tall, gran, trivial, adel). It computes no
+# score, so the log carries none.
+#
+# Runtime: the sealed image the prepare Job recorded (see
+# nfi-amendment-prepare-job.yaml), under the model interpreter, as
+# k8s/nfi-inference-job.template.yaml for the frozen cells.
+#
+# Writes: /cephfs/nfi/im023_amendment_2026-11-06/inference/ only. Each cell is
+# computed into the Pod's emptyDir, then copied by exclusive create (an
+# existing file is refused, never overwritten), parquet before metadata, and
+# the copy is re-hashed against prediction_sha256. A failed cell is reported,
+# the next still runs, and the Job fails at the end. Root, because nfi/ is
+# root:root 0755. 2080 Ti, as for the frozen cells.
+# Placeholders: REPLACE_WITH_SEALED_IMAGE_DIGEST (pin commit after the merge)
+# and REPLACE_WITH_APPROVED_AMENDMENT_SHA256 (the digest Tobias approves after
+# prepare). Not applied by the author: kubectl create --dry-run=server -f <this file>.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-nfi-amendment-inference
+  namespace: prithvi-training-default
+  labels: {app: nfi-fieldtruth-evaluation, task: "0156", purpose: im023-eval}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels: {app: nfi-fieldtruth-evaluation, task: "0156", purpose: im023-eval}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-push
+      nodeSelector: {accelerator: nvidia-gtx-2080ti}
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: run
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST
+          imagePullPolicy: IfNotPresent
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              OUT=/cephfs/nfi/im023_amendment_2026-11-06/inference
+              echo "=== IM-023 amendment inference — $(date -u) ==="
+              nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader || true
+              chmod 0755 "$OUT"
+              FAILED=""
+              for CELL in im023_main im023_control r4; do
+                case "$CELL" in
+                  im023_main) CKPT=/cephfs/checkpoints/im023/tessera_b28/best_model.pt ;;
+                  im023_control) CKPT=/cephfs/checkpoints/im023/tessera_control/best_model.pt ;;
+                  r4) CKPT=/cephfs/checkpoints/ladder/tessera_r4/best_model.pt ;;
+                esac
+                NAME="nfi-amendment-per-plot-$CELL.parquet"
+                if [ -e "$OUT/$NAME" ] || [ -e "$OUT/$NAME.meta.json" ]; then
+                  echo "$CELL: output already exists; refusing to overwrite"
+                  FAILED="$FAILED $CELL"; continue
+                fi
+                mkdir -p "/scratch/$CELL"
+                T0=$(date +%s)
+                if ! /opt/venvs/model/bin/python -u /opt/imintengine/scripts/infer_nfi_amendment.py \
+                    --amendment-manifest "$MANIFEST" --expected-amendment-sha256 "$MANIFEST_SHA256" \
+                    --cell "$CELL" --checkpoint "$CKPT" --device cuda \
+                    --out "/scratch/$CELL/$NAME"; then
+                  echo "$CELL: failed after $(( $(date +%s) - T0 )) s"
+                  FAILED="$FAILED $CELL"; continue
+                fi
+                echo "$CELL: wall seconds $(( $(date +%s) - T0 ))"
+                if ! /usr/local/bin/python - "/scratch/$CELL" "$OUT" "$NAME" <<'PY'
+              import hashlib, json, os, sys
+              from pathlib import Path
+              src, out, name = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+              meta_name = name + ".meta.json"
+              meta = json.loads((src / meta_name).read_text())
+              if meta.get("status") != "success":
+                  sys.exit(f"{name}: status {meta.get('status')}")
+              def copy(file):
+                  data = (src / file).read_bytes()
+                  with open(out / file, "xb") as stream:
+                      stream.write(data)
+                      stream.flush()
+                      os.fsync(stream.fileno())
+                  os.chmod(out / file, 0o644)
+              copy(name)
+              if hashlib.sha256((out / name).read_bytes()).hexdigest() != meta["prediction_sha256"]:
+                  sys.exit(f"{name}: copied bytes differ from prediction_sha256")
+              copy(meta_name)
+              print(json.dumps(meta, indent=2))
+              PY
+                then
+                  FAILED="$FAILED $CELL"; continue
+                fi
+                echo "$CELL: published to $OUT"
+              done
+              echo "=== done — $(date -u); failed:${FAILED:- none} ==="
+              [ -z "$FAILED" ]
+          env:
+            - {name: MANIFEST, value: /cephfs/nfi/im023_amendment_2026-11-06/freeze/manifest.json}
+            # Placeholder: the digest Tobias approves after the prepare Job.
+            - {name: MANIFEST_SHA256, value: REPLACE_WITH_APPROVED_AMENDMENT_SHA256}
+            - {name: HOME, value: /scratch}
+            - {name: TMPDIR, value: /scratch}
+            - {name: XDG_CACHE_HOME, value: /scratch/.cache}
+            - {name: MPLCONFIGDIR, value: /scratch/.mpl}
+            - {name: TORCH_HOME, value: /scratch/.torch}
+            # Set explicitly: torch's compile cache otherwise derives its
+            # directory from the user name.
+            - {name: TORCHINDUCTOR_CACHE_DIR, value: /scratch/.inductor}
+            - {name: TRITON_CACHE_DIR, value: /scratch/.triton}
+            - {name: HF_HUB_OFFLINE, value: "1"}
+            - {name: PYTHONDONTWRITEBYTECODE, value: "1"}
+          resources:
+            requests: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
+            limits: {cpu: "4", memory: 24Gi, ephemeral-storage: 24Gi, nvidia.com/gpu: "1"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            # Everything read-only except the new inference directory.
+            - {name: data, mountPath: /cephfs, readOnly: true}
+            - {name: data, mountPath: /cephfs/nfi/im023_amendment_2026-11-06/inference, subPath: nfi/im023_amendment_2026-11-06/inference}
+            - {name: scratch, mountPath: /scratch}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: training-data-cephfs}
+        - name: scratch
+          emptyDir: {sizeLimit: 20Gi}

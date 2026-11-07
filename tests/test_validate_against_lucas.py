@@ -13,6 +13,8 @@ with mock predict_fns:
 from __future__ import annotations
 
 import importlib.util
+import json
+import types
 from pathlib import Path
 
 import numpy as np
@@ -201,3 +203,83 @@ def test_per_point_sink_carries_fracs():
             "frac_adel"} <= set(out.columns)
     # tall-dominant point carries its fraction
     assert out.loc[out.point_id == "d_tall", "frac_tall"].iloc[0] == pytest.approx(0.8)
+
+
+# ── IM-023 item 4: barrblandskog folded by fraction share ────────────────────
+def _mock_28_predict(_tile_path):
+    """Class 28 at (0,0) tall-leaning, (1,1) gran-leaning and (2,2) tied; 2 at (3,3)."""
+    cm = np.zeros((8, 8), dtype=np.int64)
+    fr = np.zeros((4, 8, 8), dtype=np.float32)
+    cm[0, 0], fr[:2, 0, 0] = 28, (0.5, 0.3)
+    cm[1, 1], fr[:2, 1, 1] = 28, (0.3, 0.5)
+    cm[2, 2], fr[:2, 2, 2] = 28, (0.4, 0.4)
+    cm[3, 3], fr[:2, 3, 3] = 2, (0.6, 0.1)
+    return cm, np.zeros((29, 8, 8), dtype=np.float32), fr
+
+
+def test_fold_28_scores_tall_or_gran_and_reports_the_column_unscored():
+    df = pd.DataFrame([
+        _pt("p1", 1, 0, 0, dom="tall"), _pt("p2", 2, 1, 1, dom="gran", split="test"),
+        _pt("p3", 2, 2, 2, dom="gran"), _pt("p4", 2, 3, 3, dom="gran"),
+    ])
+    sink: list = []
+    res = val.score_against_lucas(
+        df, _mock_28_predict, num_classes=28, min_support=1, is_fraction=True,
+        tile_years={"tileA": 2022}, per_point_sink=sink, fold_28=True)
+    out = pd.DataFrame(sink).set_index("point_id")
+    assert out["pred_class_raw"].tolist() == [28, 28, 28, 2]
+    # Tie -> tallskog, as collapse_fractions_to_nfi_class; a non-28 prediction keeps its class
+    # even when its shares lean the other way.
+    assert out["pred_class"].tolist() == [1, 2, 1, 2]
+    per_class = res["l2b_hard_28class"]["all"]["per_class"]
+    assert per_class["tallskog"]["producers_accuracy"] == pytest.approx(1.0)
+    assert per_class["granskog"]["producers_accuracy"] == round(2 / 3, 4)
+    column = res["l2b_class_28_column"]
+    assert column["all"] == {"n_predicted_28": 3, "by_truth": {"tallskog": 1, "granskog": 2}}
+    assert column["test"]["n_predicted_28"] == 1 and column["train"]["n_predicted_28"] == 2
+    assert "f1" not in json.dumps(column)
+
+
+def test_fold_28_needs_the_fraction_head():
+    df = pd.DataFrame([_pt("p1", 1, 0, 0)])
+    with pytest.raises(ValueError, match="fraction head"):
+        val.score_against_lucas(df, _mock_hard_predict, num_classes=28, min_support=1,
+                                tile_years={"tileA": 2022}, fold_28=True)
+
+
+def test_checkpoint_has_frac_head_reads_only_through_the_safe_loader(tmp_path):
+    import torch
+
+    def save(name, payload):
+        path = tmp_path / name
+        torch.save(payload, path)
+        return str(path)
+
+    assert val.checkpoint_has_frac_head(save("flag.pt", {"config": {"enable_tradslag_head": True},
+                                                          "state_dict": {}}))
+    assert val.checkpoint_has_frac_head(save("keys.pt", {"config": {}, "state_dict": {
+        "frac_head.weight": torch.zeros(4, 2)}}))
+    assert not val.checkpoint_has_frac_head(save("hard.pt", {"config": {}, "state_dict": {
+        "classifier.weight": torch.zeros(28, 2)}}))
+    # An arbitrary pickled global is refused (weights_only), never executed.
+    with pytest.raises(Exception, match="(?i)weights_only|unsupported global"):
+        val.checkpoint_has_frac_head(save("pickle.pt", {"config": {}, "obj": _Opaque()}))
+
+
+class _Opaque:
+    pass
+
+
+def test_lucas_fraction_predict_fn_uses_one_forward_through_both_heads(monkeypatch):
+    calls = []
+    fake = types.SimpleNamespace(
+        load_model=lambda *a, **k: ("model", 1, 0.5, 8),
+        model_has_frac_head=lambda model: True,
+        run_class_and_fraction_inference=lambda model, tile, device, **k: (
+            calls.append(k) or (np.eye(3)[:, :, None].repeat(2, 2), np.full((4, 3, 2), 0.25))))
+    monkeypatch.setattr(val, "_load_infcmp", lambda: fake)
+    predict = val.make_lucas_frac_predict_fn("ckpt", "cpu", 8, None, num_classes=28,
+                                             backbone_name="tessera_v1")
+    class_map, probs, fracs = predict("tile")
+    assert class_map[:, 0].tolist() == [0, 1, 2] and fracs.shape == (4, 3, 2)
+    assert calls == [{"img_size": 8, "aux_channel_names": None}]
