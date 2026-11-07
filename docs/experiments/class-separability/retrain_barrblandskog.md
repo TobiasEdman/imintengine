@@ -247,6 +247,44 @@ med klass 28 hoppas över, och NFI räknar 28 som icke-skog. Därför gäller:
   regel. Klass 28 redovisas också som en egen kolumn utan poäng.
 - **Ordning:** moment 1 och 2 körs först, eftersom de inte berör frysningen.
 
+**Beslut (Tobias 2026-11-07), före all NFI-poängsättning.** Gäller tillägget
+(moment 3–5). Protokollkonstanterna fryses i tilläggets manifest när prepare
+körs (`imint/eval/nfi_amendment.py`, `AMENDMENT_PROTOCOL`).
+
+- **Gränser för villkoren:** 5 %- och 95 %-kvantilerna av
+  bootstrapfördelningen för ΔF1, alltså ensidigt α = 0,05. Det är samma
+  konvention som repots ekvivalenstest (`race_rigor_stats.py`).
+- **Villkor 2:** populationen är som ovan, v1:s tall och gran utan de
+  härledda barrblandskogsytorna.
+- **Moment 5:** ytor utan volym utesluts helt.
+- **Odefinierad gräns:** blir F1 odefinierad i någon dragning finns ingen
+  gräns, och villkoret räknas som ej uppfyllt (”annars behålls klassen”).
+  Barrblandskog behålls då, och blandskog räknas inte som härledbar ur
+  andelar. Antalet odefinierade dragningar redovisas.
+- **Contorta-känsligheten** gäller även moment 3. Den är beskrivande och
+  ger inget utslag. Den frysta parade rapporten kräver årsbalans och kan
+  inte köras på delmängden.
+- **Rapporten** tar med allt som förregistrerats: recall, precision och F1
+  för de fyra klasserna, d mot a och contorta-känsligheten. Utslag ges bara
+  där steg 3 anger dem.
+- **Körmiljö:** den förseglade imagen `docker/ladder-crop-distill`, ombyggd
+  vid tilläggets sammanslagna commit och pinnad med digest. Basen och de
+  låsta miljöerna är frysningens, källkoden är ny. Prepare kör i
+  scoring-miljön. Inferens, poängsättning och LUCAS kör i model-miljön, som
+  för frysningen.
+- **Ändrade tiles:** har någon fryst tile ändrats eller försvunnit sedan
+  2026-10-27 vägrar prepare och listar alla sådana tiles, som frysningens
+  egna konsumenter vägrar. Ingenting skrivs då.
+- **Fryst källfil:** tillägget lägger till en funktion i
+  `scripts/inference_comparison.py`, som frysningen pinnar. Frysningen
+  påverkas inte, eftersom den kör från sin egen image.
+
+**Förtydligande från granskningen (2026-11-07), samma definition.**
+Barrdominansen i barrblandskogens sanning läses från sanning v1 (klass 1
+eller 2) och räknas inte om. En ny summa av samma volymer kan avrundas åt
+andra hållet vid 0,7, och då skulle en yta som v1 kallar tallskog falla ur
+barrblandskogen.
+
 ### 4. Demon (efter godkänd utvärdering)
 
 Tjänsten är låst till R4:s 28 klasser. En efterträdare behöver ett nytt
@@ -279,6 +317,10 @@ Körordning i klustret. Varje steg kräver Tobias godkännande och
 2. `k8s/im023/train-tessera-smoke-job.yaml`
 3. `k8s/im023/train-tessera-b28-job.yaml` och
    `k8s/im023/train-tessera-control-job.yaml`
-4. Utvärderingsjobben enligt steg 3. De är inte skrivna ännu.
-   `ladder_holdout_eval.py` är låst till 28 klasser och behöver en
-   29-klassväg.
+4. Utvärderingsjobben enligt steg 3, i `k8s/im023/eval/`. Moment 1 är kört
+   med `eval-nmd-holdout-job.yaml` och moment 2 med
+   `run_forest_separability.sh`; resultaten är privata. Sedan
+   följer NFI-tillägget i ordningen `nfi-amendment-prepare-job.yaml`,
+   `nfi-amendment-inference-job.yaml` och `nfi-amendment-scoring-job.yaml`,
+   och LUCAS med `eval-lucas-job.yaml`. Platshållarna för image-digest,
+   commit och godkänt manifest fylls i efter sammanslagningen.
