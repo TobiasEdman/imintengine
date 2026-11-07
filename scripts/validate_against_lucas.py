@@ -63,6 +63,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from imint.training.errors import TilePrerequisiteError
 from imint.eval.fieldtruth import NoScoredObservations
+from imint.eval.nfi_amendment import BARRBLANDSKOG, fold_barrblandskog
 from imint.schema.unified_schema import (  # noqa: E402
     NUM_UNIFIED_CLASSES,
     UNIFIED_CLASSES,
@@ -260,6 +261,18 @@ def score_l2a_fraction(df: pd.DataFrame) -> dict:
     }
 
 
+def class_28_column(df: pd.DataFrame) -> dict:
+    """Raw barrblandskog (28) predictions by truth class, per split; counted, not scored."""
+    out = {"_note": "hard-head predictions of 28 before the fold; a column without a score"}
+    for split in ("all", "test", "train"):
+        rows = df if split == "all" else df[df["split"] == split]
+        hits = rows[rows["pred_class_raw"] == BARRBLANDSKOG]
+        out[split] = {"n_predicted_28": int(len(hits)),
+                      "by_truth": {class_name(c): int(n) for c, n in
+                                   hits["unified_class"].value_counts().sort_index().items()}}
+    return out
+
+
 def assert_crop_year_match(index_df: pd.DataFrame, tile_years: dict) -> None:
     """Fail-loud if any crop-class point sits on a wrong-year tile.
 
@@ -302,6 +315,7 @@ def score_against_lucas(
     tile_years: dict | None = None,
     per_point_sink: list | None = None,
     skip_unscoreable: bool = False,
+    fold_28: bool = False,
 ) -> dict:
     """Sample member predictions at LUCAS points and score L2b (+ L2a if frac).
 
@@ -321,10 +335,17 @@ def score_against_lucas(
         tile_years: ``tile_name -> year`` for the crop year-match assertion. If
             None the assertion is skipped (mock tests pass it explicitly).
         per_point_sink: if given, one dict per scored point is appended.
+        fold_28: IM-023 item 4. A predicted barrblandskog (28) is scored as
+            tallskog if its tall share >= its gran share, else granskog, the
+            rule of the NFI amendment; ``pred_class_raw`` keeps the hard
+            prediction and the 28 column is reported without a score.
+            Requires ``is_fraction``.
 
     Returns:
         JSON-able dict: L2b split breakdowns, L2a (if frac), meta + year note.
     """
+    if fold_28 and not is_fraction:
+        raise ValueError("folding class 28 needs the fraction head's shares")
     # ── Crop year-match assertion (fail-loud) — BEFORE any scoring ──
     if tile_years is not None:
         assert_crop_year_match(index_df, tile_years)
@@ -371,6 +392,10 @@ def score_against_lucas(
                 rec["frac_gran"] = float(fracs[1, rr, cc])
                 rec["frac_trivial"] = float(fracs[2, rr, cc])
                 rec["frac_adel"] = float(fracs[3, rr, cc])
+            if fold_28:
+                rec["pred_class_raw"] = rec["pred_class"]
+                rec["pred_class"] = int(fold_barrblandskog(
+                    rec["pred_class"], rec["frac_tall"], rec["frac_gran"]))
             records.append(rec)
             if per_point_sink is not None:
                 per_point_sink.append(dict(rec))
@@ -425,6 +450,8 @@ def score_against_lucas(
 
     if is_fraction:
         results["l2a_forest_fraction"] = score_l2a_fraction(scored)
+    if fold_28:
+        results["l2b_class_28_column"] = class_28_column(scored)
 
     return results
 
@@ -433,11 +460,11 @@ def make_lucas_frac_predict_fn(checkpoint, device, img_size, aux_channel_names,
                                *, num_classes, backbone_name):
     """Frac ``predict_fn`` returning (class_map, probs, RAW 4-frac array).
 
-    Reuses ``inference_comparison.run_fraction_inference`` for the raw
-    (4, cs, cs) crown-cover, plus the hard class map from
-    ``validate_against_nfi.make_model_predict_fn`` so L2b (hard 28-class) is
-    scored on the SAME member. L2a reads the raw fractions directly (not the
-    collapsed proxy channels that ``make_fraction_predict_fn`` produces).
+    One forward through both heads (``run_class_and_fraction_inference``):
+    the hard class map for L2b and the raw (4, cs, cs) crown cover for L2a
+    come from the same inputs, including the checkpoint's own aux set when
+    ``aux_channel_names`` is None. L2a reads the raw fractions directly (not
+    the collapsed proxy channels that ``make_fraction_predict_fn`` produces).
     """
     infcmp = _load_infcmp()
     # Thread runtime img_size so clay/croma build the head at the exact
@@ -453,16 +480,11 @@ def make_lucas_frac_predict_fn(checkpoint, device, img_size, aux_channel_names,
           f"(L2a fraction mode)")
 
     def predict_fn(tile_path):
-        # hard class map (argmax of the 28-class head) — L2b on the same member
-        probs, _rs, _ra = infcmp.run_inference(
-            model, tile_path, device, img_size=img_size, return_probs=True,
-            aux_channel_names=aux_channel_names)
-        class_map = probs.argmax(0).astype(np.int64)
-        # raw fractions (4, cs, cs) order tall/gran/trivial/adel
-        fracs = infcmp.run_fraction_inference(
+        # softmax (C, cs, cs) and raw fractions (4, cs, cs), order tall/gran/trivial/adel
+        probs, fracs = infcmp.run_class_and_fraction_inference(
             model, tile_path, device, img_size=img_size,
             aux_channel_names=aux_channel_names)
-        return class_map, probs, fracs
+        return probs.argmax(0).astype(np.int64), probs, fracs
 
     return predict_fn
 
@@ -481,9 +503,10 @@ def checkpoint_has_frac_head(checkpoint: str) -> bool:
     Reads the checkpoint config's ``enable_tradslag_head`` flag (set by the
     trainer when the fraction head is present) and, as a fallback, checks for
     any ``frac_head.*`` weight in the state dict. Either signal → frac member.
+    Loads through the reviewed safe loader (``weights_only=True``, private
+    snapshot), onto the meta device: only config and key names are read.
     """
-    import torch
-    ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    ck = _load_infcmp()._load_checkpoint_for_inference(checkpoint, map_location="meta")
     if ck.get("config", {}).get("enable_tradslag_head", False):
         return True
     sd = ck.get("model_state_dict", ck.get("state_dict", {}))
@@ -554,6 +577,10 @@ def main() -> None:
                          "checkpoint with a fraction head)")
     ap.add_argument("--auto-fraction", action="store_true",
                     help="auto-detect a fraction head and enable L2a if present")
+    ap.add_argument("--fold-28", action="store_true",
+                    help="IM-023 item 4: score a predicted barrblandskog (28) as "
+                         "tallskog/granskog by its tall vs gran share and report "
+                         "the 28 column without a score (requires the fraction head)")
     ap.add_argument("--enable-markfukt", action="store_true",
                     help="feed markfukt as the 11th aux channel")
     ap.add_argument("--device", default=None)
@@ -595,6 +622,8 @@ def main() -> None:
         is_fraction = checkpoint_has_frac_head(args.checkpoint)
         print(f"  auto-fraction: frac head "
               f"{'DETECTED → L2a on' if is_fraction else 'absent → L2b only'}")
+    if args.fold_28 and not is_fraction:
+        ap.error("--fold-28 requires the fraction head (--fraction)")
 
     if is_fraction:
         predict_fn = make_lucas_frac_predict_fn(
@@ -617,14 +646,14 @@ def main() -> None:
             index_df, predict_fn, num_classes=args.num_classes,
             min_support=args.min_support, is_fraction=is_fraction,
             tile_years=tile_years, per_point_sink=per_point,
-            skip_unscoreable=args.skip_unscoreable)
+            skip_unscoreable=args.skip_unscoreable, fold_28=args.fold_28)
     except NoScoredObservations as exc:
         failure = exc
         results = exc.report
     results["_meta"] = {
         "checkpoint": args.checkpoint, "img_size": args.img_size,
         "num_classes": args.num_classes, "min_support": args.min_support,
-        "is_fraction_member": is_fraction,
+        "is_fraction_member": is_fraction, "fold_28": args.fold_28,
         "points_scored": len(index_df) - sum(
             s["points"] for s in results.get("skipped_tiles", [])),
         "n_tiles": int(index_df["tile_name"].nunique()),
