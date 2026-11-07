@@ -16,9 +16,10 @@
 #
 # Writes: /cephfs/nfi/im023_amendment_2026-11-06/scoring/ only, each report
 # opened with "x". Root, because nfi/ is root:root 0755. CPU only.
-# Placeholders: REPLACE_WITH_SEALED_IMAGE_DIGEST (pin commit after the merge)
-# and REPLACE_WITH_APPROVED_AMENDMENT_SHA256 (the digest Tobias approves after
-# prepare). Not applied by the author: kubectl create --dry-run=server -f <this file>.
+# Pinned 2026-11-07 (task 0157): the image build-pipeline-images published
+# and signed for 0145230 (run 42378469028), and that commit.
+# Placeholder: REPLACE_WITH_APPROVED_AMENDMENT_SHA256, the digest Tobias
+# approves after prepare. Not applied by the author: kubectl create --dry-run=server -f <this file>.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -51,7 +52,7 @@ spec:
                     values: ["p02r09srv04", "p02r09srv06"]
       containers:
         - name: run
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:7f6e95ca4baf314925a1e01becfaed3918978e2383b7fe513358321ba1977e23
           imagePullPolicy: IfNotPresent
           command: ["bash", "-c"]
           args:
