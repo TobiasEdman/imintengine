@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -169,8 +171,6 @@ def _numbers(value):
 
 
 def test_the_manifest_names_no_nfi_plot_no_input_path_and_no_other_position() -> None:
-    import re
-
     text = MANIFEST.read_text()
     assert not re.search(r"holdoutval_|nfi20\d\d_|nfi_validation|\bplot", text, re.I)
     assert "/Users/" not in text and str(Path.home()) not in text
@@ -179,3 +179,100 @@ def test_the_manifest_names_no_nfi_plot_no_input_path_and_no_other_position() ->
     aoi = {*manifest["aoi"]["bounds_3006"], *manifest["aoi"]["transform"]}
     positions = {n for n in _numbers(manifest) if 200_000 <= n <= 1_000_000 or 6_100_000 <= n <= 7_700_000}
     assert positions <= aoi, sorted(positions - aoi)
+
+
+# ── The fire tab (docs/js/tab-data.js, docs/index.html) ──────────────────────
+
+NODE = shutil.which("node")
+EVAL_TAB_DATA = ("const c = {}; require('vm').runInNewContext(require('fs').readFileSync("
+                 "process.argv[1], 'utf8'), c); process.stdout.write(JSON.stringify("
+                 "{fire: c.TAB_CONFIG.fire, legends: c.LEGENDS}));")
+
+
+@pytest.fixture(scope="module")
+def tab() -> dict:
+    """TAB_CONFIG.fire and LEGENDS as the browser builds them."""
+    if NODE is None:
+        pytest.skip("Node.js evaluates docs/js/tab-data.js")
+    done = subprocess.run([NODE, "-e", EVAL_TAB_DATA, str(REPO / "docs/js/tab-data.js")],
+                          capture_output=True, text=True, timeout=60, check=True)
+    return json.loads(done.stdout)
+
+
+def _panel(tab: dict, panel_id: str) -> dict:
+    return next(p for p in tab["fire"]["panels"] if p["id"] == panel_id)
+
+
+def _legend(manifest_legend: list[dict]) -> list[dict]:
+    return [{"color": entry["color"], "label": entry["name"]} for entry in manifest_legend]
+
+
+def _shown_colours(path: Path) -> set[str]:
+    rgba = np.asarray(Image.open(path).convert("RGBA")).reshape(-1, 4)
+    return {"#%02x%02x%02x" % tuple(c[:3]) for c in np.unique(rgba[rgba[:, 3] > 0], axis=0)}
+
+
+def test_the_year_selector_covers_2017_to_2025_with_manifest_files(tab: dict) -> None:
+    years = _panel(tab, "f-lulc")["years"]
+    published = _published()["tessera_r4"]["years"]
+    assert sorted(years) == [str(y) for y in range(2017, 2026)] == sorted(published)
+    for year, entry in years.items():
+        record = published[year]
+        assert entry["image"] == f"showcase/fire/{record['file']}"
+        assert _sha(SHOWCASE / record["file"]) == record["sha256"], year
+        assert entry.get("label", year) == record["label"], year
+    assert years["2025"]["label"] == "2025 · växtfenologi från 2024"
+
+
+def test_the_default_year_is_the_latest_with_its_own_phenology(tab: dict) -> None:
+    published = _published()["tessera_r4"]["years"]
+    own = [int(y) for y, record in published.items() if not record["vpp_year_substituted"]]
+    assert _panel(tab, "f-lulc")["defaultYear"] == max(own) == 2024
+
+
+def test_every_legend_on_the_tab_names_exactly_the_colours_of_its_image(tab: dict) -> None:
+    manifest, legends, images = _published(), tab["legends"], tab["fire"]["images"]
+    shown = [(entry["image"], legends[entry["legend"]], manifest["tessera_r4"]["years"][year]["legend"])
+             for year, entry in _panel(tab, "f-lulc")["years"].items()]
+    for panel_id, key in (("f-nmd", "nmd_2018"), ("f-nmd-2023", "nmd_2023")):
+        shown.append((images[panel_id], legends[_panel(tab, panel_id)["legend"]], manifest[key]["legend"]))
+        assert images[panel_id] == f"showcase/fire/{manifest[key]['file']}"
+    for image, legend, recorded in shown:
+        assert legend == _legend(recorded), image
+        assert _shown_colours(REPO / "docs" / image) == {item["color"] for item in legend}, image
+
+
+def _pct(fraction: float) -> str:
+    return f"{100 * fraction:.1f}"
+
+
+def test_the_tab_quotes_the_nmd_shares_of_the_manifest(tab: dict) -> None:
+    manifest = _published()
+    forest = {key: _pct(manifest[key]["level1"]["forest"]["fraction"]) for key in ("nmd_2018", "nmd_2023")}
+    # 118 is "temporärt ej skog" (på fastmark) in both editions.
+    temporary = {key: _pct(manifest[key]["codes"]["118"] / manifest[key]["pixels"])
+                 for key in ("nmd_2018", "nmd_2023")}
+    cards = {card["title"]: card for card in tab["fire"]["summary"]}
+    assert cards["NMD 2018 Marktäcke"]["value"] == f"{forest['nmd_2018']}% Skog"
+    assert cards["NMD 2018 Marktäcke"]["detail"] == f"Före branden · {len(manifest['nmd_2018']['level1'])} klasser"
+    assert cards["NMD 2023 Marktäcke"]["value"] == f"{forest['nmd_2023']}% Skog"
+    assert cards["NMD 2023 Marktäcke"]["detail"] == (
+        f"Temporärt ej skog {temporary['nmd_2023']}% (2018: {temporary['nmd_2018']}%)")
+    index = (REPO / "docs/index.html").read_text()
+    description = re.search(r'id="tab-fire">(.*?)<div class="sub-tab-content" id="tab-grazing">', index, re.S).group(1)
+    method = next(m["body"] for m in tab["fire"]["copy"]["methods"] if m["heading"] == "NDVI / NDWI / EVI / NMD")
+    for text in (description, method):
+        for value in (*forest.values(), *temporary.values()):
+            assert value.replace(".", ",") + "%" in text, value
+        # Every share quoted for NMD is one of the manifest's.
+        quoted = set(re.findall(r"(\d+,\d)%", text))
+        assert quoted <= {v.replace(".", ",") for v in (*forest.values(), *temporary.values())}, quoted
+
+
+def test_the_fire_tab_names_no_nfi_plot_and_no_position(tab: dict) -> None:
+    index = (REPO / "docs/index.html").read_text()
+    description = re.search(r'id="tab-fire">(.*?)<div class="sub-tab-content" id="tab-grazing">', index, re.S).group(1)
+    config = json.dumps(tab["fire"], ensure_ascii=False)
+    for text in (config, description):
+        assert not re.search(r"holdoutval_|nfi20\d\d_|\bnfi\b|provyt", text, re.I)
+        assert not re.search(r"°|\b\d{2}\.\d{3,}\b|(?<!#)\b\d{6,7}\b", text)

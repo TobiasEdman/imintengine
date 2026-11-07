@@ -229,6 +229,116 @@ Object.keys(S1_CHART_CREDITS).forEach(function(k) {
     LEGENDS['ai2_s1_vessel_' + k] = LEGENDS.ai2_s1_vessel.concat([S1_CHART_CREDITS[k]]);
 });
 
+// Fire tab (Kårbölebranden): land cover per year and NMD 2018/2023. Colours
+// and names are those of docs/showcase/fire/MANIFEST.json, written by
+// scripts/showcase_fire_years.py: TESSERA R4 in the annual-map service's
+// legend, NMD 2018 in the engine's level-2 table, NMD 2023 in
+// Naturvårdsverket's own classes. Each legend lists only the classes present
+// in its image (checked by tests/test_showcase_fire_years.py).
+var TESSERA_R4_CLASSES = {
+    1:  {color:'#6d8b05',label:'Tallskog på fastmark'},
+    2:  {color:'#2c5f00',label:'Granskog på fastmark'},
+    3:  {color:'#4be600',label:'Lövskog'},
+    4:  {color:'#38a800',label:'Blandskog'},
+    5:  {color:'#588b54',label:'Skog på våtmark'},
+    6:  {color:'#cdcd66',label:'Temporärt ej skog på fastmark'},
+    7:  {color:'#c29cd5',label:'Öppen våtmark'},
+    8:  {color:'#d2b48c',label:'Öppen mark (sammanslagen)'},
+    9:  {color:'#e24549',label:'Exploaterad mark'},
+    10: {color:'#6699cc',label:'Sjö, vattendrag och hav'},
+    11: {color:'#e6b422',label:'vete'},
+    14: {color:'#2db45a',label:'oljeväxter'},
+    15: {color:'#64c864',label:'slåttervall'},
+    16: {color:'#50a03c',label:'bete'},
+    17: {color:'#b45028',label:'potatis'},
+    22: {color:'#00ced1',label:'hygge'},
+    23: {color:'#8c1964',label:'Exploaterad mark, torvtäkt'},
+    24: {color:'#abc8a6',label:'buskdominerad mark'},
+    25: {color:'#cdaa66',label:'risdominerad mark'},
+    26: {color:'#ffd27e',label:'gräsdominerad mark'},
+    27: {color:'#e0e0e0',label:'öppen mark utan vegetation'}
+};
+var FIRE_LULC_CLASSES = {
+    2017: [1,2,3,4,5,6,7,9,10,14,15,16,22,24,25,26,27],
+    2018: [1,2,3,4,5,6,7,9,10,11,14,15,22,24,25,26,27],
+    2019: [1,2,3,4,5,6,7,9,10,15,17,22,23,24,25,26,27],
+    2020: [1,2,3,4,5,6,7,9,10,22,23,24,25,26,27],
+    2021: [1,2,3,4,5,6,7,9,10,22,23,24,25,26,27],
+    2022: [1,2,3,4,5,6,7,8,9,10,22,24,25,26,27],
+    2023: [1,2,3,4,5,6,7,9,10,22,24,25,26,27],
+    2024: [1,2,3,4,5,6,7,9,10,22,24,25,26,27],
+    2025: [1,2,3,4,5,6,7,9,10,16,22,23,24,25,26,27]
+};
+Object.keys(FIRE_LULC_CLASSES).forEach(function(year) {
+    LEGENDS['fire_lulc_' + year] = FIRE_LULC_CLASSES[year].map(function(id) {
+        return TESSERA_R4_CLASSES[id];
+    });
+});
+LEGENDS.fire_nmd_2018 = [
+    {color:'#006400',label:'Tallskog'},
+    {color:'#228b22',label:'Granskog'},
+    {color:'#32cd32',label:'Lövskog'},
+    {color:'#3cb371',label:'Blandskog'},
+    {color:'#90ee90',label:'Temporärt ej skog'},
+    {color:'#2e4f2e',label:'Sumpskog tall'},
+    {color:'#3a5f3a',label:'Sumpskog gran'},
+    {color:'#4a7f4a',label:'Sumpskog löv'},
+    {color:'#5a8f5a',label:'Sumpskog bland'},
+    {color:'#7aaf7a',label:'Sumpskog temp'},
+    {color:'#8b5a2b',label:'Öppen våtmark'},
+    {color:'#ffd700',label:'Åkermark'},
+    {color:'#c8ad7f',label:'Öppen mark, bar'},
+    {color:'#d2b48c',label:'Öppen mark, veg.'},
+    {color:'#ff0000',label:'Byggnader'},
+    {color:'#ff4500',label:'Infrastruktur'},
+    {color:'#ff6347',label:'Vägar'},
+    {color:'#0000ff',label:'Sjöar'}
+];
+LEGENDS.fire_nmd_2023 = [
+    {color:'#ffffbc',label:'Åkermark (underindelning saknas)'},
+    {color:'#581313',label:'Exploaterad mark, byggnad'},
+    {color:'#e24549',label:'Exploaterad mark, ej byggnad eller väg/järnväg'},
+    {color:'#161616',label:'Exploaterad mark, väg/järnväg'},
+    {color:'#6699cc',label:'Sjö och vattendrag'},
+    {color:'#6d8b05',label:'Tallskog på fastmark'},
+    {color:'#2c5f00',label:'Granskog på fastmark'},
+    {color:'#4e6f00',label:'Barrblandskog på fastmark'},
+    {color:'#38a800',label:'Lövblandad barrskog på fastmark'},
+    {color:'#4be600',label:'Triviallövskog på fastmark'},
+    {color:'#cdcd66',label:'Temporärt ej skog på fastmark'},
+    {color:'#588b54',label:'Tallskog på våtmark'},
+    {color:'#2f5e50',label:'Granskog på våtmark'},
+    {color:'#22735a',label:'Barrblandskog våtmark'},
+    {color:'#43876f',label:'Lövblandad barrskog på våtmark'},
+    {color:'#88cd9b',label:'Triviallövskog på våtmark'},
+    {color:'#888844',label:'Temporärt ej skog på våtmark'},
+    {color:'#c29cd5',label:'Öppen våtmark (underindelning saknas)'},
+    {color:'#884464',label:'Buskmyr'},
+    {color:'#cd6699',label:'Ristuvemyr'},
+    {color:'#f579b6',label:'Fastmattemyr, mager'},
+    {color:'#d59dbb',label:'Fastmattemyr, frodig'},
+    {color:'#73004b',label:'Sumpkärr'},
+    {color:'#a80084',label:'Mjukmattemyr'},
+    {color:'#e600a9',label:'Lösbottenmyr'},
+    {color:'#6d4286',label:'Våtmark med buskar'},
+    {color:'#a866cc',label:'Risdominerad våtmark'},
+    {color:'#aa66cd',label:'Gräsdominerad våtmark, mager'},
+    {color:'#c979f5',label:'Gräsdominerad våtmark, frodvuxen'},
+    {color:'#c29ed6',label:'Gräsdominerad våtmark, högvuxen'},
+    {color:'#4b0073',label:'Mossdominerad våtmark'},
+    {color:'#8400a8',label:'Våtmark utan växttäcke'},
+    {color:'#e0e0e0',label:'Öppen mark utan vegetation (ej glaciär eller varaktigt snöfält)'},
+    {color:'#ccd69e',label:'Torr buskdominerad mark'},
+    {color:'#abc8a6',label:'Frisk buskdominerad mark'},
+    {color:'#9eb591',label:'Frisk-fuktig buskdominerad mark'},
+    {color:'#d6c29e',label:'Torr risdominerad mark'},
+    {color:'#cdaa66',label:'Frisk risdominerad mark'},
+    {color:'#886f44',label:'Frisk-fuktig risdominerad mark'},
+    {color:'#ffebae',label:'Torr gräsdominerad mark'},
+    {color:'#ffd27e',label:'Frisk gräsdominerad mark'},
+    {color:'#ffbe7e',label:'Frisk-fuktig gräsdominerad mark'}
+];
+
 // ── Glossary (acronym tooltip, decorated on first occurrence per tab) ──
 // Added 2026-05-11 as part of the showcase-copy rewrite. Same dict serves
 // every tab — acronyms mean the same thing across the dashboard. The JS
@@ -331,17 +441,20 @@ var TAB_CONFIG = {
         summary: [
             {title:'Förändringsdetektering',value:'22.8%',detail:'49 regioner'},
             {title:'dNBR Hög svårighetsgrad',value:'1.2 km²',detail:'8.9% av området'},
-            {title:'NMD Marktäcke',value:'82.4% Skog',detail:'6 klasser'},
+            {title:'NMD 2018 Marktäcke',value:'82.4% Skog',detail:'Före branden · 6 klasser'},
+            {title:'NMD 2023 Marktäcke',value:'77.9% Skog',detail:'Temporärt ej skog 54.2% (2018: 24.9%)'},
             {title:'Molnanalys (COT)',value:'99.9% klart',detail:'COT medel: 0.0017'}
         ],
         copy: {
-            lede: 'Bilden visar Kårbölebranden i Ljusdals kommun den 24 juli 2018 — en av de största skogsbränderna i Sverige på över 50 år. Branden startade 14 juli och bredde ut sig över cirka 9 500 hektar. Vi har analyserat samma område före och efter med flera kompletterande metoder för att kartlägga brandens utbredning och intensitet.',
-            hint: 'Klicka i panelraden ovan för att hoppa till en specifik analys. Dra opacitetsreglaget i panelens topp för att fade:a brandresultaten över satellitbilden.',
+            lede: 'Bilden visar Kårbölebranden i Ljusdals kommun den 24 juli 2018 — en av de största skogsbränderna i Sverige på över 50 år. Branden startade 14 juli och bredde ut sig över cirka 9 500 hektar. Vi har analyserat samma område före och efter med flera kompletterande metoder för att kartlägga brandens utbredning och intensitet. Marktäckekartor för varje år 2017–2025 visar hur området har förändrats sedan branden.',
+            hint: 'Klicka i panelraden ovan för att hoppa till en specifik analys. Dra opacitetsreglaget i panelens topp för att fade:a brandresultaten över satellitbilden. Årsreglaget i panelen Marktäcke per år byter år.',
             methods: [
                 { heading: 'dNBR — brandsvårighetsgrad',
                   body: '<p>Skillnaden i Normalized Burn Ratio mellan bilden före och efter branden. Höga positiva värden = svår brandskada; nära noll = obränt. Tröskelvärden från Key & Benson är ursprungligen kalibrerade för västliga USA-barrskogar, så absolutgränserna för svensk borealskog ska tolkas som indikativa, inte definitiva.</p>' },
                 { heading: 'NDVI / NDWI / EVI / NMD',
-                  body: '<p>NDVI och EVI mäter vegetationens tillstånd; NDWI mäter fukt. NMD-marktäcket före branden visar att området var till 82,4% skog, vilket gör korsreferensen mot brandkartan informativ — vi vet exakt vilka skogstyper som drabbades hårdast.</p>' },
+                  body: '<p>NDVI och EVI mäter vegetationens tillstånd; NDWI mäter fukt. NMD 2018 visar marktäcket före branden: 82,4% av området var skog, vilket gör korsreferensen mot brandkartan informativ — vi vet exakt vilka skogstyper som drabbades hårdast. NMD 2023 visar området efter branden med Naturvårdsverkets egna klasser och färger: 77,9% skog, och temporärt ej skog har ökat från 24,9% till 54,2% av området.</p>' },
+                { heading: 'Marktäcke per år (TESSERA R4)',
+                  body: '<p>En marktäckekarta per år 2017–2025 från TESSERA R4, samma modell som årskartan under Marktäckekartering. Varje karta bygger på årets satellitdata och årets växtfenologi (HR-VPP), utom 2025 som använder växtfenologi från 2024 eftersom HR-VPP 2025 inte är publicerad.</p>' },
                 { heading: 'Förändring (gradient)',
                   body: '<p>Multispektral förändringsdetektering över alla 10 m-band, inte bara index. Fångar förändringar som ett enskilt index missar (t.ex. förändringar i markstruktur efter sotning).</p>' },
                 { heading: 'Molnanalys (COT)',
@@ -351,7 +464,28 @@ var TAB_CONFIG = {
         panels: [
             {id:'f-rgb',    key:'rgb',     title:'Sentinel-2 RGB',                    legend:null,
                 bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
-            {id:'f-nmd',    key:'nmd',     title:'NMD Marktäcke',                     legend:'nmd'},
+            {id:'f-lulc',   key:'lulc',    title:'Marktäcke per år (TESSERA R4)',
+                years: {
+                    2017: {image:'showcase/fire/lulc_year_2017.png', legend:'fire_lulc_2017'},
+                    2018: {image:'showcase/fire/lulc_year_2018.png', legend:'fire_lulc_2018'},
+                    2019: {image:'showcase/fire/lulc_year_2019.png', legend:'fire_lulc_2019'},
+                    2020: {image:'showcase/fire/lulc_year_2020.png', legend:'fire_lulc_2020'},
+                    2021: {image:'showcase/fire/lulc_year_2021.png', legend:'fire_lulc_2021'},
+                    2022: {image:'showcase/fire/lulc_year_2022.png', legend:'fire_lulc_2022'},
+                    2023: {image:'showcase/fire/lulc_year_2023.png', legend:'fire_lulc_2023'},
+                    2024: {image:'showcase/fire/lulc_year_2024.png', legend:'fire_lulc_2024'},
+                    2025: {image:'showcase/fire/lulc_year_2025.png', legend:'fire_lulc_2025',
+                           label:'2025 · växtfenologi från 2024'}
+                },
+                defaultYear: 2024,  // the latest year with its own växtfenologi
+                notes: [
+                    '2018 års karta bygger på hela årets satellitdata och innehåller därför branden (14 juli 2018).',
+                    'Skogliga grunddata, trädhöjd, markfukt och höjdmodell är fasta stödlager, samma för alla år.',
+                    '2025 använder växtfenologi (HR-VPP) från 2024.',
+                    'Röda fläckar i brandytan 2019–2020 är troligen bränd bar mark som modellen läser som bebyggelse.'
+                ]},
+            {id:'f-nmd',    key:'nmd',     title:'NMD 2018 Marktäcke (före branden)', legend:'fire_nmd_2018'},
+            {id:'f-nmd-2023',key:'nmd_2023',title:'NMD 2023 Marktäcke',               legend:'fire_nmd_2023'},
             {id:'f-dnbr',   key:'dnbr',    title:'dNBR (Brandsvårighetsgrad)',         legend:'dnbr',
                 bgToggle:[{label:'Efter',key:'rgb',active:true},{label:'Före',key:'baseline'}]},
             {id:'f-gradient',key:'gradient',title:'Förändring (gradient)',             legend:'change_gradient',
@@ -363,7 +497,8 @@ var TAB_CONFIG = {
         ],
         images: {
             'f-rgb':       'showcase/fire/rgb.png',
-            'f-nmd':       'showcase/fire/nmd_overlay.png',
+            'f-nmd':       'showcase/fire/nmd_2018.png',
+            'f-nmd-2023':  'showcase/fire/nmd_2023.png',
             'f-ndvi':      'showcase/fire/ndvi_clean.png',
             'f-ndwi':      'showcase/fire/ndwi_clean.png',
             'f-evi':       'showcase/fire/evi_clean.png',
