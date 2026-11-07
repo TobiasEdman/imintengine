@@ -1,0 +1,1379 @@
+{
+  "description": "Fire tab (Kårbölebranden) layers on the AOI grid: TESSERA R4 land cover per year, copied from one render run, and NMD 2018 (before the fire) and NMD 2023 drawn from the national rasters. Files written by scripts/showcase_fire_years.py; the tab's other images predate it.",
+  "produced_at": "2026-11-07T18:40:30.135558+00:00",
+  "produced_by": "scripts/showcase_fire_years.py",
+  "git_sha": "d79129059bac5669edd47583e91b21056596aead",
+  "git_dirty": false,
+  "aoi": {
+    "crs": "EPSG:3006",
+    "bounds_3006": [
+      521870,
+      6865550,
+      524540,
+      6871140
+    ],
+    "shape": [
+      559,
+      267
+    ],
+    "transform": [
+      10.0,
+      0.0,
+      521870.0,
+      0.0,
+      -10.0,
+      6871140.0
+    ]
+  },
+  "tessera_r4": {
+    "source": {
+      "run_id": "20261107T180605Z-6abfb7bd684b",
+      "output_location": "training-data-cephfs:/showcase_fire_tessera",
+      "produced_by": "scripts/render_fire_tessera_years.py render (k8s/fire-tessera-render-job.yaml)",
+      "produced_at": "2026-11-07T18:20:56.197416+00:00",
+      "git_sha": "6abfb7bd684b738c49db53a69d7418cc98f533a0",
+      "image": "python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f",
+      "image_digest": "sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f",
+      "manifest": {
+        "sha256": "bde15f3846d1e7ee3f6ff0a52e4d488a3035c408aa61c8a7f68a2df1eb282a93",
+        "size": 35788
+      },
+      "legend": {
+        "sha256": "ff70da2201d0d563198d8be3ed5c2cd231e38cd871f9fdde61b2f0ef81f6e078",
+        "size": 5579
+      },
+      "model": "TESSERA R4",
+      "checkpoint": {
+        "sha256": "1270bb2af88074840020f3b481ed5e98a72f0b7ceb51befac2b8fa4675385668",
+        "size": 1596322
+      }
+    },
+    "historical_note": "Året gäller TESSERA och HR-VPP, utom 2025: HR-VPP 2025 är inte publicerad, så 2025 använder HR-VPP 2024. Skogliga grunddata använder senaste tillgängliga skanning i den angivna utgåvan. Trädhöjd, markfukt och DEM är fasta stödlager, inte observationer från det valda året.",
+    "vpp_year_substitutions": [
+      {
+        "year": 2025,
+        "vpp_year": 2024,
+        "label": "växtfenologi från 2024"
+      }
+    ],
+    "years": {
+      "2017": {
+        "file": "lulc_year_2017.png",
+        "label": "2017",
+        "tessera_year": 2017,
+        "vpp_year": 2017,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 14,
+            "color": "#2db45a",
+            "name": "oljeväxter"
+          },
+          {
+            "id": 15,
+            "color": "#64c864",
+            "name": "slåttervall"
+          },
+          {
+            "id": 16,
+            "color": "#50a03c",
+            "name": "bete"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "87571ae0d554a9ec334c97102dc518d8e5b6bba673b3b5d2a651b65fb729c6cd",
+        "size": 55095
+      },
+      "2018": {
+        "file": "lulc_year_2018.png",
+        "label": "2018",
+        "tessera_year": 2018,
+        "vpp_year": 2018,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 11,
+            "color": "#e6b422",
+            "name": "vete"
+          },
+          {
+            "id": 14,
+            "color": "#2db45a",
+            "name": "oljeväxter"
+          },
+          {
+            "id": 15,
+            "color": "#64c864",
+            "name": "slåttervall"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "3a39ca76c65bac884f6c907be985ae2bd577175aa091d3a3a85211b373c24004",
+        "size": 65327
+      },
+      "2019": {
+        "file": "lulc_year_2019.png",
+        "label": "2019",
+        "tessera_year": 2019,
+        "vpp_year": 2019,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 15,
+            "color": "#64c864",
+            "name": "slåttervall"
+          },
+          {
+            "id": 17,
+            "color": "#b45028",
+            "name": "potatis"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 23,
+            "color": "#8c1964",
+            "name": "Exploaterad mark, torvtäkt"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "985f7e1f4cfc0a01deccf57e853b858087681bfd060346b23e76ac479c1dfb8a",
+        "size": 46034
+      },
+      "2020": {
+        "file": "lulc_year_2020.png",
+        "label": "2020",
+        "tessera_year": 2020,
+        "vpp_year": 2020,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 23,
+            "color": "#8c1964",
+            "name": "Exploaterad mark, torvtäkt"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "71b0134b213aa7b3e9ceb4135baeea28b27c3da2aaa3ce7d7009dab471383f94",
+        "size": 44370
+      },
+      "2021": {
+        "file": "lulc_year_2021.png",
+        "label": "2021",
+        "tessera_year": 2021,
+        "vpp_year": 2021,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 23,
+            "color": "#8c1964",
+            "name": "Exploaterad mark, torvtäkt"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "8cf21c40329d339147f244eb643c374a9a42ca82e8afd08a2d04e7205bfb3d0a",
+        "size": 48956
+      },
+      "2022": {
+        "file": "lulc_year_2022.png",
+        "label": "2022",
+        "tessera_year": 2022,
+        "vpp_year": 2022,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 8,
+            "color": "#d2b48c",
+            "name": "Öppen mark (sammanslagen)"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "9e19393d898592b86fd00949c0b5b8129b159e594fd83d7744489626392c1ebe",
+        "size": 49932
+      },
+      "2023": {
+        "file": "lulc_year_2023.png",
+        "label": "2023",
+        "tessera_year": 2023,
+        "vpp_year": 2023,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "a7feb0ddde518ff01af951b5af46ac26a56a8f1e1e0c87cfe2f521df4b4e5219",
+        "size": 55314
+      },
+      "2024": {
+        "file": "lulc_year_2024.png",
+        "label": "2024",
+        "tessera_year": 2024,
+        "vpp_year": 2024,
+        "vpp_year_substituted": false,
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "600f695a3bc5b8501413a41174bf9a60ff341bae07780b9bcf015fa0f8117811",
+        "size": 58988
+      },
+      "2025": {
+        "file": "lulc_year_2025.png",
+        "label": "2025 · växtfenologi från 2024",
+        "tessera_year": 2025,
+        "vpp_year": 2024,
+        "vpp_year_substituted": true,
+        "vpp_note": "TESSERA 2025 with HR-VPP 2024: HR-VPP 2025 is not published, so this map uses the previous year (lclu.VPP_YEAR_SUBSTITUTIONS).",
+        "legend": [
+          {
+            "id": 1,
+            "color": "#6d8b05",
+            "name": "Tallskog på fastmark"
+          },
+          {
+            "id": 2,
+            "color": "#2c5f00",
+            "name": "Granskog på fastmark"
+          },
+          {
+            "id": 3,
+            "color": "#4be600",
+            "name": "Lövskog"
+          },
+          {
+            "id": 4,
+            "color": "#38a800",
+            "name": "Blandskog"
+          },
+          {
+            "id": 5,
+            "color": "#588b54",
+            "name": "Skog på våtmark"
+          },
+          {
+            "id": 6,
+            "color": "#cdcd66",
+            "name": "Temporärt ej skog på fastmark"
+          },
+          {
+            "id": 7,
+            "color": "#c29cd5",
+            "name": "Öppen våtmark"
+          },
+          {
+            "id": 9,
+            "color": "#e24549",
+            "name": "Exploaterad mark"
+          },
+          {
+            "id": 10,
+            "color": "#6699cc",
+            "name": "Sjö, vattendrag och hav"
+          },
+          {
+            "id": 16,
+            "color": "#50a03c",
+            "name": "bete"
+          },
+          {
+            "id": 22,
+            "color": "#00ced1",
+            "name": "hygge"
+          },
+          {
+            "id": 23,
+            "color": "#8c1964",
+            "name": "Exploaterad mark, torvtäkt"
+          },
+          {
+            "id": 24,
+            "color": "#abc8a6",
+            "name": "buskdominerad mark"
+          },
+          {
+            "id": 25,
+            "color": "#cdaa66",
+            "name": "risdominerad mark"
+          },
+          {
+            "id": 26,
+            "color": "#ffd27e",
+            "name": "gräsdominerad mark"
+          },
+          {
+            "id": 27,
+            "color": "#e0e0e0",
+            "name": "öppen mark utan vegetation"
+          }
+        ],
+        "sha256": "d24d365a43dccf612af0fb3b6c7591b7e9b117faef035d99292e5f2964862222",
+        "size": 53386
+      }
+    }
+  },
+  "nmd_2018": {
+    "file": "nmd_2018.png",
+    "product": "NMD 2018 basskikt, ogeneraliserad, v1.1",
+    "raster": {
+      "file": "nmd2018bas_ogeneraliserad_v1_1.tif",
+      "sha256": "12e9f0a545f90e622fdb637ba1a4d79a3c69c1aa70ffed1c890830e9800143a8",
+      "size": 1565671027
+    },
+    "window": {
+      "dtype": "uint8",
+      "sha256": "8ecd160e9685f92a2e31627bed225f5a6287a5d02ce522a1c06551b825605cd5"
+    },
+    "drawing": "level 2 of imint.analyzers.nmd.NMD2018_LEGEND, imint.exporters.export.save_nmd_overlay(palette='nmd2018_l2')",
+    "pixels": 149253,
+    "codes": {
+      "2": 7847,
+      "3": 58,
+      "41": 466,
+      "42": 3332,
+      "51": 13,
+      "52": 10,
+      "53": 3292,
+      "61": 11206,
+      "111": 55546,
+      "112": 2853,
+      "113": 10175,
+      "114": 7881,
+      "115": 1797,
+      "118": 37182,
+      "121": 5164,
+      "122": 50,
+      "123": 230,
+      "124": 1609,
+      "125": 213,
+      "128": 329
+    },
+    "level1": {
+      "forest": {
+        "pixels": 123029,
+        "fraction": 0.8243
+      },
+      "wetland": {
+        "pixels": 7847,
+        "fraction": 0.0526
+      },
+      "cropland": {
+        "pixels": 58,
+        "fraction": 0.0004
+      },
+      "open_land": {
+        "pixels": 3798,
+        "fraction": 0.0254
+      },
+      "developed": {
+        "pixels": 3315,
+        "fraction": 0.0222
+      },
+      "water": {
+        "pixels": 11206,
+        "fraction": 0.0751
+      }
+    },
+    "legend": [
+      {
+        "key": "forest_pine",
+        "color": "#006400",
+        "name": "Tallskog",
+        "pixels": 55546
+      },
+      {
+        "key": "forest_spruce",
+        "color": "#228b22",
+        "name": "Granskog",
+        "pixels": 2853
+      },
+      {
+        "key": "forest_deciduous",
+        "color": "#32cd32",
+        "name": "Lövskog",
+        "pixels": 11972
+      },
+      {
+        "key": "forest_mixed",
+        "color": "#3cb371",
+        "name": "Blandskog",
+        "pixels": 7881
+      },
+      {
+        "key": "forest_temp_non_forest",
+        "color": "#90ee90",
+        "name": "Temporärt ej skog",
+        "pixels": 37182
+      },
+      {
+        "key": "forest_wetland_pine",
+        "color": "#2e4f2e",
+        "name": "Sumpskog tall",
+        "pixels": 5164
+      },
+      {
+        "key": "forest_wetland_spruce",
+        "color": "#3a5f3a",
+        "name": "Sumpskog gran",
+        "pixels": 50
+      },
+      {
+        "key": "forest_wetland_deciduous",
+        "color": "#4a7f4a",
+        "name": "Sumpskog löv",
+        "pixels": 443
+      },
+      {
+        "key": "forest_wetland_mixed",
+        "color": "#5a8f5a",
+        "name": "Sumpskog bland",
+        "pixels": 1609
+      },
+      {
+        "key": "forest_wetland_temp",
+        "color": "#7aaf7a",
+        "name": "Sumpskog temp",
+        "pixels": 329
+      },
+      {
+        "key": "open_wetland",
+        "color": "#8b5a2b",
+        "name": "Öppen våtmark",
+        "pixels": 7847
+      },
+      {
+        "key": "cropland",
+        "color": "#ffd700",
+        "name": "Åkermark",
+        "pixels": 58
+      },
+      {
+        "key": "open_land_bare",
+        "color": "#c8ad7f",
+        "name": "Öppen mark, bar",
+        "pixels": 466
+      },
+      {
+        "key": "open_land_vegetated",
+        "color": "#d2b48c",
+        "name": "Öppen mark, veg.",
+        "pixels": 3332
+      },
+      {
+        "key": "developed_buildings",
+        "color": "#ff0000",
+        "name": "Byggnader",
+        "pixels": 13
+      },
+      {
+        "key": "developed_infrastructure",
+        "color": "#ff4500",
+        "name": "Infrastruktur",
+        "pixels": 10
+      },
+      {
+        "key": "developed_roads",
+        "color": "#ff6347",
+        "name": "Vägar",
+        "pixels": 3292
+      },
+      {
+        "key": "water_lakes",
+        "color": "#0000ff",
+        "name": "Sjöar",
+        "pixels": 11206
+      }
+    ],
+    "sha256": "66d177c069b4e775932440845f742ffc0eac6846673ea59d3e27a56cb0db8435",
+    "size": 43704
+  },
+  "nmd_2023": {
+    "file": "nmd_2023.png",
+    "product": "NMD 2023 basskikt v2.1",
+    "raster": {
+      "file": "NMD2023bas_v2_1.tif",
+      "sha256": "a1bc4a66557e2f01b5f6993eddacc585ed8617bb3acfbe430a5d01391391b0fe",
+      "size": 10852673468
+    },
+    "window": {
+      "dtype": "uint16",
+      "sha256": "09391e6bb11a714261ffac51818e7a1fd0b3d6cfc1e9d92b942c7661f4afd22a"
+    },
+    "qml_sha256": "0154ee34d2ccc150246ea4901adaac3765b9cf02b1ea5c2d35ff07fc800a4322",
+    "drawing": "level 2 of imint.analyzers.nmd.NMD2023_LEGEND, imint.exporters.export.save_nmd_overlay(palette='nmd2023_l2')",
+    "pixels": 149253,
+    "codes": {
+      "3": 51,
+      "51": 13,
+      "52": 21,
+      "53": 3318,
+      "61": 11206,
+      "111": 6990,
+      "112": 2690,
+      "113": 3753,
+      "114": 8475,
+      "115": 1061,
+      "118": 80908,
+      "121": 4524,
+      "122": 2348,
+      "123": 1264,
+      "124": 1144,
+      "125": 184,
+      "128": 2983,
+      "200": 1628,
+      "211": 1844,
+      "212": 391,
+      "213": 1288,
+      "214": 2,
+      "215": 3,
+      "216": 1191,
+      "217": 494,
+      "221": 406,
+      "222": 14,
+      "223": 104,
+      "224": 2,
+      "225": 10,
+      "226": 114,
+      "227": 101,
+      "411": 3005,
+      "4211": 3,
+      "4212": 50,
+      "4213": 68,
+      "4221": 847,
+      "4222": 3988,
+      "4223": 2341,
+      "4231": 9,
+      "4232": 147,
+      "4233": 270
+    },
+    "level1": {
+      "forest": {
+        "pixels": 116324,
+        "fraction": 0.7794
+      },
+      "wetland": {
+        "pixels": 7592,
+        "fraction": 0.0509
+      },
+      "cropland": {
+        "pixels": 51,
+        "fraction": 0.0003
+      },
+      "open_land": {
+        "pixels": 10728,
+        "fraction": 0.0719
+      },
+      "developed": {
+        "pixels": 3352,
+        "fraction": 0.0225
+      },
+      "water": {
+        "pixels": 11206,
+        "fraction": 0.0751
+      }
+    },
+    "legend": [
+      {
+        "key": "3",
+        "color": "#ffffbc",
+        "name": "Åkermark (underindelning saknas)",
+        "pixels": 51
+      },
+      {
+        "key": "51",
+        "color": "#581313",
+        "name": "Exploaterad mark, byggnad",
+        "pixels": 13
+      },
+      {
+        "key": "52",
+        "color": "#e24549",
+        "name": "Exploaterad mark, ej byggnad eller väg/järnväg",
+        "pixels": 21
+      },
+      {
+        "key": "53",
+        "color": "#161616",
+        "name": "Exploaterad mark, väg/järnväg",
+        "pixels": 3318
+      },
+      {
+        "key": "61",
+        "color": "#6699cc",
+        "name": "Sjö och vattendrag",
+        "pixels": 11206
+      },
+      {
+        "key": "111",
+        "color": "#6d8b05",
+        "name": "Tallskog på fastmark",
+        "pixels": 6990
+      },
+      {
+        "key": "112",
+        "color": "#2c5f00",
+        "name": "Granskog på fastmark",
+        "pixels": 2690
+      },
+      {
+        "key": "113",
+        "color": "#4e6f00",
+        "name": "Barrblandskog på fastmark",
+        "pixels": 3753
+      },
+      {
+        "key": "114",
+        "color": "#38a800",
+        "name": "Lövblandad barrskog på fastmark",
+        "pixels": 8475
+      },
+      {
+        "key": "115",
+        "color": "#4be600",
+        "name": "Triviallövskog på fastmark",
+        "pixels": 1061
+      },
+      {
+        "key": "118",
+        "color": "#cdcd66",
+        "name": "Temporärt ej skog på fastmark",
+        "pixels": 80908
+      },
+      {
+        "key": "121",
+        "color": "#588b54",
+        "name": "Tallskog på våtmark",
+        "pixels": 4524
+      },
+      {
+        "key": "122",
+        "color": "#2f5e50",
+        "name": "Granskog på våtmark",
+        "pixels": 2348
+      },
+      {
+        "key": "123",
+        "color": "#22735a",
+        "name": "Barrblandskog våtmark",
+        "pixels": 1264
+      },
+      {
+        "key": "124",
+        "color": "#43876f",
+        "name": "Lövblandad barrskog på våtmark",
+        "pixels": 1144
+      },
+      {
+        "key": "125",
+        "color": "#88cd9b",
+        "name": "Triviallövskog på våtmark",
+        "pixels": 184
+      },
+      {
+        "key": "128",
+        "color": "#888844",
+        "name": "Temporärt ej skog på våtmark",
+        "pixels": 2983
+      },
+      {
+        "key": "200",
+        "color": "#c29cd5",
+        "name": "Öppen våtmark (underindelning saknas)",
+        "pixels": 1628
+      },
+      {
+        "key": "211",
+        "color": "#884464",
+        "name": "Buskmyr",
+        "pixels": 1844
+      },
+      {
+        "key": "212",
+        "color": "#cd6699",
+        "name": "Ristuvemyr",
+        "pixels": 391
+      },
+      {
+        "key": "213",
+        "color": "#f579b6",
+        "name": "Fastmattemyr, mager",
+        "pixels": 1288
+      },
+      {
+        "key": "214",
+        "color": "#d59dbb",
+        "name": "Fastmattemyr, frodig",
+        "pixels": 2
+      },
+      {
+        "key": "215",
+        "color": "#73004b",
+        "name": "Sumpkärr",
+        "pixels": 3
+      },
+      {
+        "key": "216",
+        "color": "#a80084",
+        "name": "Mjukmattemyr",
+        "pixels": 1191
+      },
+      {
+        "key": "217",
+        "color": "#e600a9",
+        "name": "Lösbottenmyr",
+        "pixels": 494
+      },
+      {
+        "key": "221",
+        "color": "#6d4286",
+        "name": "Våtmark med buskar",
+        "pixels": 406
+      },
+      {
+        "key": "222",
+        "color": "#a866cc",
+        "name": "Risdominerad våtmark",
+        "pixels": 14
+      },
+      {
+        "key": "223",
+        "color": "#aa66cd",
+        "name": "Gräsdominerad våtmark, mager",
+        "pixels": 104
+      },
+      {
+        "key": "224",
+        "color": "#c979f5",
+        "name": "Gräsdominerad våtmark, frodvuxen",
+        "pixels": 2
+      },
+      {
+        "key": "225",
+        "color": "#c29ed6",
+        "name": "Gräsdominerad våtmark, högvuxen",
+        "pixels": 10
+      },
+      {
+        "key": "226",
+        "color": "#4b0073",
+        "name": "Mossdominerad våtmark",
+        "pixels": 114
+      },
+      {
+        "key": "227",
+        "color": "#8400a8",
+        "name": "Våtmark utan växttäcke",
+        "pixels": 101
+      },
+      {
+        "key": "411",
+        "color": "#e0e0e0",
+        "name": "Öppen mark utan vegetation (ej glaciär eller varaktigt snöfält)",
+        "pixels": 3005
+      },
+      {
+        "key": "4211",
+        "color": "#ccd69e",
+        "name": "Torr buskdominerad mark",
+        "pixels": 3
+      },
+      {
+        "key": "4212",
+        "color": "#abc8a6",
+        "name": "Frisk buskdominerad mark",
+        "pixels": 50
+      },
+      {
+        "key": "4213",
+        "color": "#9eb591",
+        "name": "Frisk-fuktig buskdominerad mark",
+        "pixels": 68
+      },
+      {
+        "key": "4221",
+        "color": "#d6c29e",
+        "name": "Torr risdominerad mark",
+        "pixels": 847
+      },
+      {
+        "key": "4222",
+        "color": "#cdaa66",
+        "name": "Frisk risdominerad mark",
+        "pixels": 3988
+      },
+      {
+        "key": "4223",
+        "color": "#886f44",
+        "name": "Frisk-fuktig risdominerad mark",
+        "pixels": 2341
+      },
+      {
+        "key": "4231",
+        "color": "#ffebae",
+        "name": "Torr gräsdominerad mark",
+        "pixels": 9
+      },
+      {
+        "key": "4232",
+        "color": "#ffd27e",
+        "name": "Frisk gräsdominerad mark",
+        "pixels": 147
+      },
+      {
+        "key": "4233",
+        "color": "#ffbe7e",
+        "name": "Frisk-fuktig gräsdominerad mark",
+        "pixels": 270
+      }
+    ],
+    "sha256": "3af7f8c0823f7ac264f177bb6b227a3095db3c9b211ec160f4f7b0e523bc5197",
+    "size": 80652
+  }
+}

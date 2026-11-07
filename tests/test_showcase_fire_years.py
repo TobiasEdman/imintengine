@@ -126,3 +126,56 @@ def test_an_nmd_2023_code_outside_its_table_is_refused_before_writing(tmp_path: 
     result = _run(_inputs(tmp_path, nmd2023_code=999))
     assert result.returncode != 0 and "codes outside its legend: [999]" in result.stderr
     assert not (tmp_path / "out").exists()
+
+
+# ── The published layers (docs/showcase/fire/) ──────────────────────────────
+
+SHOWCASE = REPO / "docs/showcase/fire"
+MANIFEST = SHOWCASE / "MANIFEST.json"
+
+
+def _published() -> dict:
+    return json.loads(MANIFEST.read_text())
+
+
+def _layers(manifest: dict) -> list[dict]:
+    """Every file the manifest publishes, each with its legend."""
+    return [*manifest["tessera_r4"]["years"].values(), manifest["nmd_2018"], manifest["nmd_2023"]]
+
+
+def test_published_files_match_their_manifest() -> None:
+    for layer in _layers(_published()):
+        assert _identity(SHOWCASE / layer["file"]) == {"sha256": layer["sha256"], "size": layer["size"]}, layer["file"]
+
+
+def test_every_opaque_colour_in_a_published_layer_is_named_in_its_legend() -> None:
+    for layer in _layers(_published()):
+        rgba = np.asarray(Image.open(SHOWCASE / layer["file"]).convert("RGBA")).reshape(-1, 4)
+        shown = {"#%02x%02x%02x" % tuple(c[:3]) for c in np.unique(rgba[rgba[:, 3] > 0], axis=0)}
+        named = {entry["color"] for entry in layer["legend"]}
+        assert shown == named, (layer["file"], sorted(shown ^ named))
+        assert all(entry["name"] for entry in layer["legend"]), layer["file"]
+
+
+def _numbers(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _numbers(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _numbers(item)
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        yield value
+
+
+def test_the_manifest_names_no_nfi_plot_no_input_path_and_no_other_position() -> None:
+    import re
+
+    text = MANIFEST.read_text()
+    assert not re.search(r"holdoutval_|nfi20\d\d_|nfi_validation|\bplot", text, re.I)
+    assert "/Users/" not in text and str(Path.home()) not in text
+    manifest = json.loads(text)
+    # The only SWEREF 99 TM positions are the AOI's own bounds and transform.
+    aoi = {*manifest["aoi"]["bounds_3006"], *manifest["aoi"]["transform"]}
+    positions = {n for n in _numbers(manifest) if 200_000 <= n <= 1_000_000 or 6_100_000 <= n <= 7_700_000}
+    assert positions <= aoi, sorted(positions - aoi)
