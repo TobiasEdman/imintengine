@@ -19,9 +19,8 @@
 # parquet are then copied by exclusive create. A failed cell is reported, the
 # next still runs, and the Job fails at the end. Root, as the other IM-023
 # eval Jobs. 2080 Ti.
-# Placeholders, filled in the pin commit after the merge:
-#   REPLACE_WITH_SEALED_IMAGE_DIGEST  the published image's digest
-#   REPLACE_WITH_MERGED_SHA           the commit baked into that image
+# Pinned 2026-11-07 (task 0157): the image build-pipeline-images published
+# and signed for 0145230 (run 42378469028), and that commit.
 # Not applied by the author: kubectl create --dry-run=server -f <this file>.
 apiVersion: batch/v1
 kind: Job
@@ -48,7 +47,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: run
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:7f6e95ca4baf314925a1e01becfaed3918978e2383b7fe513358321ba1977e23
           imagePullPolicy: IfNotPresent
           command: ["bash", "-c"]
           args:
@@ -118,8 +117,8 @@ spec:
               [ -z "$FAILED" ]
           env:
             # The image again, and the commit baked into it, for the preflight.
-            - {name: IMAGE_REF, value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST"}
-            - {name: SOURCE_GIT_SHA, value: REPLACE_WITH_MERGED_SHA}
+            - {name: IMAGE_REF, value: "ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:7f6e95ca4baf314925a1e01becfaed3918978e2383b7fe513358321ba1977e23"}
+            - {name: SOURCE_GIT_SHA, value: 01452302077b552bb1cd3ce945d1e6ddc504f80a}
             - {name: HOME, value: /scratch}
             - {name: TMPDIR, value: /scratch}
             - {name: XDG_CACHE_HOME, value: /scratch/.cache}

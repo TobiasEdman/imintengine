@@ -1,0 +1,13 @@
+{
+  "id": "0157",
+  "subject": "Pin the IM-023 eval Jobs to the sealed image and commit",
+  "description": "After #150 (task 0156) landed as 0145230 with Tobias's human approval, the Jobs in k8s/im023/eval/ still carry placeholders. This task fills REPLACE_WITH_SEALED_IMAGE_DIGEST with the signed digest the build-pipeline-images publish run recorded for 0145230 and REPLACE_WITH_MERGED_SHA with 01452302077b552bb1cd3ce945d1e6ddc504f80a, nothing else. The approved amendment digest follows after prepare in its own change. Review: Tobias (Codex is not back).",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/im023-eval-pin",
+  "created_at": "2026-11-07T16:16:17Z",
+  "updated_at": "2026-11-07T16:16:27Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-07T16:16:27Z"
+}

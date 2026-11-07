@@ -18,9 +18,10 @@
 # the copy is re-hashed against prediction_sha256. A failed cell is reported,
 # the next still runs, and the Job fails at the end. Root, because nfi/ is
 # root:root 0755. 2080 Ti, as for the frozen cells.
-# Placeholders: REPLACE_WITH_SEALED_IMAGE_DIGEST (pin commit after the merge)
-# and REPLACE_WITH_APPROVED_AMENDMENT_SHA256 (the digest Tobias approves after
-# prepare). Not applied by the author: kubectl create --dry-run=server -f <this file>.
+# Pinned 2026-11-07 (task 0157): the image build-pipeline-images published
+# and signed for 0145230 (run 42378469028), and that commit.
+# Placeholder: REPLACE_WITH_APPROVED_AMENDMENT_SHA256, the digest Tobias
+# approves after prepare. Not applied by the author: kubectl create --dry-run=server -f <this file>.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -46,7 +47,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: run
-          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:REPLACE_WITH_SEALED_IMAGE_DIGEST
+          image: ghcr.io/tobiasedman/imint-ladder-crop-distill@sha256:7f6e95ca4baf314925a1e01becfaed3918978e2383b7fe513358321ba1977e23
           imagePullPolicy: IfNotPresent
           command: ["bash", "-c"]
           args:
