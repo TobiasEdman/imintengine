@@ -2,12 +2,13 @@
   "id": "0151",
   "subject": "Render TESSERA R4 maps 2017\u20132025 for the fire tab",
   "description": "Tobias decided on 2026-11-06 that the Brand \u2014 K\u00e5rb\u00f6lebranden tab gets TESSERA R4 land-cover maps for every year 2017\u20132025 with a year selector, NMD 2023 next to NMD 2018 for comparison, and that 2025 uses HR-VPP 2024, clearly labelled. Add a reproducible CPU job on ICE (server dry run, created only on Tobias's go) that renders the AOI per year through the service's TESSERA R4 path, with HR-VPP gaps for 33VWJ filled via WEkEO into a separate directory (r10 pins /data/vpp_wekeo/index.json), plus the MANIFEST. Not in scope: Prithvi (unpublished until the paper), the service itself. Review: Codex or owner.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/fire-tessera-years",
   "created_at": "2026-11-06T09:51:32Z",
-  "updated_at": "2026-11-06T09:51:45Z",
+  "updated_at": "2026-11-07T07:49:49Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-06T09:51:45Z"
+  "claimed_at": "2026-11-06T09:51:45Z",
+  "completed_at": "2026-11-07T07:49:49Z"
 }
