@@ -2,9 +2,12 @@
   "id": "0161",
   "subject": "Pin the approved IM-023 amendment digest in the eval Jobs",
   "description": "Prepare (task 0156 code, Job im023-nfi-amendment-prepare, 2026-11-08) wrote the amendment manifest with sha256 40318a71e8c01edd302e4fafbac8ea660a530a22a7e6eb124b86395c3208ce97, and Tobias approved it on 2026-11-08. This task fills REPLACE_WITH_APPROVED_AMENDMENT_SHA256 in the inference and scoring Jobs in k8s/im023/eval/ with that digest, nothing else. Review: Tobias (Codex is not back).",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/im023-amendment-digest",
   "created_at": "2026-11-08T22:29:34Z",
-  "updated_at": "2026-11-08T22:29:34Z"
+  "updated_at": "2026-11-08T22:29:45Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-08T22:29:45Z"
 }
