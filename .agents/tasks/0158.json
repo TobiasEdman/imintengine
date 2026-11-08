@@ -1,0 +1,13 @@
+{
+  "id": "0158",
+  "subject": "Show the fire tab's land cover year by year",
+  "description": "Tobias decided on 2026-11-06/07 that the Brand \u2014 K\u00e5rb\u00f6lebranden tab shows TESSERA R4 land-cover maps for 2017\u20132025 with a year selector (rendered on ICE by task 0151, run 20261107T180605Z-6abfb7bd684b; 2025 uses HR-VPP 2024, labelled), keeps NMD 2018 as the pre-fire baseline and adds NMD 2023 with its own classes for comparison, with notes that the 2018 map contains the fire and that the forestry, height, soil-moisture and DEM layers are the same every year. Not in scope: the other tabs' NMD 2023 layers (separate task), Prithvi (unpublished until the paper). Review: fresh Claude reviewer; integration needs Tobias's reviewer=human line.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/fire-tab-years",
+  "created_at": "2026-11-07T18:26:52Z",
+  "updated_at": "2026-11-07T18:26:57Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-07T18:26:57Z"
+}
