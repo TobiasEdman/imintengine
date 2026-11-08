@@ -395,4 +395,16 @@ function labels(page) {
   results.retry_reselect = {during, posts: page.posts().map(post => [post.year, post.at, post.refused])};
 }
 
+// A year queued before the × is cancelled with the place.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  await page.slide(2025); await page.advance(1000);       // queued behind the background 2021
+  page.elements['session-list'].children[0].children[0].children[1].click();  // × on place A
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(60000);
+  results.pending_remove = {years: page.creations().map(item => item.year),
+    listed: page.elements['session-list'].children.length, fill: page.fillStatus()};
+}
+
 process.stdout.write(JSON.stringify(results));

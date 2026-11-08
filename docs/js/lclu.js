@@ -90,6 +90,9 @@ function removePlace(key) {
   closeInspection();
   removals.set(key, removalsOf(key) + 1);
   if (fill?.key === key) stopFill();
+  // A year asked for there before the removal is cancelled too.
+  if (pendingYear?.key === key) pendingYear = null;
+  if (place?.key === key) clearTimeout(createTimer);
   for (const entry of maps.filter(item => item.key === key)) { entry.overlay.remove(); maps.splice(maps.indexOf(entry), 1); }
   render(); status('Kartorna togs bort från sessionen. De kan skapas igen.');
 }

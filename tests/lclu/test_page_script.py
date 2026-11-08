@@ -174,3 +174,7 @@ def test_choosing_the_same_place_again_keeps_a_retry_wait(results):
     again = results['retry_reselect']
     assert again['during'] == 2
     assert again['posts'] == [[2024, 0, False], [2023, 0, True], [2023, 15000, False]]
+
+
+def test_a_year_queued_before_the_removal_is_cancelled(results):
+    assert results['pending_remove'] == {'years': [2020, 2021], 'listed': 0, 'fill': None}
