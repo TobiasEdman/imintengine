@@ -2,9 +2,12 @@
   "id": "0160",
   "subject": "Serve /v1/lclu from the installed package",
   "description": "Tobias approved on 2026-11-06 (scope confirmed 2026-11-08): in an installed wheel GET /v1/lclu fails with ModuleNotFoundError: scripts, because imint/inference/lclu.py, lclu_sources.py and lclu_cog.py import scripts.cache_predict at module level and the LCLU serving path (TesseraR4, validate_bundle, lclu_zarr, lclu_cog) lazily imports scripts.inference_comparison, scripts.enrich_tiles_tessera and scripts.prepare_lclu. Move those helpers into the imint package with one implementation, make the scripts import them from imint, extend tests/smoke_installed_package.py and the installed-library CI job to import the LCLU modules, and keep docker/lclu/build.py bundling every file the service needs. Not in scope: imint/eval's lazy imports of scripts.crop_distill_provenance (follow-up task); the running r10 service and its image are unchanged. Then apply the same change to DigitalEarthSwedenExperimentalLab/imintengine. Review: fresh Claude reviewer; integration needs Tobias's reviewer=human line.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-packaging",
   "created_at": "2026-11-08T21:26:47Z",
-  "updated_at": "2026-11-08T21:26:47Z"
+  "updated_at": "2026-11-08T21:29:02Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-08T21:29:02Z"
 }
