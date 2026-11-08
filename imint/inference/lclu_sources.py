@@ -25,7 +25,7 @@ from imint.inference.lclu import (
     EMBEDDING, YEARS, Grid, InputUnavailable, ROOT, public_identity,
     validate_bundle, verify_file, preparation_identity,
 )
-from scripts.cache_predict import contract_pin, file_identity
+from imint.sealed_io import contract_pin, file_identity
 from imint.inference.lclu_storage import (
     PREPARATION_BYTES, PREPARATION_LOG_BYTES, StorageBudget,
 )

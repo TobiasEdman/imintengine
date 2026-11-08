@@ -31,8 +31,7 @@ from imint.inference.lclu import (
     EMBEDDING, Grid, public_identity, public_provenance, validate_bundle, verify_file,
     vpp_substitutions, vpp_year_for,
 )
-from scripts.cache_predict import contract_pin, file_identity
-from scripts.inference_comparison import _file_snapshot
+from imint.sealed_io import _file_snapshot, contract_pin, file_identity
 from scripts.prepare_lclu import verify_aux_metadata
 from scripts.stage_lclu_campaign import block_key, load_campaign
 from scripts.stage_lclu_demo import select_vpp

@@ -13,8 +13,9 @@ import rasterio
 from rasterio.warp import Resampling, reproject, transform_bounds
 from rasterio.windows import Window, from_bounds
 
-from imint.inference.lclu import EMBEDDING, Grid, InputUnavailable, public_identity
-from scripts.cache_predict import file_identity
+from imint.inference.lclu import (EMBEDDING, Grid, InputUnavailable, public_identity,
+                                  verify_source_file)
+from imint.sealed_io import file_identity
 
 
 def convert_block(quantized: Path, scales: Path, reference: Path,
@@ -77,7 +78,8 @@ def _check_raster(src, block: dict, count: int, dtype: str) -> None:
 def assemble_cog_embedding(index: dict, base: Path, grid: Grid, year: int,
                            receipts: Path) -> tuple[np.ndarray, np.ndarray, dict]:
     """Read all 128 bands only in the needed native windows, with a kernel halo."""
-    from scripts.prepare_lclu import verify_source_file
+    # Preparation runs from the repository (scripts/prepare_lclu.py); the
+    # tessera-retry Jobs in k8s/ pin this helper's bytes.
     from scripts.enrich_tiles_tessera import _reproject_tessera_to_tile
 
     if index['version'] != 1 or index['embedding'] != EMBEDDING:

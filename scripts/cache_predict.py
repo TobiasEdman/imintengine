@@ -27,7 +27,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 import contextlib
 import zipfile
 import zlib
@@ -35,6 +34,8 @@ from pathlib import Path
 
 
 from imint._cache_identity import producer_revision
+from imint.sealed_io import (
+    CacheValidationError, _open_regular_nofollow, atomic_write, contract_pin, file_identity)
 import numpy as np
 
 
@@ -62,46 +63,9 @@ def ckpt_sha256(checkpoint: str) -> str:
     return h.hexdigest()[:16]
 
 
-class CacheValidationError(ValueError):
-    """The cache is stale, incomplete, or lacks authenticated provenance."""
-
-
-def file_identity(path):
-    """Hash a stable regular file using the inference loader's identity guards."""
-    from scripts import inference_comparison as ic
-
-    path = Path(path).absolute()
-    fd, opened = ic._open_regular_nofollow(
-        path, error_type=CacheValidationError, label="cache input")
-    with os.fdopen(fd, "rb") as stream:
-        digest = hashlib.sha256()
-        for block in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(block)
-        ic._assert_open_file_unchanged(
-            stream.fileno(), path, opened,
-            error_type=CacheValidationError, label="cache input")
-    return {"path": str(path), "size": opened.st_size,
-            "sha256": digest.hexdigest()}
-
-
 def preprocessing_revision():
     """Identity of the captured and verified producer source/environment."""
     return producer_revision()
-
-
-def atomic_write(path, write):
-    """Publish a complete file with one replace; clean up failed writes."""
-    path = Path(path)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            write(stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
 def identity_differences(actual, expected, prefix=''):
@@ -116,10 +80,6 @@ def identity_differences(actual, expected, prefix=''):
                 result.extend(identity_differences(actual[key], expected[key], name))
         return result
     return [] if actual == expected else [prefix]
-
-
-def contract_pin(inference):
-    return hashlib.sha256(json.dumps(inference, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 @contextlib.contextmanager
@@ -248,9 +208,8 @@ def make_cached_predict_fn(
             if source is None or source.get('path') != str(path):
                 raise CacheValidationError(f'input.path absent from pinned immutable manifest: {path}')
             # Extra consistency checks, not a claim that stats authenticate bytes.
-            from scripts import inference_comparison as ic
-            fd, opened = ic._open_regular_nofollow(path, error_type=CacheValidationError,
-                                                   label='immutable cache input')
+            fd, opened = _open_regular_nofollow(path, error_type=CacheValidationError,
+                                                label='immutable cache input')
             os.close(fd)
             if source.get('size') != opened.st_size:
                 raise CacheValidationError(f'input.size differs from immutable manifest: {path}')

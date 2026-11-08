@@ -22,31 +22,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from imint.inference.lclu import (
     AUX_NAMES, EMBEDDING, YEARS, Grid, InputUnavailable, public_identity,
-    validate_bundle, verify_file, vpp_year_for, write_json,
+    validate_bundle, verify_file, verify_source_file, vpp_year_for,
 )
-from scripts.cache_predict import atomic_write, file_identity, contract_pin
+from imint.sealed_io import atomic_write, file_identity
 from imint.inference.lclu_storage import PREPARATION_ARRAY_BYTES, PREPARATION_METADATA_BYTES
-
-
-def verify_source_file(record: dict, base: Path, receipts: Path) -> Path:
-    """Reuse an identity check only while local source inode/stats are unchanged."""
-    from scripts.inference_comparison import _file_snapshot
-    path = (base / record['path']).resolve()
-    snapshot = list(_file_snapshot(path.stat()))
-    key = contract_pin({'path': str(path), **public_identity(record)})
-    receipt = receipts / f'{key}.json'
-    try:
-        saved = json.loads(receipt.read_text())
-        if saved == {'identity': public_identity(record), 'stat': snapshot}:
-            return path
-    except (OSError, ValueError):
-        pass
-    verify_file(record, base)
-    if list(_file_snapshot(path.stat())) != snapshot:
-        raise ValueError('Source changed while verifying its identity')
-    receipts.mkdir(parents=True, exist_ok=True)
-    write_json(receipt, {'identity': public_identity(record), 'stat': snapshot})
-    return path
 
 
 def validate_embedding_cache(cache: Path) -> None:
