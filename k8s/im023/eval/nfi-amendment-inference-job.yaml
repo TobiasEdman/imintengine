@@ -20,8 +20,8 @@
 # root:root 0755. 2080 Ti, as for the frozen cells.
 # Pinned 2026-11-07 (task 0157): the image build-pipeline-images published
 # and signed for 0145230 (run 42378469028), and that commit.
-# Placeholder: REPLACE_WITH_APPROVED_AMENDMENT_SHA256, the digest Tobias
-# approves after prepare. Not applied by the author: kubectl create --dry-run=server -f <this file>.
+# The amendment manifest digest from the prepare Job (2026-11-08), approved
+# by Tobias on 2026-11-08 (task 0161). Not applied by the author: kubectl create --dry-run=server -f <this file>.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -109,8 +109,8 @@ spec:
               [ -z "$FAILED" ]
           env:
             - {name: MANIFEST, value: /cephfs/nfi/im023_amendment_2026-11-06/freeze/manifest.json}
-            # Placeholder: the digest Tobias approves after the prepare Job.
-            - {name: MANIFEST_SHA256, value: REPLACE_WITH_APPROVED_AMENDMENT_SHA256}
+            # The prepare Job's manifest digest, approved by Tobias 2026-11-08.
+            - {name: MANIFEST_SHA256, value: 40318a71e8c01edd302e4fafbac8ea660a530a22a7e6eb124b86395c3208ce97}
             - {name: HOME, value: /scratch}
             - {name: TMPDIR, value: /scratch}
             - {name: XDG_CACHE_HOME, value: /scratch/.cache}
