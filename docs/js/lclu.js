@@ -31,6 +31,9 @@ const phaseLabels = {queued:'I kö …', preparing:'Förbereder årsdata …', c
 // has made a year there: nearest year first, the later one first at equal
 // distance. A full queue or a passing outage is retried after these waits.
 let fill = null, filling = false, fillTimer;
+// Bumped when the user removes a place: a map still in progress there is then dropped.
+const removals = new Map();
+const removalsOf = key => removals.get(key) || 0;
 const RETRY_SECONDS = [15, 30, 60];
 function status(text, error=false) { $('status').textContent = text; $('status').classList.toggle('error', error); }
 async function request(url, options) {
@@ -85,6 +88,7 @@ function drop(entry, message) {
 }
 function removePlace(key) {
   closeInspection();
+  removals.set(key, removalsOf(key) + 1);
   if (fill?.key === key) stopFill();
   for (const entry of maps.filter(item => item.key === key)) { entry.overlay.remove(); maps.splice(maps.indexOf(entry), 1); }
   render(); status('Kartorna togs bort från sessionen. De kan skapas igen.');
@@ -284,14 +288,16 @@ async function create(year) {
   if (existing) return show(existing);
   // One job at a time per visitor: the user's year goes before the next background year.
   if (busy || filling) { pendingYear = {key: place.key, year}; if (!busy) status(`${yearLabel(year)} står på tur …`); return; }
-  const target = place;
+  const target = place, removal = removalsOf(target.key);
   let made = false;
   busy = true; controls(); status(`${yearLabel(year)}: skickar begäran …`);
   try {
-    const {entry, cacheHit} = await makeMap(target, year, job => {
+    const result = await makeMap(target, year, job => {
       const queued = pendingYear && pendingYear.year !== year ? ` · ${pendingYear.year} står på tur` : '';
       status(`${yearLabel(year)}: ${phaseLabels[job.phase] || phaseLabels[job.status] || 'Bearbetar …'}${queued}`);
-    });
+    }, () => removalsOf(target.key) === removal);
+    if (!result) return;  // the place was removed meanwhile
+    const {entry, cacheHit} = result;
     made = true;
     if (place?.key === target.key && timelineYear() === year) {
       show(entry); status(cacheHit ? `Årskarta ${yearLabel(year)} är klar · tidigare verifierat resultat.` : `Årskarta ${yearLabel(year)} är klar.`);
@@ -317,7 +323,7 @@ function startFill(target, year) {
 function stopFill() { fill = null; clearTimeout(fillTimer); renderFill(); }
 function runFill() {
   // While a selection is in progress (place null), select() resumes or stops the queue.
-  if (!fill || busy || filling || !place) return;
+  if (!fill || busy || filling || fill.waiting || !place) return;
   if (fill.key !== place.key) return stopFill();
   while (fill.years.length && find(fill.key, fill.years[0])) { fill.years.shift(); fill.done++; }
   renderFill();
@@ -342,7 +348,7 @@ async function fillOne(job, year) {
   }
   if (!wait) { job.years.shift(); job.attempt = 0; }
   filling = false; controls(); renderFill();
-  if (wait) { fillTimer = setTimeout(() => { if (fill === job) afterJob(); }, wait); return; }
+  if (wait) { job.waiting = true; fillTimer = setTimeout(() => { job.waiting = false; if (fill === job) afterJob(); }, wait); return; }
   afterJob();
 }
 function topmostAt(latlng) {

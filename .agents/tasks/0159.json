@@ -1,7 +1,7 @@
 {
   "id": "0159",
   "subject": "Compute every year once a place and year are chosen",
-  "description": "Tobias asked on 2026-11-07: when a place and a year have been chosen on the annual-map page, compute all the years. After the chosen year's map is created, the page queues the place's other available years (chosen year first, then newest first), one job at a time per visitor (the service runs one analysis at a time and queues at most 4 jobs), backs off on 429, stops when the place changes, never recomputes an existing map, and marks each year on the timeline as it completes. Page only (docs/js/lclu.js); the service and r10 are unchanged. Review: fresh Claude reviewer; integration needs Tobias's reviewer=human line.",
+  "description": "Tobias asked on 2026-11-07: when a place and a year have been chosen on the annual-map page, compute all the years. After the chosen year's map is created, the page queues the place's other available years (chosen year first, then the nearest year, the later first at a tie), one job at a time per visitor (the service runs one analysis at a time and queues at most 4 jobs), backs off on 429, stops when the place changes, never recomputes an existing map, and marks each year on the timeline as it completes. Page only (docs/js/lclu.js); the service and r10 are unchanged. Review: fresh Claude reviewer; integration needs Tobias's reviewer=human line.",
   "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-all-years",

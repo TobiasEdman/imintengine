@@ -164,3 +164,13 @@ def test_choosing_the_same_place_again_resumes_the_years(results):
     again = results['reselect']
     assert again['years'] == [2020, 2021, 2019, 2022, 2018, 2023, 2017, 2024, 2025]
     assert again['fill'] == 'Alla år för platsen är klara.'
+
+
+def test_removing_the_place_during_the_users_year_drops_it_and_starts_nothing(results):
+    assert results['user_remove'] == {'years': [2020, 2021, 2025], 'listed': 0, 'fill': None}
+
+
+def test_choosing_the_same_place_again_keeps_a_retry_wait(results):
+    again = results['retry_reselect']
+    assert again['during'] == 2
+    assert again['posts'] == [[2024, 0, False], [2023, 0, True], [2023, 15000, False]]

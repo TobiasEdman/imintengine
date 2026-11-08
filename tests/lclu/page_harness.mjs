@@ -371,4 +371,28 @@ function labels(page) {
   results.reselect = {years: page.creations().map(item => item.year), fill: page.fillStatus()};
 }
 
+// Removing the place while the user's own year runs: that map is dropped and no queue restarts.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  await page.slide(2025); await page.advance(1000);       // queued behind the background 2021
+  page.hold.add('/v1/lclu/jobs/job-3');                   // the user's 2025 will be in progress
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(0);
+  page.elements['session-list'].children[0].children[0].children[1].click();  // × on place A
+  page.respond('/v1/lclu/jobs/job-3'); await page.advance(60000);
+  results.user_remove = {years: page.creations().map(item => item.year),
+    listed: page.elements['session-list'].children.length, fill: page.fillStatus()};
+}
+
+// Choosing the same place again during a 429 wait keeps the wait.
+{
+  const page = await boot({refuse: [2]});
+  await page.select('A'); await page.create(); await page.advance(1000);
+  await page.select('A'); await page.advance(1000);
+  const during = page.posts().length;
+  await page.advance(14000);
+  results.retry_reselect = {during, posts: page.posts().map(post => [post.year, post.at, post.refused])};
+}
+
 process.stdout.write(JSON.stringify(results));
