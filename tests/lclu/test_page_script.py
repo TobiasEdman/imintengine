@@ -26,7 +26,8 @@ def results():
 
 
 def test_release_creates_the_released_year_at_the_released_place(results):
-    assert results['release']['creations'] == [{'place': 'A', 'year': 2023}]
+    # The released year first; the place's other year (2024) follows in the background.
+    assert results['release']['creations'] == [{'place': 'A', 'year': 2023}, {'place': 'A', 'year': 2024}]
 
 
 def test_choosing_another_place_cancels_a_pending_release(results):
@@ -82,7 +83,8 @@ NOTE = 'Uppskattningsvis ~7 % av pixlarna kan avvika jämfört med en karta med 
 def test_a_substituted_year_carries_the_apis_label_wherever_it_is_named(results):
     shown = results['substituted']
     assert shown['error'] is None
-    assert shown['creations'] == [{'place': 'A', 'year': 2025}, {'place': 'A', 'year': 2024}]
+    # 2024 is the nearest background year; the user's create waits for it, then 2023 follows.
+    assert shown['creations'] == [{'place': 'A', 'year': 2025}, {'place': 'A', 'year': 2024}, {'place': 'A', 'year': 2023}]
     chosen, made = shown['chosen'], shown['made']
     assert chosen['readout'] == chosen['valuetext'] == LABEL
     assert chosen['substituted_ticks'] == [['2025', LABEL]]
@@ -108,3 +110,71 @@ def test_the_substitution_wording_lives_only_in_the_api():
     for path in ('docs/js/lclu.js', 'docs/lclu.html'):
         text = (ROOT/path).read_text()
         assert 'växtfenologi från' not in text and '~7 %' not in text, path
+
+
+# Tobias 2026-11-07/08: once a place and a year are chosen, make every year,
+# nearest first, forward and backward, so the timeline is ready sooner.
+def test_the_other_years_follow_nearest_first_later_first_at_a_tie(results):
+    fill = results['fill_order']
+    assert fill['years'] == [2020, 2021, 2019, 2022, 2018, 2023, 2017, 2024, 2025]
+    assert fill['fill'] == 'Alla år för platsen är klara.'
+    assert fill['status'] == 'Årskarta 2020 är klar.'  # the status line stays the user's
+
+
+def test_one_job_at_a_time(results):
+    step = results['one_at_a_time']
+    assert step['during'] == [2020, 2021] and step['fill'] == 'Övriga år: 0 av 8 klara …'
+    assert step['after'] == 9
+
+
+def test_a_full_queue_is_retried_later_not_at_once(results):
+    retry = results['retry']
+    assert [(post['year'], post['at'], post['refused']) for post in retry['posts']] == [
+        (2024, 0, False), (2023, 0, True), (2023, 15000, False)]
+    assert retry['before'] == 2 and retry['years'] == [2024, 2023]
+
+
+def test_another_place_stops_the_old_places_years(results):
+    change = results['place_change']
+    assert change['creations'] == [{'place': 'A', 'year': 2020}, {'place': 'A', 'year': 2021}]
+    assert change['fill'] is None
+
+
+def test_maps_already_in_the_session_are_not_made_again(results):
+    assert results['existing']['years'] == [2020, 2019, 2022]
+
+
+def test_a_restored_session_starts_no_background_years(results):
+    assert results['restore_no_fill'] == {'posts': 0, 'fill': None}
+
+
+def test_a_year_the_user_asks_for_goes_before_the_background_years(results):
+    first = results['user_first']
+    assert first['years'] == [2020, 2021, 2025, 2019, 2022, 2018, 2023, 2017, 2024]
+    assert first['waiting'].endswith('står på tur …')
+    assert first['status'].startswith('Årskarta 2025') and first['status'].endswith('är klar.')
+
+
+def test_removing_a_place_stops_its_years_and_drops_late_results(results):
+    removed = results['remove_place']
+    assert removed == {'creations': [2020, 2021], 'listed': 0, 'fill': None}
+
+
+def test_choosing_the_same_place_again_resumes_the_years(results):
+    again = results['reselect']
+    assert again['years'] == [2020, 2021, 2019, 2022, 2018, 2023, 2017, 2024, 2025]
+    assert again['fill'] == 'Alla år för platsen är klara.'
+
+
+def test_removing_the_place_during_the_users_year_drops_it_and_starts_nothing(results):
+    assert results['user_remove'] == {'years': [2020, 2021, 2025], 'listed': 0, 'fill': None}
+
+
+def test_choosing_the_same_place_again_keeps_a_retry_wait(results):
+    again = results['retry_reselect']
+    assert again['during'] == 2
+    assert again['posts'] == [[2024, 0, False], [2023, 0, True], [2023, 15000, False]]
+
+
+def test_a_year_queued_before_the_removal_is_cancelled(results):
+    assert results['pending_remove'] == {'years': [2020, 2021], 'listed': 0, 'fill': None}
