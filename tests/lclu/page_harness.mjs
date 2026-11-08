@@ -347,4 +347,28 @@ function labels(page) {
     status: page.elements.status.textContent};
 }
 
+// Removing a place stops its background years; a result that arrives afterwards is dropped.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  page.elements['session-list'].children[0].children[0].children[1].click();  // × on place A
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(60000);
+  results.remove_place = {creations: page.creations().map(item => item.year),
+    listed: page.elements['session-list'].children.length, fill: page.fillStatus()};
+}
+
+// Choosing the same place again while a background year finishes resumes the queue.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  page.hold.add('/v1/lclu/availability');
+  page.elements.lat.value = String(PLACES.A.lat); page.elements.lon.value = String(PLACES.A.lon);
+  page.elements['location-form'].dispatch('submit'); await page.advance(0);
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(0);
+  page.respond('/v1/lclu/availability', 'A'); await page.advance(60000);
+  results.reselect = {years: page.creations().map(item => item.year), fill: page.fillStatus()};
+}
+
 process.stdout.write(JSON.stringify(results));

@@ -153,3 +153,14 @@ def test_a_year_the_user_asks_for_goes_before_the_background_years(results):
     assert first['years'] == [2020, 2021, 2025, 2019, 2022, 2018, 2023, 2017, 2024]
     assert first['waiting'].endswith('står på tur …')
     assert first['status'].startswith('Årskarta 2025') and first['status'].endswith('är klar.')
+
+
+def test_removing_a_place_stops_its_years_and_drops_late_results(results):
+    removed = results['remove_place']
+    assert removed == {'creations': [2020, 2021], 'listed': 0, 'fill': None}
+
+
+def test_choosing_the_same_place_again_resumes_the_years(results):
+    again = results['reselect']
+    assert again['years'] == [2020, 2021, 2019, 2022, 2018, 2023, 2017, 2024, 2025]
+    assert again['fill'] == 'Alla år för platsen är klara.'

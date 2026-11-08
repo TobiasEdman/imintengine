@@ -85,6 +85,7 @@ function drop(entry, message) {
 }
 function removePlace(key) {
   closeInspection();
+  if (fill?.key === key) stopFill();
   for (const entry of maps.filter(item => item.key === key)) { entry.overlay.remove(); maps.splice(maps.indexOf(entry), 1); }
   render(); status('Kartorna togs bort från sessionen. De kan skapas igen.');
 }
@@ -210,7 +211,8 @@ async function select(lat, lon, {pan=true, year}={}) {
     if (pan && map.getZoom() < 12) map.fitBounds(footprint.getBounds(), {maxZoom:12,padding:[25,25]});
     else if (pan) map.panTo([lat,lon]);
     place = {key: data.geometry.center.join(','), lat, lon, years: data.years};
-    if (fill && fill.key !== place.key) stopFill();
+    // A new place stops the old place's background years; the same place resumes them.
+    if (fill && fill.key !== place.key) stopFill(); else runFill();
     if (!place.years.length) { status(data.message); return true; }
     // Keep the year being compared across places when this place has it.
     const pick = year ?? shownAt(place.key)?.year ?? (available(previous) ? previous : Math.max(...place.years));
@@ -257,8 +259,9 @@ function onRelease() {
     if (place?.key === key && timelineYear() === year && available(year) && !find(key, year)) create(year);
   }, 450);
 }
-// Submit one year at one place and wait for its map; adds it to the session hidden.
-async function makeMap(target, year, onPhase) {
+// Submit one year at one place and wait for its map; adds it to the session
+// hidden unless keep() says the result is no longer wanted (then null).
+async function makeMap(target, year, onPhase, keep = () => true) {
   const started = performance.now();
   const submission = await request('/v1/lclu', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:target.lat,lon:target.lon,year})});
   let job;
@@ -268,6 +271,7 @@ async function makeMap(target, year, onPhase) {
     if (!['success','failed'].includes(job.status)) await new Promise(resolve=>setTimeout(resolve,900));
   } while (!['success','failed'].includes(job.status));
   if (job.status === 'failed') throw Object.assign(new Error(job.error || 'Årskartan kunde inte skapas.'), {jobFailed: true});
+  if (!keep()) return null;
   const r = job.result;
   const entry = addMap({id: submission.job_id, key: target.key, lat: target.lat, lon: target.lon, year, visible: false,
     order: ++created, seconds: (performance.now()-started)/1000,
@@ -307,13 +311,14 @@ function afterJob() {
 function startFill(target, year) {
   const years = target.years.filter(other => other !== year && !find(target.key, other))
     .sort((a, b) => Math.abs(a - year) - Math.abs(b - year) || b - a);
-  fill = years.length ? {key: target.key, target, years, total: years.length, done: 0, failed: 0, attempt: 0} : null;
+  fill = {key: target.key, target, years, total: years.length, done: 0, failed: 0, attempt: 0};
   renderFill();
 }
 function stopFill() { fill = null; clearTimeout(fillTimer); renderFill(); }
 function runFill() {
-  if (!fill || busy || filling) return;
-  if (fill.key !== place?.key) return stopFill();
+  // While a selection is in progress (place null), select() resumes or stops the queue.
+  if (!fill || busy || filling || !place) return;
+  if (fill.key !== place.key) return stopFill();
   while (fill.years.length && find(fill.key, fill.years[0])) { fill.years.shift(); fill.done++; }
   renderFill();
   if (fill.years.length) fillOne(fill, fill.years[0]);
@@ -322,10 +327,13 @@ async function fillOne(job, year) {
   filling = true; controls();
   let wait = 0;
   try {
-    const {entry} = await makeMap(job.target, year, () => {});
-    job.done++;
-    if (place?.key === job.key && timelineYear() === year) { show(entry); status(`Årskarta ${yearLabel(year)} är klar.`); }
-    else render();
+    // A result for a place the user has left or removed is dropped.
+    const made = await makeMap(job.target, year, () => {}, () => fill === job);
+    if (made) {
+      job.done++;
+      if (place?.key === job.key && timelineYear() === year) { show(made.entry); status(`Årskarta ${yearLabel(year)} är klar.`); }
+      else render();
+    }
   } catch (error) {
     // The service refused or was unreachable: try this year again later, a few times.
     const passing = !error.jobFailed && (error.status === undefined || error.status === 429 || error.status >= 500);
