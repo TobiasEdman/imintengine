@@ -1,9 +1,17 @@
-"""Run with python -I after installing a built wheel in a clean environment."""
+"""Run with python -I after installing a built wheel in a clean environment.
+
+With --serving, also import the LCLU serving modules; install the wheel with
+its [fetch] extra first. Neither mode may load torch or imint.training, and no
+module may come from the source tree's scripts/.
+"""
+import argparse
+import hashlib
 import importlib.abc
 import importlib.metadata
 import json
 from pathlib import Path
 import sys
+import tempfile
 
 
 class NoTraining(importlib.abc.MetaPathFinder):
@@ -11,6 +19,11 @@ class NoTraining(importlib.abc.MetaPathFinder):
         if fullname == "torch" or fullname.startswith(("torch.", "imint.training")):
             raise AssertionError("Lightweight import loaded " + fullname)
 
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--serving", action="store_true",
+                    help="also import the LCLU serving modules (needs the [fetch] extra)")
+args = parser.parse_args()
 
 sys.meta_path.insert(0, NoTraining())
 import imint
@@ -33,5 +46,23 @@ assert len(list((package / "fm/cot_models").glob("*.pt"))) == 3
 assert (package / "config/analyzers.yaml").read_bytes() == (repo / "config/analyzers.yaml").read_bytes()
 files = importlib.metadata.files("imint-engine")
 assert any(str(p).endswith("licenses/THIRD_PARTY_LICENSES.md") for p in files)
-print(json.dumps({"installed_package": str(package), "lightweight_imports": "pass",
-                  "packaged_models_config_and_notices": "pass"}))
+report = {"installed_package": str(package), "lightweight_imports": "pass",
+          "packaged_models_config_and_notices": "pass"}
+
+if args.serving:
+    # GET /v1/lclu imports these; scripts/ is not part of the wheel.
+    from imint.inference import lclu, lclu_cog, lclu_sources, lclu_zarr
+    from imint.sealed_io import atomic_write, file_identity
+
+    with tempfile.TemporaryDirectory() as folder:
+        probe = Path(folder) / "probe.bin"
+        atomic_write(probe, lambda stream: stream.write(b"imint"))
+        assert file_identity(probe)["sha256"] == hashlib.sha256(b"imint").hexdigest()
+    assert lclu.vpp_year_for(2025) == 2024 and lclu.legend()
+    assert callable(lclu.validate_bundle) and callable(lclu_cog.assemble_cog_embedding)
+    assert callable(lclu_sources.RepositorySources) and callable(lclu_zarr.read_embedding)
+    loaded = sorted(m for m in sys.modules if m.split(".")[0] == "scripts")
+    assert not loaded, loaded
+    report["serving_imports"] = "pass"
+
+print(json.dumps(report))

@@ -49,3 +49,10 @@ jobs:
           python -m pip install "$GITHUB_WORKSPACE"/dist/imint_engine-*.whl
       - name: Verify installed imports and bundled resources
         run: python -I tests/smoke_installed_package.py
+      - name: Add the fetch extra the LCLU service needs
+        run: |
+          cd "$RUNNER_TEMP"
+          wheel=$(echo "$GITHUB_WORKSPACE"/dist/imint_engine-*.whl)
+          python -m pip install "${wheel}[fetch]"
+      - name: Verify the LCLU serving modules import from the wheel
+        run: python -I tests/smoke_installed_package.py --serving
