@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="css/lclu.css?v=5">
   <script defer src="js/vendor/leaflet.min.js"></script>
   <script defer src="js/lclu-config.js"></script>
-  <script defer src="js/lclu.js?v=4"></script>
+  <script defer src="js/lclu.js?v=5"></script>
 </head>
 <body class="lclu">
 <header class="header">
@@ -42,7 +42,8 @@
         <div class="timeline-head"><label for="year">Tidsaxel</label><output id="year-value" for="year">–</output></div>
         <input id="year" type="range" min="2017" max="2025" step="1" value="2024" disabled>
         <div id="year-ticks" class="year-ticks" aria-hidden="true"></div>
-        <p class="timeline-hint">Dra för att byta år. Kartor du redan skapat visas direkt; ett nytt år skapas när du släpper.</p>
+        <p class="timeline-hint">Dra för att byta år. Kartor du redan skapat visas direkt; ett nytt år skapas när du släpper. Därefter räknas platsens övriga år i bakgrunden, närmaste år först.</p>
+        <p id="fill-status" class="timeline-hint" aria-live="polite" hidden></p>
       </div>
       <button id="create" disabled><span id="create-label">Skapa årskarta</span> <span aria-hidden="true">↗</span></button>
       <div id="status" role="status" aria-live="polite">Kontrollerar tjänsten …</div>

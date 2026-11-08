@@ -27,14 +27,23 @@ const maps = [];
 let pendingYear = null, created = 0, warmTimer, createTimer;
 const STORE = 'imint-lclu-session-maps-v1';
 const phaseLabels = {queued:'I kö …', preparing:'Förbereder årsdata …', classifying:'Klassificerar …', exporting:'Skapar kartfiler …', complete:'Årskartan är klar.'};
+// The place's other years, made one at a time in the background once the user
+// has made a year there: nearest year first, the later one first at equal
+// distance. A full queue or a passing outage is retried after these waits.
+let fill = null, filling = false, fillTimer;
+// Bumped when the user removes a place: a map still in progress there is then dropped.
+const removals = new Map();
+const removalsOf = key => removals.get(key) || 0;
+const RETRY_SECONDS = [15, 30, 60];
 function status(text, error=false) { $('status').textContent = text; $('status').classList.toggle('error', error); }
 async function request(url, options) {
   const response = await fetch(apiUrl(url), options);
+  const fail = message => Object.assign(new Error(message), {status: response.status});
   if (!response.headers.get('content-type')?.includes('application/json')) {
-    throw new Error('Årskartans tjänst är inte tillgänglig just nu. Försök igen senare.');
+    throw fail('Årskartans tjänst är inte tillgänglig just nu. Försök igen senare.');
   }
   const body = await response.json();
-  if (!response.ok) throw new Error(typeof body.detail === 'string' ? body.detail : `Begäran misslyckades (${response.status}).`);
+  if (!response.ok) throw fail(typeof body.detail === 'string' ? body.detail : `Begäran misslyckades (${response.status}).`);
   return body;
 }
 const timelineYear = () => Number($('year').value);
@@ -79,6 +88,11 @@ function drop(entry, message) {
 }
 function removePlace(key) {
   closeInspection();
+  removals.set(key, removalsOf(key) + 1);
+  if (fill?.key === key) stopFill();
+  // A year asked for there before the removal is cancelled too.
+  if (pendingYear?.key === key) pendingYear = null;
+  if (place?.key === key) clearTimeout(createTimer);
   for (const entry of maps.filter(item => item.key === key)) { entry.overlay.remove(); maps.splice(maps.indexOf(entry), 1); }
   render(); status('Kartorna togs bort från sessionen. De kan skapas igen.');
 }
@@ -160,7 +174,13 @@ function renderList() {
     return item;
   }));
 }
-function render() { renderTimeline(); renderResult(); renderList(); controls(); save(); }
+function renderFill() {
+  const text = !fill || fill.key !== place?.key ? ''
+    : fill.years.length ? `Övriga år: ${fill.done} av ${fill.total} klara …`
+    : fill.failed ? `Övriga år klara · ${fill.failed} kunde inte skapas.` : 'Alla år för platsen är klara.';
+  $('fill-status').textContent = text; $('fill-status').hidden = !text;
+}
+function render() { renderTimeline(); renderResult(); renderList(); renderFill(); controls(); save(); }
 // Start preparing the chosen place and year while the user decides. Best
 // effort: creating the map reports any real error, so a failed warm-up is silent.
 function warm(year) {
@@ -198,6 +218,8 @@ async function select(lat, lon, {pan=true, year}={}) {
     if (pan && map.getZoom() < 12) map.fitBounds(footprint.getBounds(), {maxZoom:12,padding:[25,25]});
     else if (pan) map.panTo([lat,lon]);
     place = {key: data.geometry.center.join(','), lat, lon, years: data.years};
+    // A new place stops the old place's background years; the same place resumes them.
+    if (fill && fill.key !== place.key) stopFill(); else runFill();
     if (!place.years.length) { status(data.message); return true; }
     // Keep the year being compared across places when this place has it.
     const pick = year ?? shownAt(place.key)?.year ?? (available(previous) ? previous : Math.max(...place.years));
@@ -244,36 +266,93 @@ function onRelease() {
     if (place?.key === key && timelineYear() === year && available(year) && !find(key, year)) create(year);
   }, 450);
 }
+// Submit one year at one place and wait for its map; adds it to the session
+// hidden unless keep() says the result is no longer wanted (then null).
+async function makeMap(target, year, onPhase, keep = () => true) {
+  const started = performance.now();
+  const submission = await request('/v1/lclu', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:target.lat,lon:target.lon,year})});
+  let job;
+  do {
+    job = await request(submission.poll_url);
+    onPhase(job);
+    if (!['success','failed'].includes(job.status)) await new Promise(resolve=>setTimeout(resolve,900));
+  } while (!['success','failed'].includes(job.status));
+  if (job.status === 'failed') throw Object.assign(new Error(job.error || 'Årskartan kunde inte skapas.'), {jobFailed: true});
+  if (!keep()) return null;
+  const r = job.result;
+  const entry = addMap({id: submission.job_id, key: target.key, lat: target.lat, lon: target.lon, year, visible: false,
+    order: ++created, seconds: (performance.now()-started)/1000,
+    result: {artifacts: r.artifacts, overlay_bounds: r.overlay_bounds, valid_pixels: r.valid_pixels, nodata_pixels: r.nodata_pixels}});
+  return {entry, cacheHit: r.cache_hit};
+}
 async function create(year) {
   if (!place || !available(year)) return;
   const existing = find(place.key, year);
   if (existing) return show(existing);
-  if (busy) { pendingYear = {key: place.key, year}; return; }
-  const target = place, started = performance.now();
+  // One job at a time per visitor: the user's year goes before the next background year.
+  if (busy || filling) { pendingYear = {key: place.key, year}; if (!busy) status(`${yearLabel(year)} står på tur …`); return; }
+  const target = place, removal = removalsOf(target.key);
+  let made = false;
   busy = true; controls(); status(`${yearLabel(year)}: skickar begäran …`);
   try {
-    const submission = await request('/v1/lclu', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:target.lat,lon:target.lon,year})});
-    let job;
-    do {
-      job = await request(submission.poll_url);
+    const result = await makeMap(target, year, job => {
       const queued = pendingYear && pendingYear.year !== year ? ` · ${pendingYear.year} står på tur` : '';
       status(`${yearLabel(year)}: ${phaseLabels[job.phase] || phaseLabels[job.status] || 'Bearbetar …'}${queued}`);
-      if (!['success','failed'].includes(job.status)) await new Promise(resolve=>setTimeout(resolve,900));
-    } while (!['success','failed'].includes(job.status));
-    if (job.status === 'failed') throw new Error(job.error || 'Årskartan kunde inte skapas.');
-    const r = job.result;
-    const entry = addMap({id: submission.job_id, key: target.key, lat: target.lat, lon: target.lon, year, visible: false,
-      order: ++created, seconds: (performance.now()-started)/1000,
-      result: {artifacts: r.artifacts, overlay_bounds: r.overlay_bounds, valid_pixels: r.valid_pixels, nodata_pixels: r.nodata_pixels}});
+    }, () => removalsOf(target.key) === removal);
+    if (!result) return;  // the place was removed meanwhile
+    const {entry, cacheHit} = result;
+    made = true;
     if (place?.key === target.key && timelineYear() === year) {
-      show(entry); status(r.cache_hit ? `Årskarta ${yearLabel(year)} är klar · tidigare verifierat resultat.` : `Årskarta ${yearLabel(year)} är klar.`);
+      show(entry); status(cacheHit ? `Årskarta ${yearLabel(year)} är klar · tidigare verifierat resultat.` : `Årskarta ${yearLabel(year)} är klar.`);
     } else { render(); status(`Årskarta ${yearLabel(year)} är klar och finns under Dina kartor.`); }
   } catch(error) { status(`${yearLabel(year)}: ${error.message}`,true); }
   finally {
     busy = false; controls();
-    const next = pendingYear; pendingYear = null;
-    if (next && next.key === place?.key && next.year === timelineYear()) create(next.year);
+    if (made && place?.key === target.key && fill?.key !== target.key) startFill(target, year);
+    afterJob();
   }
+}
+function afterJob() {
+  const next = pendingYear; pendingYear = null;
+  if (next && next.key === place?.key && next.year === timelineYear() && !find(next.key, next.year)) return create(next.year);
+  runFill();
+}
+function startFill(target, year) {
+  const years = target.years.filter(other => other !== year && !find(target.key, other))
+    .sort((a, b) => Math.abs(a - year) - Math.abs(b - year) || b - a);
+  fill = {key: target.key, target, years, total: years.length, done: 0, failed: 0, attempt: 0};
+  renderFill();
+}
+function stopFill() { fill = null; clearTimeout(fillTimer); renderFill(); }
+function runFill() {
+  // While a selection is in progress (place null), select() resumes or stops the queue.
+  if (!fill || busy || filling || fill.waiting || !place) return;
+  if (fill.key !== place.key) return stopFill();
+  while (fill.years.length && find(fill.key, fill.years[0])) { fill.years.shift(); fill.done++; }
+  renderFill();
+  if (fill.years.length) fillOne(fill, fill.years[0]);
+}
+async function fillOne(job, year) {
+  filling = true; controls();
+  let wait = 0;
+  try {
+    // A result for a place the user has left or removed is dropped.
+    const made = await makeMap(job.target, year, () => {}, () => fill === job);
+    if (made) {
+      job.done++;
+      if (place?.key === job.key && timelineYear() === year) { show(made.entry); status(`Årskarta ${yearLabel(year)} är klar.`); }
+      else render();
+    }
+  } catch (error) {
+    // The service refused or was unreachable: try this year again later, a few times.
+    const passing = !error.jobFailed && (error.status === undefined || error.status === 429 || error.status >= 500);
+    if (passing && job.attempt < RETRY_SECONDS.length) wait = RETRY_SECONDS[job.attempt++] * 1000;
+    else job.failed++;
+  }
+  if (!wait) { job.years.shift(); job.attempt = 0; }
+  filling = false; controls(); renderFill();
+  if (wait) { job.waiting = true; fillTimer = setTimeout(() => { job.waiting = false; if (fill === job) afterJob(); }, wait); return; }
+  afterJob();
 }
 function topmostAt(latlng) {
   for (let i = maps.length - 1; i >= 0; i--) if (maps[i].visible && maps[i].overlay.getBounds().contains(latlng)) return maps[i];
