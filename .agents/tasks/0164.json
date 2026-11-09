@@ -1,10 +1,13 @@
 {
   "id": "0164",
   "subject": "Explain coastal gaps from TESSERA's landmask on the map page",
-  "description": "Tobias asked on 2026-11-09 why a wedge is missing in Göteborg on the annual map. It is TESSERA v1's own landmask: TESSERA computes embeddings only where its generalized coastline says land, so a straight segment across the north bank of Göta älv leaves quays and river without data (evidence: ~/.agents/continuity/evidence/ImintEngine/tessera-landmask-wedge-goteborg-20261109/). He chose to explain this on the page. Page text only (docs/lclu.html); the service, r10 and the model are unchanged. Review: fresh Claude reviewer; integration needs Tobias's reviewer=human line.",
-  "status": "pending",
+  "description": "Tobias asked on 2026-11-09 why a wedge is missing in G\u00f6teborg on the annual map. It is TESSERA v1's own landmask: TESSERA computes embeddings only where its generalized coastline says land, so a straight segment across the north bank of G\u00f6ta \u00e4lv leaves quays and river without data (evidence: ~/.agents/continuity/evidence/ImintEngine/tessera-landmask-wedge-goteborg-20261109/). He chose to explain this on the page. Page text only (docs/lclu.html); the service, r10 and the model are unchanged. Review: fresh Claude reviewer; integration needs Tobias's reviewer=human line.",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/lclu-coastal-gaps",
   "created_at": "2026-11-09T00:03:45Z",
-  "updated_at": "2026-11-09T00:03:45Z"
+  "updated_at": "2026-11-09T00:03:55Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-09T00:03:55Z"
 }
