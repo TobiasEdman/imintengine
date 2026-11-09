@@ -43,7 +43,7 @@ const bounds = ([[south, west], [north, east]]) => ({
 });
 
 // years: what the place and its area offer; substitutions: null for an API without the list.
-async function boot({omit = [], storage = {}, years = [2023, 2024], substitutions = SUBSTITUTIONS} = {}) {
+async function boot({omit = [], storage = {}, years = [2023, 2024], substitutions = SUBSTITUTIONS, refuse = []} = {}) {
   const elements = {};
   for (const [, tag, attributes] of HTML.matchAll(/<(\w+)([^>]*\bid="[\w-]+"[^>]*)>/g)) {
     const id = attributes.match(/\bid="([\w-]+)"/)[1];
@@ -123,12 +123,18 @@ async function boot({omit = [], storage = {}, years = [2023, 2024], substitution
     }
     return {prepared: true};
   }
+  let posts = 0;
   function fetch(url, options = {}) {
     return new Promise(resolve => {
-      const request = {url: String(url), method: options.method || 'GET',
+      const request = {url: String(url), method: options.method || 'GET', at: now,
         body: options.body ? JSON.parse(options.body) : null,
         respond: () => resolve({ok: true, status: 200, headers: {get: () => 'application/json'},
           json: async () => answer(request)})};
+      if (request.method === 'POST' && new URL(request.url).pathname === '/v1/lclu' && refuse.includes(++posts)) {
+        request.refused = true;
+        request.respond = () => resolve({ok: false, status: 429, headers: {get: () => 'application/json'},
+          json: async () => ({detail: 'Job queue is full; retry later'})});
+      }
       requests.push(request);
       if (!hold.has(new URL(request.url).pathname)) { request.done = true; request.respond(); }
     });
@@ -167,8 +173,11 @@ async function boot({omit = [], storage = {}, years = [2023, 2024], substitution
         && (!name || Number(new URL(item.url).searchParams.get('lat')) === PLACES[name].lat));
       request.done = true; request.respond();
     },
-    creations: () => requests.filter(item => item.method === 'POST' && new URL(item.url).pathname === '/v1/lclu')
+    creations: () => requests.filter(item => item.method === 'POST' && new URL(item.url).pathname === '/v1/lclu' && !item.refused)
       .map(item => ({place: Object.keys(PLACES).find(name => PLACES[name].lat === item.body.lat), year: item.body.year})),
+    posts: () => requests.filter(item => item.method === 'POST' && new URL(item.url).pathname === '/v1/lclu')
+      .map(item => ({year: item.body.year, at: item.at, refused: Boolean(item.refused)})),
+    fillStatus: () => (elements['fill-status'].hidden ? null : elements['fill-status'].textContent),
     pixelJobs: () => requests.filter(item => new URL(item.url).pathname.endsWith('/pixel'))
       .map(item => new URL(item.url).pathname.split('/')[4]),
     jobAt: name => requests.find(item => item.job && item.job.lat === PLACES[name].lat)?.job.id,
@@ -243,11 +252,13 @@ function labels(page) {
   const page = await boot({years: [2023, 2024, 2025]});
   await page.select('A');
   const chosen = labels(page);
+  page.hold.add('/v1/lclu/jobs/job-2');  // the background 2024 map stays in progress
   await page.create();
   const made = labels(page);
   await page.slide(2024, false);
   const other = labels(page);
   await page.create();
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(0);
   results.substituted = {error: page.error, chosen, made, other, plain: labels(page),
     span: page.elements['year-span'].textContent, creations: page.creations()};
 }
@@ -263,6 +274,137 @@ function labels(page) {
 {
   const page = await boot({years: [2024]});
   results.single_year = {span: page.elements['year-span'].textContent};
+}
+
+// After the user's year, the place's other years follow, nearest first, the later first at a tie.
+{
+  const page = await boot({years: YEARS});
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  results.fill_order = {years: page.creations().map(item => item.year), fill: page.fillStatus(),
+    status: page.elements.status.textContent};
+}
+
+// One job at a time: while a background map is in progress nothing else is submitted.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  const during = page.creations().map(item => item.year), fill = page.fillStatus();
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(1000);
+  results.one_at_a_time = {during, fill, after: page.creations().length};
+}
+
+// A full queue (429) is retried after 15 s, not at once.
+{
+  const page = await boot({refuse: [2]});
+  await page.select('A'); await page.create(); await page.advance(14000);
+  const before = page.posts().length;
+  await page.advance(2000);
+  results.retry = {posts: page.posts(), before, years: page.creations().map(item => item.year)};
+}
+
+// Choosing another place stops the old place's background years.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  await page.select('B');
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(60000);
+  results.place_change = {creations: page.creations(), fill: page.fillStatus()};
+}
+
+// A map already in the session is not made again.
+{
+  const files = id => Object.fromEntries(['overlay.png', 'classification.tif', 'provenance.json']
+    .map(name => [name, `/v1/lclu/jobs/${id}/files/${name}`]));
+  const saved = [{id: 'old', key: '17500,59500', lat: 59.5, lon: 17.5, year: 2021, visible: false, order: 1,
+    result: {artifacts: files('old'), overlay_bounds: box(59.5, 17.5), valid_pixels: 1, nodata_pixels: 0}}];
+  const page = await boot({years: [2019, 2020, 2021, 2022], storage: {'imint-lclu-session-maps-v1': JSON.stringify(saved)}});
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  results.existing = {years: page.creations().map(item => item.year)};
+}
+
+// Restoring a session after a reload starts no background years.
+{
+  const files = id => Object.fromEntries(['overlay.png', 'classification.tif', 'provenance.json']
+    .map(name => [name, `/v1/lclu/jobs/${id}/files/${name}`]));
+  const saved = [{id: 'kept', key: '17500,59500', lat: 59.5, lon: 17.5, year: 2024, visible: true, order: 1,
+    result: {artifacts: files('kept'), overlay_bounds: box(59.5, 17.5), valid_pixels: 1, nodata_pixels: 0}}];
+  const page = await boot({years: YEARS, storage: {'imint-lclu-session-maps-v1': JSON.stringify(saved)}});
+  await page.advance(60000);
+  results.restore_no_fill = {posts: page.posts().length, fill: page.fillStatus()};
+}
+
+// A year the user asks for during the background years goes first.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  await page.slide(2025); await page.advance(1000);
+  const waiting = page.elements.status.textContent;
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(1000);
+  results.user_first = {years: page.creations().map(item => item.year), waiting,
+    status: page.elements.status.textContent};
+}
+
+// Removing a place stops its background years; a result that arrives afterwards is dropped.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  page.elements['session-list'].children[0].children[0].children[1].click();  // × on place A
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(60000);
+  results.remove_place = {creations: page.creations().map(item => item.year),
+    listed: page.elements['session-list'].children.length, fill: page.fillStatus()};
+}
+
+// Choosing the same place again while a background year finishes resumes the queue.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  page.hold.add('/v1/lclu/availability');
+  page.elements.lat.value = String(PLACES.A.lat); page.elements.lon.value = String(PLACES.A.lon);
+  page.elements['location-form'].dispatch('submit'); await page.advance(0);
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(0);
+  page.respond('/v1/lclu/availability', 'A'); await page.advance(60000);
+  results.reselect = {years: page.creations().map(item => item.year), fill: page.fillStatus()};
+}
+
+// Removing the place while the user's own year runs: that map is dropped and no queue restarts.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  await page.slide(2025); await page.advance(1000);       // queued behind the background 2021
+  page.hold.add('/v1/lclu/jobs/job-3');                   // the user's 2025 will be in progress
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(0);
+  page.elements['session-list'].children[0].children[0].children[1].click();  // × on place A
+  page.respond('/v1/lclu/jobs/job-3'); await page.advance(60000);
+  results.user_remove = {years: page.creations().map(item => item.year),
+    listed: page.elements['session-list'].children.length, fill: page.fillStatus()};
+}
+
+// Choosing the same place again during a 429 wait keeps the wait.
+{
+  const page = await boot({refuse: [2]});
+  await page.select('A'); await page.create(); await page.advance(1000);
+  await page.select('A'); await page.advance(1000);
+  const during = page.posts().length;
+  await page.advance(14000);
+  results.retry_reselect = {during, posts: page.posts().map(post => [post.year, post.at, post.refused])};
+}
+
+// A year queued before the × is cancelled with the place.
+{
+  const page = await boot({years: YEARS});
+  page.hold.add('/v1/lclu/jobs/job-2');
+  await page.select('A'); await page.slide(2020); await page.advance(1000);
+  await page.slide(2025); await page.advance(1000);       // queued behind the background 2021
+  page.elements['session-list'].children[0].children[0].children[1].click();  // × on place A
+  page.respond('/v1/lclu/jobs/job-2'); await page.advance(60000);
+  results.pending_remove = {years: page.creations().map(item => item.year),
+    listed: page.elements['session-list'].children.length, fill: page.fillStatus()};
 }
 
 process.stdout.write(JSON.stringify(results));
