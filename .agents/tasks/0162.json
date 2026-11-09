@@ -2,12 +2,13 @@
   "id": "0162",
   "subject": "Import the eval runtime checks from the package",
   "description": "Tobias asked on 2026-11-09: imint/eval/nfi_amendment.py (sealed_runtime) and imint/eval/fieldtruth.py (verify_evaluation_source) import scripts.crop_distill_provenance inside functions, so they fail with ModuleNotFoundError: scripts in an installed wheel. Move the code verify_runtime, snapshot_tree and tree_payload_sha256 reach (ProvenanceError, the image and archive pins, the tree-identity helpers) into the imint package as byte-identical spans, have scripts/crop_distill_provenance.py import it from imint so there is one implementation, and extend tests/smoke_installed_package.py and the installed-library CI job to exercise both eval modules without torch. Follow-up to task 0160 (PR #155). Not in scope: job manifests, the sealed ladder-crop-distill images, and the IM-023 freeze and amendment manifests, which keep their own code pins. Review: fresh Claude reviewer; integration is Tobias's decision.",
-  "status": "claimed",
+  "status": "completed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/eval-provenance-packaging",
   "created_at": "2026-11-08T23:16:46Z",
-  "updated_at": "2026-11-08T23:19:11Z",
+  "updated_at": "2026-11-09T13:18:33Z",
   "claimed_by": "te-claude",
   "runtime": "claude",
-  "claimed_at": "2026-11-08T23:19:11Z"
+  "claimed_at": "2026-11-08T23:19:11Z",
+  "completed_at": "2026-11-09T13:18:33Z"
 }
