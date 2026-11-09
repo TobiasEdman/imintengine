@@ -409,3 +409,30 @@ def test_load_model_complete_checkpoint_builds_at_exact_grid(tmp_path):
     # No pool-count correction needed (512 already yields the 5 pools).
     assert "PSP pool count mismatch" not in log, log
     assert len(loaded.decoder.psp_modules) == 5
+
+
+def test_run_fraction_inference_defaults_to_the_checkpoint_aux_set(monkeypatch):
+    """Without an explicit set the fraction head gets the checkpoint's own aux
+    stack, as the class head does (R4 has markfukt); an explicit set still wins."""
+    from types import SimpleNamespace
+
+    seen = []
+
+    def build(tile_path, device, img_size, aux_channel_names, **kwargs):
+        seen.append(aux_channel_names)
+        return {}
+
+    def forward(model, inputs, device, return_fractions=False):
+        assert return_fractions
+        return torch.zeros((1, N_CLASSES, 2, 2)), torch.zeros((1, K_FRAC, 2, 2))
+
+    monkeypatch.setattr(infcmp, "_build_inference_inputs", build)
+    monkeypatch.setattr(infcmp, "_forward_from_inputs", forward)
+    monkeypatch.setattr(infcmp, "_close_inference_inputs", lambda inputs: None)
+    model = SimpleNamespace(fm_spec=SimpleNamespace(family="tessera"), frac_head=object(),
+                            ck_cfg={"enabled_aux_names": ["dem", "markfukt"]}, n_aux_channels=2)
+    fracs = infcmp.run_fraction_inference(model, "tile", "cpu", img_size=2)
+    assert seen == [["dem", "markfukt"]]
+    assert fracs.shape == (K_FRAC, 2, 2) and np.allclose(fracs, 0.5)
+    infcmp.run_fraction_inference(model, "tile", "cpu", img_size=2, aux_channel_names=["dem"])
+    assert seen[-1] == ["dem"]
