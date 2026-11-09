@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from imint.crop_distill_runtime import snapshot_tree, tree_payload_sha256, verify_runtime
+
 NFI_KEY = ["TractID", "PlotID", "Year"]
 LUCAS_KEY = ["point_id", "Year"]
 
@@ -291,8 +293,6 @@ def evaluation_runtime_identity(manifest: dict) -> dict:
 
 def verify_evaluation_source(manifest: dict, *, environment: str = "model") -> dict:
     """Reauthenticate the full sealed source and execution environment."""
-    from scripts.crop_distill_provenance import verify_runtime, snapshot_tree, tree_payload_sha256
-
     validate_freeze_structure(manifest)
     root = Path(__file__).resolve().parents[2]
     for relative, expected in manifest["source_sha256"].items():

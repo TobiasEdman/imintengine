@@ -42,17 +42,16 @@ def test_incomplete_freeze_rejected_even_with_matching_hash(tmp_path, field):
 
 
 def test_full_execution_tree_and_runtime_checked(tmp_path, monkeypatch):
-    from scripts import crop_distill_provenance as provenance
     _, manifest = fixture(tmp_path)
     frozen = manifest["preparation_runtime"]
-    monkeypatch.setattr(provenance, "verify_runtime", lambda *a, **k: copy.deepcopy(frozen))
-    monkeypatch.setattr(provenance, "snapshot_tree", lambda root: [])
-    monkeypatch.setattr(provenance, "tree_payload_sha256", lambda files: frozen["source"]["payload_sha256"])
+    monkeypatch.setattr(ft, "verify_runtime", lambda *a, **k: copy.deepcopy(frozen))
+    monkeypatch.setattr(ft, "snapshot_tree", lambda root: [])
+    monkeypatch.setattr(ft, "tree_payload_sha256", lambda files: frozen["source"]["payload_sha256"])
     assert ft.verify_evaluation_source(manifest)["runtime_image"] == manifest["runtime_image"]
-    monkeypatch.setattr(provenance, "tree_payload_sha256", lambda files: "f" * 64)
+    monkeypatch.setattr(ft, "tree_payload_sha256", lambda files: "f" * 64)
     with pytest.raises(ValueError, match="execution source tree"):
         ft.verify_evaluation_source(manifest)
     changed = copy.deepcopy(frozen); changed["runtime_manifest"]["sha256"] = "e" * 64
-    monkeypatch.setattr(provenance, "verify_runtime", lambda *a, **k: changed)
+    monkeypatch.setattr(ft, "verify_runtime", lambda *a, **k: changed)
     with pytest.raises(ValueError, match="execution runtime"):
         ft.verify_evaluation_source(manifest)

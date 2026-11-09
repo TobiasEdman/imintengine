@@ -29,6 +29,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from imint.crop_distill_runtime import snapshot_tree, tree_payload_sha256, verify_runtime
 from imint.eval.fieldtruth import (
     NFI_KEY, NFI_SOURCE_FILES, evaluation_runtime_identity, load_frozen_holdout,
     sha256_file, verify_prediction_dump,
@@ -265,8 +266,6 @@ def sealed_runtime(root: Path, runtime_manifest: Path, *, source_git_sha: str,
     declared ``image_ref``, and the Pod's ``imageID`` is captured with the run
     evidence, as for the original freeze.
     """
-    from scripts.crop_distill_provenance import snapshot_tree, tree_payload_sha256, verify_runtime
-
     runtime = verify_runtime(runtime_manifest, source_git_sha=source_git_sha, image_ref=image_ref)
     if tree_payload_sha256(snapshot_tree(root)) != runtime["source"]["payload_sha256"]:
         raise ValueError("this step is not running from the verified source tree")
