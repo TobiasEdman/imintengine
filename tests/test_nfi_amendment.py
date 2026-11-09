@@ -271,12 +271,12 @@ def test_checkpoint_child_reads_heads_and_contract_without_a_model(tmp_path):
 
 
 def test_sealed_runtime_binds_the_source_tree_and_the_interpreter(tmp_path, monkeypatch):
-    from scripts import crop_distill_provenance as provenance
+    from imint.crop_distill_runtime import snapshot_tree, tree_payload_sha256
 
     root = tmp_path / "source"
     (root / "scripts").mkdir(parents=True)
     (root / "scripts" / "a.py").write_text("x = 1\n")
-    payload = provenance.tree_payload_sha256(provenance.snapshot_tree(root))
+    payload = tree_payload_sha256(snapshot_tree(root))
     calls = []
 
     def verify_runtime(manifest, *, source_git_sha, image_ref):
@@ -285,7 +285,7 @@ def test_sealed_runtime_binds_the_source_tree_and_the_interpreter(tmp_path, monk
                     environments={"model": {"python": {"path": sys.executable}},
                                   "scoring": {"python": {"path": "/opt/venvs/scoring/bin/python"}}})
 
-    monkeypatch.setattr(provenance, "verify_runtime", verify_runtime)
+    monkeypatch.setattr(na, "verify_runtime", verify_runtime)
     runtime = na.sealed_runtime(root, RUNTIME_MANIFEST, source_git_sha=SOURCE_SHA,
                                 image_ref=IMAGE, environment="model")
     assert runtime["source"]["payload_sha256"] == payload
