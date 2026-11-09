@@ -72,6 +72,34 @@ def test_training_and_evaluation_use_identical_metric_function():
     np.testing.assert_array_equal(a['confusion_matrix'], b['confusion_matrix'])
 
 
+def test_evaluation_and_runtime_checks_do_not_import_scripts():
+    # scripts/ is not packaged; an installed wheel raises ModuleNotFoundError.
+    paths = [*(ROOT / "imint" / "eval").rglob("*.py"), ROOT / "imint" / "crop_distill_runtime.py"]
+    imports = []
+    for path in paths:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                names = [item.name for item in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                names = [node.module]
+            else:
+                continue
+            if any(name == "scripts" or name.startswith("scripts.") for name in names):
+                imports.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+    assert imports == [], imports
+
+
+def test_runtime_checks_have_one_implementation():
+    from imint import crop_distill_runtime as runtime
+    from imint.eval import fieldtruth, nfi_amendment
+    from scripts import crop_distill_provenance as provenance
+    shared = ("verify_runtime", "snapshot_tree", "tree_payload_sha256")
+    for module in (fieldtruth, nfi_amendment, provenance):
+        for name in shared:
+            assert getattr(module, name) is getattr(runtime, name), (module.__name__, name)
+    assert provenance.ProvenanceError is runtime.ProvenanceError
+
+
 def _shell_commands(script):
     """Split static shell commands without treating quoted operators as separators."""
     command = []
