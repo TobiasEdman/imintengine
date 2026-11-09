@@ -49,3 +49,7 @@ jobs:
           python -m pip install "$GITHUB_WORKSPACE"/dist/imint_engine-*.whl
       - name: Verify installed imports and bundled resources
         run: python -I tests/smoke_installed_package.py
+      - name: Add pandas for the field-truth evaluation modules
+        run: python -m pip install "pandas>=2"
+      - name: Verify the evaluation runtime checks run from the wheel
+        run: python -I tests/smoke_installed_package.py --eval
