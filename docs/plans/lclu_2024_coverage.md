@@ -152,7 +152,7 @@ receipts in the release's `identity_cache`
 (`/work/releases/lclu-stockholm-0124-r9/shared/receipts`).
 
 - Each receipt stores the file's stat snapshot, including `st_dev` and
-  `st_ino` (`scripts/inference_comparison.py::_file_snapshot`), and is reused
+  `st_ino` (`imint/sealed_io.py::_file_snapshot`), and is reused
   only while the snapshot matches.
 - On CephFS, `st_dev` can differ per node. A pod on another node would then
   miss r9's receipt, re-hash the source and rewrite the receipt with its own

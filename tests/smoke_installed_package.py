@@ -1,7 +1,10 @@
 """Run with python -I after installing a built wheel in a clean environment.
 
 With --eval, also run the field-truth evaluation modules' runtime checks;
-install pandas first. Neither mode may load torch or imint.training.
+install pandas first. With --serving, also import the LCLU service modules;
+install the wheel with its [fetch] extra first. No mode may load torch or
+imint.training, and --eval and --serving fail if any module named scripts
+loads.
 """
 import argparse
 import hashlib
@@ -22,6 +25,8 @@ class NoTraining(importlib.abc.MetaPathFinder):
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--eval", action="store_true",
                     help="also run the evaluation modules' runtime checks (needs pandas)")
+parser.add_argument("--serving", action="store_true",
+                    help="also import the LCLU serving modules (needs the [fetch] extra)")
 args = parser.parse_args()
 
 sys.meta_path.insert(0, NoTraining())
@@ -71,8 +76,22 @@ if args.eval:
             assert "cannot securely read runtime manifest" in str(error), error
         else:
             raise AssertionError("sealed_runtime accepted a missing runtime manifest")
+    report["evaluation_runtime_checks"] = "pass"
+
+if args.serving:
+    # The LCLU service imports these; scripts/ is not part of the wheel.
+    from imint.inference import lclu, lclu_cog, lclu_sources, lclu_zarr  # noqa: F401
+    from imint.sealed_io import atomic_write, file_identity
+
+    with tempfile.TemporaryDirectory() as folder:
+        probe = Path(folder) / "probe.bin"
+        atomic_write(probe, lambda stream: stream.write(b"imint"))
+        assert file_identity(probe)["sha256"] == hashlib.sha256(b"imint").hexdigest()
+    assert lclu.vpp_year_for(2025) == 2024 and lclu.legend()
+    report["serving_imports"] = "pass"
+
+if args.eval or args.serving:
     loaded = sorted(m for m in sys.modules if m.split(".")[0] == "scripts")
     assert not loaded, loaded
-    report["evaluation_runtime_checks"] = "pass"
 
 print(json.dumps(report))

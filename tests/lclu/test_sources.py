@@ -10,6 +10,7 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
+from imint.inference import lclu
 from imint.inference.lclu import EMBEDDING, Grid, InputUnavailable, write_json
 from imint.inference.lclu_sources import RepositorySources
 from imint.training.copernicus_dem import read_dem_window
@@ -48,19 +49,19 @@ def test_source_identity_receipt_reuses_hash_and_detects_same_size_change(tmp_pa
     record = file_identity(path)
     receipts = tmp_path/'receipts'
     calls = []
-    original = prep.verify_file
+    original = lclu.verify_file
     def counted(*args):
         calls.append(args)
         return original(*args)
-    monkeypatch.setattr(prep, 'verify_file', counted)
-    assert prep.verify_source_file(record, tmp_path, receipts) == path
-    assert prep.verify_source_file(record, tmp_path, receipts) == path
+    monkeypatch.setattr(lclu, 'verify_file', counted)
+    assert lclu.verify_source_file(record, tmp_path, receipts) == path
+    assert lclu.verify_source_file(record, tmp_path, receipts) == path
     assert len(calls) == 1
     previous = path.stat()
     path.write_bytes(b'wxyz')
     os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
     with pytest.raises(ValueError, match='identity mismatch'):
-        prep.verify_source_file(record, tmp_path, receipts)
+        lclu.verify_source_file(record, tmp_path, receipts)
     assert len(calls) == 2  # ctime/identity invalidates even restored mtime
 
 

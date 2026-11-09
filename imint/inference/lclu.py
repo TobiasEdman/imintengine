@@ -30,7 +30,8 @@ from imint.job import GeoContext
 from imint.schema.unified_schema import NUM_CLASSES_BEFORE_BARRBLANDSKOG as R4_NUM_CLASSES
 from imint.inference.lclu_legend import MAP_COLORS, legend
 from imint.tile_grid import bounds_from_center
-from scripts.cache_predict import atomic_write, contract_pin, file_identity
+from imint.sealed_io import (
+    _file_snapshot, _load_npz_for_inference, atomic_write, contract_pin, file_identity)
 
 YEARS = tuple(range(2017, 2026))
 # The HR-VPP year used for a TESSERA year. This table is the only exception to
@@ -198,10 +199,28 @@ def write_json(path: Path, value: dict | list) -> None:
     atomic_write(path, lambda stream: stream.write(data + b"\n"))
 
 
+def verify_source_file(record: dict, base: Path, receipts: Path) -> Path:
+    """Reuse an identity check only while local source inode/stats are unchanged."""
+    path = (base / record['path']).resolve()
+    snapshot = list(_file_snapshot(path.stat()))
+    key = contract_pin({'path': str(path), **public_identity(record)})
+    receipt = receipts / f'{key}.json'
+    try:
+        saved = json.loads(receipt.read_text())
+        if saved == {'identity': public_identity(record), 'stat': snapshot}:
+            return path
+    except (OSError, ValueError):
+        pass
+    verify_file(record, base)
+    if list(_file_snapshot(path.stat())) != snapshot:
+        raise ValueError('Source changed while verifying its identity')
+    receipts.mkdir(parents=True, exist_ok=True)
+    write_json(receipt, {'identity': public_identity(record), 'stat': snapshot})
+    return path
+
+
 def validate_bundle(path: Path, record: dict, grid: Grid, year: int) -> dict:
     """Validate before canonical normalization can conceal absent inputs."""
-    from scripts.inference_comparison import _load_npz_for_inference
-
     data, buffer = _load_npz_for_inference(
         path, expected_sha256=record["sha256"], expected_size=record["size"])
     try:
@@ -309,6 +328,8 @@ class TesseraR4:
 
     def __init__(self, record: dict, base: Path, device: str):
         import torch
+        # The model core imports imint.training, which serving modules may not
+        # (tests/test_package_boundaries.py); it runs from the docker/lclu bundle.
         from scripts.inference_comparison import load_model, inference_aux_names
 
         path = verify_file(record, base)
@@ -401,7 +422,7 @@ def preparation_identity() -> dict:
 
 def implementation_identity() -> dict:
     # Hash the numerical path and serving code, including uncommitted changes.
-    files = [ROOT / "scripts/inference_comparison.py", ROOT / "scripts/cache_predict.py",
+    files = [ROOT / "scripts/inference_comparison.py", ROOT / "imint/sealed_io.py",
              ROOT / "imint/training/unified_dataset.py", ROOT / "imint/training/tile_config.py",
              ROOT / "imint/tile_grid.py",
              ROOT / "imint/exporters/export.py", ROOT / "imint/schema/unified_schema.py",
