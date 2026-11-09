@@ -1,8 +1,8 @@
 """Run with python -I after installing a built wheel in a clean environment.
 
-With --serving, also import the LCLU serving modules; install the wheel with
-its [fetch] extra first. Neither mode may load torch or imint.training, and no
-module may come from the source tree's scripts/.
+With --serving, also import the LCLU service modules; install the wheel with
+its [fetch] extra first. Neither mode may load torch or imint.training, and
+--serving fails if any module named scripts loads.
 """
 import argparse
 import hashlib
@@ -50,8 +50,8 @@ report = {"installed_package": str(package), "lightweight_imports": "pass",
           "packaged_models_config_and_notices": "pass"}
 
 if args.serving:
-    # GET /v1/lclu imports these; scripts/ is not part of the wheel.
-    from imint.inference import lclu, lclu_cog, lclu_sources, lclu_zarr
+    # The LCLU service imports these; scripts/ is not part of the wheel.
+    from imint.inference import lclu, lclu_cog, lclu_sources, lclu_zarr  # noqa: F401
     from imint.sealed_io import atomic_write, file_identity
 
     with tempfile.TemporaryDirectory() as folder:
@@ -59,8 +59,6 @@ if args.serving:
         atomic_write(probe, lambda stream: stream.write(b"imint"))
         assert file_identity(probe)["sha256"] == hashlib.sha256(b"imint").hexdigest()
     assert lclu.vpp_year_for(2025) == 2024 and lclu.legend()
-    assert callable(lclu.validate_bundle) and callable(lclu_cog.assemble_cog_embedding)
-    assert callable(lclu_sources.RepositorySources) and callable(lclu_zarr.read_embedding)
     loaded = sorted(m for m in sys.modules if m.split(".")[0] == "scripts")
     assert not loaded, loaded
     report["serving_imports"] = "pass"

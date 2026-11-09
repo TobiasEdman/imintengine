@@ -422,8 +422,7 @@ def preparation_identity() -> dict:
 
 def implementation_identity() -> dict:
     # Hash the numerical path and serving code, including uncommitted changes.
-    files = [ROOT / "scripts/inference_comparison.py", ROOT / "scripts/cache_predict.py",
-             ROOT / "imint/sealed_io.py",
+    files = [ROOT / "scripts/inference_comparison.py", ROOT / "imint/sealed_io.py",
              ROOT / "imint/training/unified_dataset.py", ROOT / "imint/training/tile_config.py",
              ROOT / "imint/tile_grid.py",
              ROOT / "imint/exporters/export.py", ROOT / "imint/schema/unified_schema.py",

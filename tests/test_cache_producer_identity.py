@@ -64,7 +64,7 @@ def run(root, code):
 
 
 @pytest.mark.parametrize("dependency", ["imint/training/sampler.py", "imint/training/unified_dataset.py",
-                                         "imint/training/tile_time.py"])
+                                         "imint/training/tile_time.py", "imint/sealed_io.py"])
 def test_dependency_change_preserves_pinned_read_but_refuses_resume(producer, dependency):
     run(producer, '''
         sha, counts = t._run_stage_a(model, data, cache, checkpoint)

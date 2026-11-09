@@ -74,7 +74,7 @@ Google Fonts.
 ## Manifest
 
 An identity is `{"path":"...","sha256":"<64 lowercase hex>","size":123}`.
-Generate it with `scripts.cache_predict.file_identity`; do not invent values.
+Generate it with `imint.sealed_io.file_identity`; do not invent values.
 Paths resolve against the manifest directory. Strict loading reuses
 `scripts/inference_comparison.py`. The head must have 28 classes, 128 embedding
 channels, gated fusion, all 11 ordered auxiliaries and the fraction head. Only

@@ -1,8 +1,9 @@
 """Sealed-file I/O shared by inference, prediction caches and LCLU serving.
 
-Regular files are opened without following links and checked again after
-reading, so a file replaced or changed during the read is refused rather than
-hashed or loaded. Files are published with one atomic replace.
+file_identity, and the loaders when given an expected size and sha256, open
+regular files without following links and check them again after reading,
+so a file replaced or changed during the read is refused. atomic_write
+publishes a file with one replace; contract_pin hashes a JSON contract.
 """
 from __future__ import annotations
 
