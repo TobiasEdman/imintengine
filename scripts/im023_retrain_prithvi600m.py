@@ -25,8 +25,15 @@ TESSERA key check and naming this backbone's relabel job.
     python scripts/im023_retrain_prithvi600m.py --variant main --epochs 30 \\
         --checkpoint-dir /cephfs/checkpoints/im023/prithvi600m_b28
 
+A checkpoint directory that already holds a model or a resume state is
+refused, because the trainer would silently continue from it. ``--resume``
+continues an interrupted run instead (a 600M run is ~10 h; an eviction must
+not cost it): the directory must hold ``last_checkpoint.pt`` and a training
+log of an unfinished run with this variant's class count and head.
+
 Arguments after ``--`` are appended to the train_unified.py command (last
 flag wins). They exist for the local CPU smoke; the H100 jobs pass none.
+The flags that pick the run's inputs and outputs may not be overridden there.
 """
 from __future__ import annotations
 
@@ -72,6 +79,9 @@ RECIPE = (
 )
 # Not in R4. --lambda-frac is the trainer's default, written out as the TESSERA recipe has it.
 FRACTION_HEAD = ("--enable-tradslag-head", "--lambda-frac", "1.0")
+# Extras may not redirect the run: another checkpoint dir would also bypass the refusal below.
+RESERVED_EXTRAS = ("--checkpoint-dir", "--label-dir", "--num-classes", "--warm-start-from")
+CHECKPOINT_STATE = ("best_model.pt", "last_checkpoint.pt")
 
 
 def train_args(variant: str, epochs: int, checkpoint_dir: str, paths: dict[str, str], *,
@@ -134,6 +144,26 @@ def preflight(variant: str, paths: dict[str, str]) -> list[str]:
     return problems
 
 
+def resume_problems(checkpoint_dir: Path, classes: int, fraction_head: bool) -> list[str]:
+    """Why ``checkpoint_dir`` may not be resumed as this run; empty when it may."""
+    last, log_path = checkpoint_dir / "last_checkpoint.pt", checkpoint_dir / "training_log.json"
+    if not last.is_file():
+        return [f"{last} missing: nothing to resume"]
+    if not log_path.is_file():
+        return [f"{log_path} missing: cannot tell which run {checkpoint_dir} holds"]
+    log = json.loads(log_path.read_text())
+    config = log.get("config", {})
+    problems = []
+    if log.get("status") in ("completed", "stopped"):
+        problems.append(f"the run in {checkpoint_dir} is {log['status']}, not interrupted")
+    if config.get("num_classes") != classes:
+        problems.append(f"{checkpoint_dir} trains {config.get('num_classes')} classes, this variant {classes}")
+    if bool(config.get("enable_tradslag_head")) != fraction_head:
+        problems.append(f"{checkpoint_dir} was started {'with' if config.get('enable_tradslag_head') else 'without'} "
+                        f"the fraction head")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     extra = argv[argv.index("--") + 1:] if "--" in argv else []
@@ -144,14 +174,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--checkpoint-dir", required=True)
     ap.add_argument("--no-fraction-head", action="store_true",
                     help="train without the fraction head, as R4 did (default: with it)")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue the interrupted run in --checkpoint-dir from its last_checkpoint.pt")
     for key, default in PATHS.items():
         ap.add_argument(f"--{key.replace('_', '-')}", default=default)
     args = ap.parse_args(own)
     paths = {key: getattr(args, key) for key in PATHS}
 
-    if (Path(args.checkpoint_dir) / "best_model.pt").exists():
-        print(f"REFUSED: {args.checkpoint_dir} already holds a model; move it before rerunning")
+    reserved = [a for a in extra if a.split("=", 1)[0] in RESERVED_EXTRAS]
+    if reserved:
+        print(f"REFUSED: {reserved} after -- would redirect the run; use this script's own options")
         return 1
+    checkpoint_dir = Path(args.checkpoint_dir)
+    if args.resume:
+        problems = resume_problems(checkpoint_dir, VARIANTS[args.variant][0], not args.no_fraction_head)
+        if problems:
+            print("REFUSED --resume:\n  " + "\n  ".join(problems))
+            return 1
+    else:
+        held = [name for name in CHECKPOINT_STATE if (checkpoint_dir / name).exists()]
+        if held:
+            print(f"REFUSED: {checkpoint_dir} already holds {held}; pass --resume to continue "
+                  f"that run, or move it before rerunning")
+            return 1
     problems = preflight(args.variant, paths)
     if problems:
         print("REFUSED:\n  " + "\n  ".join(problems))
@@ -167,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"class weights: {class_weight_source(paths['data_dir'])}")
     print(f"fraction head: {'off, as R4' if args.no_fraction_head else 'on, not in R4'}")
+    if args.resume:
+        print(f"resuming from {checkpoint_dir / 'last_checkpoint.pt'}")
     command = [sys.executable, str(ROOT / "scripts" / "train_unified.py"),
                *train_args(args.variant, args.epochs, args.checkpoint_dir, paths,
                            fraction_head=not args.no_fraction_head), *extra]

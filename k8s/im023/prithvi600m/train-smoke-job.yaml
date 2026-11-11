@@ -61,8 +61,11 @@ spec:
               RETRAIN=/workspace/imintengine/scripts/im023_retrain_prithvi600m.py
               cd /cephfs
               # --- run ---
+              # _SMOKE_OK names the commit that passed; the full runs require it to be theirs.
               python3 "$RETRAIN" --variant main --epochs 1 --checkpoint-dir /cephfs/checkpoints/im023/prithvi600m_smoke_main
+              echo "$SHA" > /cephfs/checkpoints/im023/prithvi600m_smoke_main/_SMOKE_OK
               python3 "$RETRAIN" --variant control --epochs 1 --checkpoint-dir /cephfs/checkpoints/im023/prithvi600m_smoke_control
+              echo "$SHA" > /cephfs/checkpoints/im023/prithvi600m_smoke_control/_SMOKE_OK
               echo "=== Done: $(date -u) ==="
           env:
             - name: PYTHONUNBUFFERED

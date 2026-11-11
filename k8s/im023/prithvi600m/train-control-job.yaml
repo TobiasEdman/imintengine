@@ -62,14 +62,19 @@ spec:
               cd /cephfs
               # --- run ---
               for v in main control; do
-                test -f "/cephfs/checkpoints/im023/prithvi600m_smoke_$v/best_model.pt" \
-                  || { echo "REFUSED: smoke for $v has not passed (k8s/im023/prithvi600m/train-smoke-job.yaml)"; exit 1; }
+                grep -qx "$SHA" "/cephfs/checkpoints/im023/prithvi600m_smoke_$v/_SMOKE_OK" \
+                  || { echo "REFUSED: smoke for $v has not passed at $SHA (k8s/im023/prithvi600m/train-smoke-job.yaml)"; exit 1; }
               done
-              python3 "$RETRAIN" --variant control --epochs 30 --checkpoint-dir /cephfs/checkpoints/im023/prithvi600m_control
+              RESUME_FLAG=(); [ "$RESUME" = 1 ] && RESUME_FLAG=(--resume)
+              python3 "$RETRAIN" --variant control --epochs 30 --checkpoint-dir /cephfs/checkpoints/im023/prithvi600m_control "${RESUME_FLAG[@]}"
               echo "=== Done: $(date -u) ==="
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            # "1" resumes an interrupted run from its last_checkpoint.pt
+            # (im023_retrain_prithvi600m.py --resume checks it is this run's).
+            - name: RESUME
+              value: "0"
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -68,6 +69,13 @@ def run(nmd_in: Path, nmd_b28: Path, distill_in: Path, distill_out: Path) -> dic
     if distill_out.resolve() in {p.resolve() for p in (nmd_in, nmd_b28, distill_in)}:
         raise ValueError("the output must be a new directory, never an input directory")
     reused = reused_manifest(nmd_in, nmd_b28)
+    # The reused manifest names the first model's relabelled cohort; writing there
+    # would replace those labels with this model's.
+    if distill_out.resolve() == Path(reused["outputs"]["distilled"]).resolve():
+        raise ValueError(f"{distill_out} holds the cohort the reused manifest was written for")
+    previous = distill_out / MANIFEST
+    if previous.is_file() and json.loads(previous.read_text())["inputs"]["distilled"] != str(distill_in):
+        raise ValueError(f"{previous} relabelled another distillation than {distill_in}")
     cohort = names(distill_in)
     if not cohort:
         raise ValueError(f"no distilled sidecars in {distill_in}")
@@ -87,8 +95,12 @@ def run(nmd_in: Path, nmd_b28: Path, distill_in: Path, distill_out: Path) -> dic
             stale.append(name)
             continue
         if is_current(out, source):
-            totals["skipped_current"] += 1
+            # The stamp covers the distilled source only; the NMD label may have
+            # been rebuilt since, so the stored output must still be the rule's.
             old, new = load(source)["label"], load(out)["label"]
+            if not np.array_equal(new, relabel_distilled(old, new_nmd)):
+                raise ValueError(f"{out.name}: stored output is not the rule applied to the current NMD label")
+            totals["skipped_current"] += 1
         else:
             distilled = load(source)
             if not np.array_equal(distilled["nmd_label_raw"], nmd["nmd_label_raw"]):
@@ -112,7 +124,10 @@ def run(nmd_in: Path, nmd_b28: Path, distill_in: Path, distill_out: Path) -> dic
                 "nmd_reused": {"manifest": str(reused_path), "sha256": digest(reused_path),
                                "git_sha": reused["git_sha"]},
                 **totals, **{key: reused[key] for key in NMD_TOTALS}}
-    (distill_out / MANIFEST).write_text(json.dumps(manifest, indent=2) + "\n")
+    # The manifest is the done signal: write it whole or not at all.
+    tmp = distill_out / f".{MANIFEST}.tmp"
+    tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+    os.replace(tmp, distill_out / MANIFEST)
     return manifest
 
 

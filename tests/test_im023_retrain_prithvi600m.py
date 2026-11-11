@@ -34,9 +34,15 @@ R4_CHECKPOINTS = "/cephfs/checkpoints/ladder/prithvi600m_r4"
 
 
 def manifest_flags(path: Path) -> dict[str, str | None]:
-    script = yaml.safe_load(path.read_text())["spec"]["template"]["spec"]["containers"][0]["command"][-1]
-    lines = [ln.strip().rstrip("\\").strip() for ln in script.splitlines()]
-    return flags(" ".join(ln for ln in lines if ln.startswith("--")).split())
+    """Every flag of the manifest's train_unified.py call, on whichever line it sits."""
+    (call,) = invocations(body(load(path)), "/workspace/imintengine/scripts/train_unified.py")
+    return call
+
+
+def test_manifest_flags_reads_the_whole_call():
+    r4 = manifest_flags(R4)
+    assert r4["--backbone-name"] == "prithvi_600m" and r4["--frac-dir"] == "/cephfs/tradslag_fracs"
+    assert "--enable-tradslag-head" not in r4                    # the R4 gap this retrain closes
 
 
 def test_control_without_the_head_is_the_r4_recipe():
@@ -202,7 +208,7 @@ def test_cpu_smoke_trains_each_variant_with_the_head(prithvi, tmp_path, variant,
         assert weights[28] < 5.0                             # its frequency, not the cap
         assert (checkpoints / tessera.B28_STATS).is_file()
     assert recipe.main(argv) == 1
-    assert "already holds a model" in capfd.readouterr().out
+    assert "pass --resume" in capfd.readouterr().out
 
 
 def test_no_fraction_head_reaches_the_trainer(prithvi, tmp_path, capfd, monkeypatch):
@@ -297,19 +303,90 @@ def test_training_jobs_call_the_recipe_on_r4_hardware():
         doc = load(JOBS / name)
         setup, run = body(doc).split("# --- run ---")
         setups.add(setup_as_tessera(doc, "im023_retrain_prithvi600m.py"))
+        full = name != "train-smoke-job.yaml"
         calls = [shlex.split(ln) for ln in run.splitlines() if '"$RETRAIN"' in ln]
         assert calls == [["python3", "$RETRAIN", "--variant", v, "--epochs", e,
-                          "--checkpoint-dir", f"/cephfs/checkpoints/im023/{d}"] for v, e, d in expected]
-        assert ("prithvi600m_smoke_$v/best_model.pt" in run) == (name != "train-smoke-job.yaml")
+                          "--checkpoint-dir", f"/cephfs/checkpoints/im023/{d}",
+                          *(["${RESUME_FLAG[@]}"] if full else [])] for v, e, d in expected]
+        assert ("prithvi600m_smoke_$v/_SMOKE_OK" in run) == full
         spec, container = pod(doc), pod(doc)["containers"][0]
-        for key in ("resources", "volumeMounts", "env"):
+        for key in ("resources", "volumeMounts"):
             assert container[key] == r4["containers"][0][key], (name, key)
+        resume = {"name": "RESUME", "value": "0"}
+        assert [e for e in container["env"] if e != resume] == r4["containers"][0]["env"]
+        assert (resume in container["env"]) == full             # resuming is an explicit edit
         assert {k: spec[k] for k in ("nodeSelector", "volumes")} == {k: r4[k] for k in ("nodeSelector", "volumes")}
         assert spec["affinity"] == pod(tessera_smoke)["affinity"]
         if name != "train-smoke-job.yaml":
             assert spec["activeDeadlineSeconds"] == r4["activeDeadlineSeconds"]
         assert "activeDeadlineSeconds" not in doc["spec"]       # queue time is free
     assert setups == {setup_as_tessera(tessera_smoke, "im023_retrain.py")}
+
+
+def test_full_runs_need_a_smoke_that_passed_at_their_commit(tmp_path):
+    """Re-pinning to a new commit invalidates the old smoke."""
+    full = body(load(JOBS / "train-b28-job.yaml"))
+    guard = full[full.index("for v in main control; do"):full.index("RESUME_FLAG=")]
+    marks = [ln.strip() for ln in body(load(JOBS / "train-smoke-job.yaml")).splitlines()
+             if ln.strip().startswith("echo") and "_SMOKE_OK" in ln]
+    assert len(marks) == 2
+    root = tmp_path / "im023"
+    for v in ("main", "control"):
+        (root / f"prithvi600m_smoke_{v}").mkdir(parents=True)
+
+    def bash(sha: str, script: str) -> int:
+        script = script.replace("/cephfs/checkpoints/im023", str(root))
+        return subprocess.run(["bash", "-c", f"set -euo pipefail; SHA={sha}\n{script}"],
+                              capture_output=True, text=True).returncode
+
+    first, second = "a" * 40, "b" * 40
+    assert bash(first, guard) == 1                               # no smoke yet
+    assert all(bash(first, mark) == 0 for mark in marks)
+    assert bash(first, guard) == 0
+    assert bash(second, guard) == 1                              # re-pinned: first's smoke does not count
+
+
+def _log(directory: Path, *, classes: int, head: bool, status: str = "running") -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "last_checkpoint.pt").write_bytes(b"state")
+    (directory / "training_log.json").write_text(json.dumps(
+        {"status": status, "config": {"num_classes": classes, "enable_tradslag_head": head}}))
+
+
+@pytest.mark.parametrize("held", recipe.CHECKPOINT_STATE)
+def test_existing_state_is_refused_without_resume(tmp_path, capsys, held):
+    (tmp_path / held).write_bytes(b"x")
+    assert recipe.main(["--variant", "control", "--epochs", "1", "--checkpoint-dir", str(tmp_path)]) == 1
+    assert "pass --resume" in capsys.readouterr().out
+
+
+def test_resume_accepts_only_this_runs_interrupted_state(tmp_path):
+    ok = tmp_path / "ok"
+    _log(ok, classes=29, head=True)
+    assert recipe.resume_problems(ok, 29, True) == []
+    assert recipe.resume_problems(tmp_path / "empty", 29, True)  # nothing to resume
+    for name, kwargs in {"done": dict(classes=29, head=True, status="completed"),
+                         "classes": dict(classes=28, head=True),
+                         "head": dict(classes=29, head=False)}.items():
+        _log(tmp_path / name, **kwargs)
+        assert recipe.resume_problems(tmp_path / name, 29, True), name
+    (ok / "training_log.json").unlink()
+    assert recipe.resume_problems(ok, 29, True)                   # cannot tell whose state it is
+
+
+def test_resume_refusal_happens_before_any_work(tmp_path, capsys):
+    _log(tmp_path, classes=28, head=True)
+    assert recipe.main(["--variant", "main", "--epochs", "30", "--checkpoint-dir", str(tmp_path),
+                        "--resume"]) == 1
+    assert "REFUSED --resume" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("extra", [["--checkpoint-dir", "/x"], ["--label-dir=/x"],
+                                   ["--num-classes", "23"], ["--warm-start-from", "/x/best_model.pt"]])
+def test_extras_may_not_redirect_the_run(tmp_path, capsys, extra):
+    assert recipe.main(["--variant", "control", "--epochs", "1", "--checkpoint-dir", str(tmp_path / "c"),
+                        "--", *extra]) == 1
+    assert "would redirect the run" in capsys.readouterr().out
 
 
 def test_relabel_job_runs_the_chain_that_made_the_r2_labels():

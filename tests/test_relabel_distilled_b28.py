@@ -57,10 +57,32 @@ def test_outputs_are_the_canonical_distillation_and_what_run_writes(root):
         np.testing.assert_array_equal(written[key], by_run[key], err_msg=key)
 
 
-def test_nmd_directory_is_only_read(root):
-    before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in (root / "nmd_b28").iterdir()}
+def test_inputs_are_only_read(root):
+    def snapshot():
+        return {(d, p.name): (p.read_bytes(), p.stat().st_mtime_ns)
+                for d in ("nmd_b28", "nmd_old", "second", "first_b28") for p in (root / d).iterdir()}
+
+    before = snapshot()
     assert reuse.main(reuse_args(root)) == 0
-    assert {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in (root / "nmd_b28").iterdir()} == before
+    assert snapshot() == before
+
+
+def test_refuses_to_write_over_another_cohort(root):
+    with pytest.raises(ValueError, match="cohort the reused manifest was written for"):
+        reuse.run(root / "nmd_old", root / "nmd_b28", root / "second", root / "first_b28")
+    assert reuse.main(reuse_args(root)) == 0
+    with pytest.raises(ValueError, match="relabelled another distillation"):  # second_b28 is second's
+        reuse.run(root / "nmd_old", root / "nmd_b28", root / "stored", root / "second_b28")
+
+
+def test_a_skipped_output_must_still_be_the_rule(root):
+    assert reuse.main(reuse_args(root)) == 0
+    out = root / "second_b28" / "T1.npz"
+    label = relabel.load(out)["label"].copy()
+    label[0, 0] = 9 if label[0, 0] != 9 else 8
+    rewrite(out, label=label)                                # stamp intact, content not the rule's
+    with pytest.raises(ValueError, match="not the rule applied to the current NMD label"):
+        reuse.main(reuse_args(root))
 
 
 def test_manifest_carries_the_reused_nmd_totals_and_resumes(root):
