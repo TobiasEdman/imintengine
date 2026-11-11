@@ -1,13 +1,16 @@
-"""IM-023 Prithvi-600M recipe: R4's flags plus the planned deltas, the preflight, a CPU smoke.
+"""IM-023 Prithvi-600M recipe: R4's flags plus the planned deltas, the preflight, a CPU smoke, the jobs.
 
 The cohort fixture of test_im023_retrain (R4-style NMD and TESSERA distilled
 sidecars, relabelled by relabel_barrblandskog.run) gains a second
 distillation, relabelled by relabel_distilled_b28 against the same NMD
-directory, as Prithvi-600M's is on the cluster.
+directory, as Prithvi-600M's is on the cluster. The jobs in
+k8s/im023/prithvi600m/ are parsed only; nothing here contacts a cluster.
 """
 from pathlib import Path
 import json
 import re
+import shlex
+import subprocess
 import sys
 
 import numpy as np
@@ -24,7 +27,7 @@ import relabel_barrblandskog as relabel
 import relabel_distilled_b28 as reuse
 from imint.fm.registry import MODEL_CONFIGS
 from imint.training.config import TrainingConfig
-from tests.test_im023_retrain import cohort, flags  # noqa: F401  (cohort is a fixture)
+from tests.test_im023_retrain import body, cohort, flags, invocations, load  # noqa: F401  (cohort is a fixture)
 
 R4 = ROOT / "k8s" / "ladder" / "ladder-r4-prithvi600m-job.yaml"
 R4_CHECKPOINTS = "/cephfs/checkpoints/ladder/prithvi600m_r4"
@@ -212,3 +215,136 @@ def test_no_fraction_head_reaches_the_trainer(prithvi, tmp_path, capfd, monkeypa
         assert ("--enable-tradslag-head" in out) == head
         assert ("--lambda-frac" in out) == head
         assert ("fraction head: on" if head else "fraction head: off") in out
+
+
+# ── manifests ────────────────────────────────────────────────────────────────
+
+JOBS = ROOT / "k8s" / "im023" / "prithvi600m"
+TESSERA_JOBS = ROOT / "k8s" / "im023"
+RUNS = {
+    "train-smoke-job.yaml": [("main", "1", "prithvi600m_smoke_main"),
+                             ("control", "1", "prithvi600m_smoke_control")],
+    "train-b28-job.yaml": [("main", "30", "prithvi600m_b28")],
+    "train-control-job.yaml": [("control", "30", "prithvi600m_control")],
+}
+#: Placeholder until the pin commit after the push, then the commit itself.
+SOURCE_SHA = re.compile(r"REPLACE_WITH_PUSHED_SHA|[0-9a-f]{40}")
+SHA_LINE = re.compile(r"^\s*SHA=(\S+)$", re.M)
+PINNED_SCRIPTS = ("scripts/im023_retrain.py", "scripts/relabel_barrblandskog.py",
+                  "scripts/im023_retrain_prithvi600m.py", "scripts/relabel_distilled_b28.py")
+
+
+def pod(doc: dict) -> dict:
+    return doc["spec"]["template"]["spec"]
+
+
+def pinned_sha() -> str:
+    (sha,) = {m for p in sorted(JOBS.glob("*.yaml")) for m in SHA_LINE.findall(body(load(p)))}
+    return sha
+
+
+def test_jobs_pin_one_source_and_the_tessera_image():
+    docs = [load(p) for p in sorted(JOBS.glob("*.yaml"))]
+    assert len(docs) == 4
+    assert SOURCE_SHA.fullmatch(pinned_sha())
+    images = {pod(d)["containers"][0]["image"] for d in docs}
+    tessera_images = {pod(load(p))["containers"][0]["image"] for p in sorted(TESSERA_JOBS.glob("*.yaml"))}
+    assert images == tessera_images and "@sha256:" in next(iter(images))
+    for doc in docs:
+        text = body(doc)
+        assert 'test "$(git rev-parse HEAD)" = "$SHA"' in text
+        assert text.index('[[ "$SHA" =~ ^[0-9a-f]{40}$ ]]') < text.index("apt-get")
+        assert doc["metadata"]["namespace"] == "prithvi-training-default"
+        assert doc["spec"]["backoffLimit"] == 0
+        resources = pod(doc)["containers"][0]["resources"]
+        assert resources["requests"] == resources["limits"]     # ICE admission webhook
+
+
+def test_an_unpinned_source_refuses_before_any_work():
+    guard = next(ln.strip() for ln in body(load(JOBS / "train-smoke-job.yaml")).splitlines() if "=~" in ln)
+    for sha, code in (("REPLACE_WITH_PUSHED_SHA", 1), ("abc", 1), ("0" * 40, 0)):
+        result = subprocess.run(["bash", "-c", f"set -euo pipefail; SHA={sha}; {guard}"],
+                                capture_output=True, text=True)
+        assert result.returncode == code, (sha, result.stdout)
+
+
+def test_pinned_source_carries_the_scripts():
+    sha = pinned_sha()
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        pytest.skip("source is pinned after the push")
+    git = ["git", "-C", str(ROOT)]
+    if subprocess.run([*git, "cat-file", "-e", sha], capture_output=True).returncode:
+        pytest.skip(f"{sha} not in this clone")
+    assert subprocess.run([*git, "merge-base", "--is-ancestor", sha, "HEAD"]).returncode == 0
+    changed = subprocess.run([*git, "diff", "--name-only", sha, "HEAD", "--", *PINNED_SCRIPTS],
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert changed == [], f"pinned SHA predates changes to {changed}: bump SHA in k8s/im023/prithvi600m/"
+
+
+def setup_as_tessera(doc: dict, script: str) -> str:
+    """The setup half with the job name, source pin and recipe script normalised."""
+    setup = body(doc).split("# --- run ---")[0].replace(doc["metadata"]["name"], "NAME")
+    setup = "".join(ln for ln in setup.splitlines(keepends=True) if "=~" not in ln)
+    return SHA_LINE.sub("SHA=PINNED", setup).replace(script, "RECIPE")
+
+
+def test_training_jobs_call_the_recipe_on_r4_hardware():
+    r4 = pod(load(R4))
+    tessera_smoke = load(TESSERA_JOBS / "train-tessera-smoke-job.yaml")
+    assert "affinity" not in r4                                  # R4 Prithvi-600M had no srv02 exclusion
+    setups = set()
+    for name, expected in RUNS.items():
+        doc = load(JOBS / name)
+        setup, run = body(doc).split("# --- run ---")
+        setups.add(setup_as_tessera(doc, "im023_retrain_prithvi600m.py"))
+        calls = [shlex.split(ln) for ln in run.splitlines() if '"$RETRAIN"' in ln]
+        assert calls == [["python3", "$RETRAIN", "--variant", v, "--epochs", e,
+                          "--checkpoint-dir", f"/cephfs/checkpoints/im023/{d}"] for v, e, d in expected]
+        assert ("prithvi600m_smoke_$v/best_model.pt" in run) == (name != "train-smoke-job.yaml")
+        spec, container = pod(doc), pod(doc)["containers"][0]
+        for key in ("resources", "volumeMounts", "env"):
+            assert container[key] == r4["containers"][0][key], (name, key)
+        assert {k: spec[k] for k in ("nodeSelector", "volumes")} == {k: r4[k] for k in ("nodeSelector", "volumes")}
+        assert spec["affinity"] == pod(tessera_smoke)["affinity"]
+        if name != "train-smoke-job.yaml":
+            assert spec["activeDeadlineSeconds"] == r4["activeDeadlineSeconds"]
+        assert "activeDeadlineSeconds" not in doc["spec"]       # queue time is free
+    assert setups == {setup_as_tessera(tessera_smoke, "im023_retrain.py")}
+
+
+def test_relabel_job_runs_the_chain_that_made_the_r2_labels():
+    text = body(load(JOBS / "relabel-b28-job.yaml"))
+    tessera_text = body(load(TESSERA_JOBS / "relabel-b28-job.yaml"))
+    ladder = load(ROOT / "k8s" / "ladder" / "distill-prithvi600m-job.yaml")
+
+    (built,) = invocations(text, "scripts/build_labels.py")
+    assert [built] == invocations(tessera_text, "scripts/build_labels.py")
+
+    *_, r2_dense = invocations(body(ladder), "scripts/distill_forest_labels.py")
+    old, new = invocations(text, "scripts/distill_forest_labels.py")
+    per_run = {"--data-dir", "--label-dir", "--out-dir"}
+    for fresh in (old, new):
+        assert {k: v for k, v in fresh.items() if k not in per_run} == \
+               {k: v for k, v in r2_dense.items() if k not in per_run}
+    assert old["--label-dir"] == r2_dense["--label-dir"] == "/cephfs/nmd2023_labels"
+    assert new["--label-dir"] == built["--label-out-dir"]
+
+    (sampled,) = invocations(text, "scripts/relabel_barrblandskog.py sample")
+    (verified,) = invocations(text, "scripts/relabel_barrblandskog.py verify")
+    assert sampled["--distill-in"] == verified["--distill-in"] == r2_dense["--out-dir"]
+    assert verified["--canon-distill-old"] == old["--out-dir"]
+    assert verified["--canon-distill-new"] == new["--out-dir"]
+
+    (ran,) = invocations(text, "scripts/relabel_distilled_b28.py")
+    (tessera_ran,) = invocations(tessera_text, "scripts/relabel_barrblandskog.py run")
+    assert ran["--nmd-in"] == tessera_ran["--nmd-in"] == old["--label-dir"]
+    assert ran["--nmd-b28"] == tessera_ran["--nmd-out"]
+    assert ran["--distill-in"] == recipe.PATHS["r2_label_dir"] == r2_dense["--out-dir"]
+    assert ran["--distill-out"] == recipe.PATHS["b28_label_dir"]
+    assert text.index("relabel_barrblandskog.py verify") < text.index("relabel_distilled_b28.py")
+    assert "relabel_barrblandskog.py run" not in text           # the NMD directory is only read
+
+    ours, theirs = pod(load(JOBS / "relabel-b28-job.yaml")), pod(load(TESSERA_JOBS / "relabel-b28-job.yaml"))
+    assert ours["nodeSelector"] == pod(ladder)["nodeSelector"] == theirs["nodeSelector"]
+    for key in ("image", "resources", "volumeMounts"):
+        assert ours["containers"][0][key] == theirs["containers"][0][key], key
