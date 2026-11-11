@@ -324,3 +324,76 @@ Körordning i klustret. Varje steg kräver Tobias godkännande och
    `nfi-amendment-inference-job.yaml` och `nfi-amendment-scoring-job.yaml`,
    och LUCAS med `eval-lucas-job.yaml`. Platshållarna för image-digest,
    commit och godkänt manifest fylls i efter sammanslagningen.
+
+## Prithvi-600M (task 0167)
+
+**Beslut (Tobias 2026-11-11):** Prithvi-600M tränas om med 29 klasser
+innan modellen delas. Upplägget är detsamma som för TESSERA, med en
+huvud- och en kontrollvariant. Tobias avgör senare vilka körningar som
+startas. Inget är kört i klustret.
+
+**R4 Prithvi-600M tränades utan fraktionshuvud.** Rättelsen av
+`FractionLoss` har därför aldrig berört den modellen. Belägg:
+
+- `scripts/gen_ladder_manifests.py:1737-1741` lägger för steg 4 bara till
+  `--frac-dir`, aldrig `--enable-tradslag-head`. Basmanifestet för
+  prithvi600m (`:61`, `k8s/train-v8b-nmd2023-long-job.yaml`) saknar flaggan.
+- `k8s/ladder/ladder-r4-prithvi600m-job.yaml:62-87` har `--frac-dir` (`:67`)
+  men ingen huvudflagga.
+- Flaggan är av som standard: `scripts/train_unified.py:231-235`,
+  `imint/training/config.py:152`. `FractionLoss` skapas bara när den är på
+  (`imint/training/trainer.py:428-433`) och läggs bara till förlusten då
+  (`:710-715`). Fraktionsfilerna lästes alltså in men övervakade ingenting.
+- R4-körningens `training_log.json` har `enable_tradslag_head: false`.
+
+De övriga kolumnernas R4-manifest har flaggan.
+
+**Varianter.** Receptet finns i `scripts/im023_retrain_prithvi600m.py`: R4:s
+flaggor plus följande. Ett test håller dem mot R4-manifestet och tillåter
+inga andra skillnader.
+
+| | huvud (`main`) | kontroll (`control`) |
+|---|---|---|
+| `--label-dir` | `/cephfs/distill/prithvi600m_r2_b28` | `/cephfs/distill/prithvi600m_r2` (R4:s) |
+| `--num-classes` | 29 | 28 |
+| `--class-stats` | `<checkpoint>/class_stats_b28.json` | (ingen, som R4) |
+| fraktionshuvud | `--enable-tradslag-head --lambda-frac 1.0` | samma |
+| `--checkpoint-dir` | `/cephfs/checkpoints/im023/prithvi600m_b28` | `/cephfs/checkpoints/im023/prithvi600m_control` |
+
+Huvud minus kontroll ger effekten av klass 28. Kontroll minus R4 ger
+effekten av att lägga till huvudet, inte av rättelsen som för TESSERA.
+`--lambda-frac 1.0` är tränarens standardvärde och skrivs bara ut.
+`--no-fraction-head` tar bort huvudet. Kontrollvarianten är då R4 flagga
+för flagga. Ingen aux-fusion `gated`; den gäller bara TESSERA.
+
+**Etiketter.** `k8s/im023/prithvi600m/relabel-b28-job.yaml` kör samma urval,
+kanoniska kedja och bit-för-bit-grind som TESSERA-jobbet. Kedjan använder
+Prithvi-600M:s R2-checkpoint, huvud och destillationsargument
+(`k8s/ladder/distill-prithvi600m-job.yaml`, steg 4).
+
+NMD-etiketterna med klass 28 beror inte på modellen och finns redan i
+`/cephfs/nmd2023_labels_b28`. `relabel_barrblandskog.py run` skulle skriva om
+dem och ersätta deras manifest med Prithvi-kohortens summor, så steg 4
+använder i stället `scripts/relabel_distilled_b28.py`. Skriptet läser
+NMD-katalogen men skriver aldrig dit. Det kontrollerar regel och indata i
+manifestet, och att varje kohort-tiles lagrade etikett är regeln
+tillämpad på källan. Därefter skriver det samma filer som `run` hade
+skrivit till `/cephfs/distill/prithvi600m_r2_b28`, med ett eget manifest
+där NMD-summorna är oförändrade.
+
+Klass 28:s vikt räknas i de delade NMD-etiketterna och blir därför
+densamma som för TESSERA:s huvudvariant.
+
+**Körning.** Ordningen är `relabel-b28-job.yaml`, `train-smoke-job.yaml` (en
+epok per variant) och sedan `train-b28-job.yaml` och
+`train-control-job.yaml` parallellt. Fullkörningarna startar inte innan
+båda rökmodellerna finns.
+
+- Resurser, monteringar, miljö och körtak (16 h) är R4:s. R4 tog 9 h 24 min
+  för 30 epoker utan huvud.
+- Image-digest och torch-version är desamma som i TESSERA:s IM-023-jobb.
+- Precis som de jobben utesluts srv02. R4 Prithvi-600M uteslöt den inte.
+- `SHA=` fylls i efter push. Fram till dess vägrar jobben att starta.
+
+Varje steg kräver Tobias godkännande och `kubectl create --dry-run=server`
+först.
