@@ -1,0 +1,10 @@
+{
+  "id": "0166",
+  "subject": "Release the two distilled models to a private HF repo",
+  "description": "Tobias asked on 2026-11-11 to share the trained models with Aleksis Pirinen (RISE) for review and further work. Decisions [user-stated 2026-11-11]: v8b_nmd2023_distill (Prithvi-EO-2.0 600M) and tessera_distill (seg head on TESSERA embeddings), weights under Apache-2.0, private repos in the RISE-Sweden Hugging Face organization; NFI labels come from temporary plots (CC0). Add an export script that writes weights-only safetensors + config.json + MANIFEST from a training checkpoint, a parity test (exported weights reproduce the checkpoint's outputs), and per-model model cards with LICENSE and NOTICE (Prithvi Apache-2.0 attribution, TESSERA CC0 attribution, Copernicus and Swedish data-source credits). Model cards carry development metrics only, no held-out NFI results. Not in scope: the upload itself (Tobias's go on repo names and content), inviting Aleksis, relicensing the repository code. Review: fresh Claude reviewer; integration is Tobias's decision.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/release-hf-distill-models",
+  "created_at": "2026-11-11T16:24:40Z",
+  "updated_at": "2026-11-11T16:24:40Z"
+}
