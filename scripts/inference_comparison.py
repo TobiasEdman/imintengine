@@ -366,6 +366,11 @@ def load_model(
     )
 
 
+def checkpoint_state_dict(ck: dict) -> dict:
+    """The weights of a checkpoint payload, under either key the trainer has used."""
+    return ck.get("model_state_dict", ck.get("state_dict", {}))
+
+
 def build_model_from_checkpoint(
     ck: dict,
     device,
@@ -396,8 +401,7 @@ def build_model_from_checkpoint(
     n_classes = ck_cfg.get("num_classes", cfg.num_classes)
 
     # State-dict first so we can inspect shapes for backbone detection
-    sd = {k.replace("model.", "", 1): v for k, v in
-          ck.get("model_state_dict", ck.get("state_dict", {})).items()}
+    sd = {k.replace("model.", "", 1): v for k, v in checkpoint_state_dict(ck).items()}
     pos_embed = sd.get("encoder.pos_embed")
 
     # n_aux_channels: infer from the aux branch's first conv rather than

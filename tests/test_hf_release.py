@@ -12,7 +12,10 @@ import pytest
 import torch
 
 from imint.schema.unified_schema import NUM_CLASSES_BEFORE_BARRBLANDSKOG, UNIFIED_CLASS_NAMES
-from imint.training.unified_dataset import AUX_NORM, normalize_aux_channel
+from imint.training.unified_dataset import (
+    AUX_LOG_TRANSFORM, AUX_NAN_NODATA_CHANNELS, AUX_NORM, AUX_YYDDD_DATE_CHANNELS,
+    normalize_aux_channel,
+)
 from scripts import hf_release
 from scripts.inference_comparison import CheckpointIdentityError, load_model
 
@@ -21,10 +24,15 @@ AUX = ["height", "volume", "basal_area", "diameter", "dem", "vpp_sosd",
 EMBEDDING = "geotessera-0.10.2"
 METRICS = {"miou": np.float64(0.2468), "overall_accuracy": np.float64(0.8642),
            "per_class_iou": {"tallskog": np.float64(0.1357)}}
-CARD_DIR = Path(__file__).resolve().parents[1] / "release/hf/imint-tessera-b28"
+REPO = Path(__file__).resolve().parents[1]
+CARD_DIR = REPO / "release/hf/imint-tessera-b28"
+DOCUMENTS = {"README.md": (CARD_DIR / "README.md").read_bytes(),
+             "NOTICE": (CARD_DIR / "NOTICE").read_bytes(),
+             "LICENSE": (REPO / "LICENSE").read_bytes()}
+SHA_A, SHA_B = "0" * 40, "1" * 40
 
 
-def _tessera_checkpoint(path: Path, num_classes: int) -> tuple[str, int]:
+def _tessera_checkpoint(path: Path, num_classes: int, num_tradslag: int = 4) -> tuple[str, int]:
     """A best_model.pt shaped like im023/tessera_b28 (gated aux, fraction head)."""
     from imint.fm.registry import build_backbone
     from imint.fm.upernet import build_segmentation_from_spec
@@ -34,7 +42,7 @@ def _tessera_checkpoint(path: Path, num_classes: int) -> tuple[str, int]:
     model = build_segmentation_from_spec(
         spec, encoder=encoder, num_classes=num_classes, img_size=504,
         decoder_channels=128, n_aux_channels=len(AUX), enable_tradslag_head=True,
-        num_tradslag=4, aux_fusion="gated", device="cpu")
+        num_tradslag=num_tradslag, aux_fusion="gated", device="cpu")
     torch.save({
         "state_dict": {f"model.{k}": v for k, v in model.state_dict().items()},
         "epoch": 7,
@@ -43,30 +51,45 @@ def _tessera_checkpoint(path: Path, num_classes: int) -> tuple[str, int]:
         "config": {"backbone_name": "tessera_v1", "num_classes": num_classes,
                    "n_aux_channels": len(AUX), "num_temporal_frames": 1,
                    "enable_multitemporal": False, "enable_tradslag_head": True,
-                   "num_tradslag": 4, "img_size": 504, "aux_fusion": "gated",
+                   "num_tradslag": num_tradslag, "img_size": 504, "aux_fusion": "gated",
                    "enabled_aux_names": AUX},
     }, path)
     data = path.read_bytes()
     return hashlib.sha256(data).hexdigest(), len(data)
 
 
-def _export(tmp_path: Path, num_classes: int = 29, **overrides):
+def _export(tmp_path: Path, num_classes: int = 29, num_tradslag: int = 4, **overrides):
     ckpt = tmp_path / "best_model.pt"
-    sha, size = _tessera_checkpoint(ckpt, num_classes)
+    sha, size = _tessera_checkpoint(ckpt, num_classes, num_tradslag)
     kwargs = dict(expected_sha256=sha, expected_size=size, model_id="test-model",
-                  exporter_git_sha="0" * 40, training_git_sha="1" * 40,
-                  embedding=EMBEDDING)
+                  exporter_git_sha=SHA_A, training_git_sha=SHA_B, embedding=EMBEDDING,
+                  documents=DOCUMENTS)
     kwargs.update(overrides)
     out = tmp_path / "release"
     manifest = hf_release.export_release(ckpt, out, **kwargs)
     return ckpt, sha, size, out, manifest
 
 
-def _rewrite(out: Path, name: str, data: bytes) -> None:
+def _anchor(out: Path) -> str:
+    return hashlib.sha256((out / hf_release.MANIFEST).read_bytes()).hexdigest()
+
+
+def _load(out: Path):
+    return hf_release.load_release(out, expected_manifest_sha256=_anchor(out))
+
+
+def _resign(out: Path, name: str, data: bytes) -> None:
     """Replace a release file AND re-sign it in the manifest (a consistent forgery)."""
     (out / name).write_bytes(data)
     manifest = json.loads((out / hf_release.MANIFEST).read_text())
-    manifest["files"][name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    section = "files" if name in manifest["files"] else "documents"
+    manifest[section][name] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    (out / hf_release.MANIFEST).write_text(json.dumps(manifest))
+
+
+def _edit_manifest(out: Path, edit) -> None:
+    manifest = json.loads((out / hf_release.MANIFEST).read_text())
+    edit(manifest)
     (out / hf_release.MANIFEST).write_text(json.dumps(manifest))
 
 
@@ -75,11 +98,13 @@ def exported(tmp_path):
     return _export(tmp_path)
 
 
+# ── parity and contents ──────────────────────────────────────────────────────
+
 def test_release_reproduces_checkpoint_outputs(exported):
     ckpt, sha, size, out, _ = exported
     ref, _, _, _ = load_model(str(ckpt), "cpu", expected_checkpoint_sha256=sha,
                               expected_checkpoint_size=size)
-    rel, _ = hf_release.load_release(out)
+    rel, _ = _load(out)
 
     ref_state, rel_state = ref.state_dict(), rel.state_dict()
     assert ref_state.keys() == rel_state.keys()
@@ -154,22 +179,45 @@ def test_no_metric_leaves_with_the_weights(exported):
         assert not [word for word in forbidden if word in text]
 
 
+def test_manifest_binds_files_documents_and_source(exported):
+    _, sha, size, out, manifest = exported
+    assert manifest == json.loads((out / hf_release.MANIFEST).read_text())
+    assert set(manifest) == hf_release.MANIFEST_KEYS
+    assert manifest["source_checkpoint"] == {"file": "best_model.pt", "sha256": sha, "size": size}
+    assert (manifest["exporter_git_sha"], manifest["training_git_sha"]) == (SHA_A, SHA_B)
+    assert set(manifest["documents"]) == set(hf_release.DOCUMENTS)
+    for section in ("files", "documents"):
+        for name, identity in manifest[section].items():
+            data = (out / name).read_bytes()
+            assert identity == {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+
+
+# ── export refusals ──────────────────────────────────────────────────────────
+
 def test_28_class_checkpoint_gets_the_names_before_barrblandskog(tmp_path):
     _, _, _, out, _ = _export(tmp_path, num_classes=NUM_CLASSES_BEFORE_BARRBLANDSKOG)
     config = json.loads((out / hf_release.CONFIG).read_text())
     assert config["classes"] == UNIFIED_CLASS_NAMES[:NUM_CLASSES_BEFORE_BARRBLANDSKOG]
 
 
-def test_other_class_counts_are_refused_and_write_nothing(tmp_path):
-    with pytest.raises(ValueError, match="classes"):
-        _export(tmp_path, num_classes=23)
-    assert not (tmp_path / "release").exists()
+@pytest.mark.parametrize("kwargs, message", [
+    (dict(num_classes=23), "classes"),
+    (dict(num_tradslag=3), "fraction head has 3 channels"),
+    (dict(embedding=None), "embedding source"),
+    (dict(exporter_git_sha="HEAD"), "full 40-hex"),
+    (dict(documents={"README.md": b"x"}), "documents must be exactly"),
+])
+def test_a_refused_export_writes_nothing(tmp_path, kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        _export(tmp_path, **kwargs)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["best_model.pt"]
 
 
-def test_tessera_release_requires_the_embedding_source(tmp_path):
-    with pytest.raises(ValueError, match="embedding source"):
-        _export(tmp_path, embedding=None)
-    assert not (tmp_path / "release").exists()
+def test_export_refuses_an_existing_folder(tmp_path):
+    (tmp_path / "release").mkdir()
+    (tmp_path / "release" / "stale.bin").write_bytes(b"old")
+    with pytest.raises(ValueError, match="already exists"):
+        _export(tmp_path)
 
 
 def test_wrong_checkpoint_identity_is_refused(tmp_path):
@@ -177,28 +225,31 @@ def test_wrong_checkpoint_identity_is_refused(tmp_path):
         _export(tmp_path, expected_sha256="f" * 64)
 
 
-def test_manifest_binds_files_documents_and_source(tmp_path):
-    _, sha, size, out, manifest = _export(tmp_path, card_dir=CARD_DIR)
-    assert manifest == json.loads((out / hf_release.MANIFEST).read_text())
-    assert manifest["source_checkpoint"] == {"file": "best_model.pt", "sha256": sha, "size": size}
-    assert manifest["exporter_git_sha"] == "0" * 40 and manifest["training_git_sha"] == "1" * 40
-    assert set(manifest["documents"]) == {"README.md", "NOTICE", "LICENSE"}
-    for section in ("files", "documents"):
-        for name, identity in manifest[section].items():
-            data = (out / name).read_bytes()
-            assert identity == {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
-    assert (out / "LICENSE").read_bytes() == (CARD_DIR.parents[2] / "LICENSE").read_bytes()
+# ── load refusals ────────────────────────────────────────────────────────────
 
-
-def test_expected_manifest_sha256_anchors_trust(exported):
+def test_load_requires_the_anchor(exported):
     _, _, _, out, _ = exported
-    good = hashlib.sha256((out / hf_release.MANIFEST).read_bytes()).hexdigest()
-    hf_release.load_release(out, expected_manifest_sha256=good)
+    with pytest.raises(hf_release.ReleaseIdentityError, match="expected_manifest_sha256"):
+        hf_release.load_release(out, expected_manifest_sha256=None)
     with pytest.raises(hf_release.ReleaseIdentityError, match="expected manifest"):
         hf_release.load_release(out, expected_manifest_sha256="0" * 64)
+    hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
 
 
-@pytest.mark.parametrize("name", [hf_release.WEIGHTS, hf_release.CONFIG])
+def test_the_anchor_catches_a_forgery_no_config_check_can(exported):
+    """Aux order reversed in both places: consistent, re-signed, and only the anchor sees it."""
+    _, _, _, out, _ = exported
+    anchor = _anchor(out)
+    config = json.loads((out / hf_release.CONFIG).read_text())
+    config["checkpoint_config"]["enabled_aux_names"].reverse()
+    config["input"]["aux"].reverse()
+    _resign(out, hf_release.CONFIG, json.dumps(config, indent=2, ensure_ascii=False).encode())
+    hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
+    with pytest.raises(hf_release.ReleaseIdentityError, match="expected manifest"):
+        hf_release.load_release(out, expected_manifest_sha256=anchor)
+
+
+@pytest.mark.parametrize("name", [hf_release.WEIGHTS, hf_release.CONFIG, *hf_release.DOCUMENTS])
 def test_a_changed_file_is_refused(exported, name):
     _, _, _, out, _ = exported
     path = out / name
@@ -206,15 +257,25 @@ def test_a_changed_file_is_refused(exported, name):
     data[-2] ^= 0x01
     path.write_bytes(bytes(data))
     with pytest.raises(hf_release.ReleaseIdentityError, match="does not match"):
-        hf_release.load_release(out)
+        hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
 
 
-@pytest.mark.parametrize("name", hf_release.GENERATED)
+@pytest.mark.parametrize("name", [*hf_release.GENERATED, *hf_release.DOCUMENTS])
 def test_a_missing_file_is_refused(exported, name):
     _, _, _, out, _ = exported
     (out / name).unlink()
     with pytest.raises(hf_release.ReleaseIdentityError):
-        hf_release.load_release(out)
+        hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
+
+
+def test_unlisted_files_are_refused_but_hidden_ones_ignored(exported):
+    _, _, _, out, _ = exported
+    (out / ".gitattributes").write_text("*.safetensors filter=lfs\n")
+    (out / ".cache").mkdir()
+    _load(out)
+    (out / "evil.py").write_text("print('hi')\n")
+    with pytest.raises(hf_release.ReleaseIdentityError, match="does not list"):
+        _load(out)
 
 
 @pytest.mark.parametrize("edit", [
@@ -222,45 +283,75 @@ def test_a_missing_file_is_refused(exported, name):
     lambda m: m["files"].update({"extra.bin": {"sha256": "0" * 64, "size": 0}}),
     lambda m: m.update(files=[]),
     lambda m: m["files"].update({hf_release.CONFIG: "not-an-entry"}),
+    lambda m: m.update(documents="garbage"),
+    lambda m: m.update(documents={"README.md": m["documents"]["README.md"]}),
+    lambda m: m.update(exporter_git_sha=None),
+    lambda m: m.update(training_git_sha="HEAD"),
+    lambda m: m.pop("produced_at"),
+    lambda m: m.update(extra_key=1),
 ])
 def test_a_malformed_manifest_is_refused(exported, edit):
     _, _, _, out, _ = exported
-    manifest = json.loads((out / hf_release.MANIFEST).read_text())
-    edit(manifest)
-    (out / hf_release.MANIFEST).write_text(json.dumps(manifest))
+    _edit_manifest(out, edit)
     with pytest.raises(hf_release.ReleaseIdentityError):
-        hf_release.load_release(out)
+        hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
 
 
 @pytest.mark.parametrize("edit", [
     lambda c: c["input"]["aux"].reverse(),
     lambda c: c.update(classes=c["classes"][:-1]),
+    lambda c: c["classes"].__setitem__(1, "granskog"),
+    lambda c: c["input"]["aux"][0].update(mean=8.0),
+    lambda c: c["input"]["aux"][1].update(log1p=False),
+    lambda c: c["fraction_species"].reverse(),
     lambda c: c.update(fraction_species=[]),
     lambda c: c["input"].update(img_size=224),
+    lambda c: c["input"].update(num_temporal_frames=4),
+    lambda c: c["input"].update(aux_normalization="z = x"),
+    lambda c: c["input"].update(extra=1),
+    lambda c: c.update(ignore_index=255),
     lambda c: c.update(model_id="another-model"),
     lambda c: c.update(validation_metrics={"miou": 0.5}),
 ])
-def test_a_consistent_forgery_of_config_is_refused(exported, edit):
-    """Even with the manifest re-signed, config.json must match the model."""
+def test_a_config_that_does_not_describe_the_model_is_refused(exported, edit):
+    """Re-signed, so only the comparison with the derived config can catch it."""
     _, _, _, out, _ = exported
     config = json.loads((out / hf_release.CONFIG).read_text())
     edit(config)
-    _rewrite(out, hf_release.CONFIG, json.dumps(config).encode())
+    _resign(out, hf_release.CONFIG, json.dumps(config).encode())
     with pytest.raises(hf_release.ReleaseIdentityError):
-        hf_release.load_release(out)
+        hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
 
+
+def test_weights_metadata_must_name_this_release(exported):
+    from safetensors.torch import load, save
+
+    _, _, _, out, _ = exported
+    state = load((out / hf_release.WEIGHTS).read_bytes())
+    _resign(out, hf_release.WEIGHTS, save(state, metadata={"format": hf_release.FORMAT,
+                                                           "model_id": "another-model"}))
+    with pytest.raises(hf_release.ReleaseIdentityError, match="metadata"):
+        hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
+
+
+# ── the model card ───────────────────────────────────────────────────────────
 
 def test_card_tables_match_the_schema_and_contract():
     card = (CARD_DIR / "README.md").read_text()
     classes = {int(i): name.split(" (")[0] for i, name in
                re.findall(r"\| (\d+) \| ([^|]+?) (?=\|)", card.split("## Classes")[1].split("##")[0])}
     assert [classes[i] for i in sorted(classes)] == UNIFIED_CLASS_NAMES
-    aux_rows = re.findall(r"\| (\d+) \| (\w+) \|[^\n]*\| ([\d.]+) \| ([\d.]+) \|", card)
-    assert [name for _, name, _, _ in aux_rows] == AUX
-    assert all((float(m), float(s)) == AUX_NORM[name] for _, name, m, s in aux_rows)
+    rows = re.findall(r"\| (\d+) \| (\w+) \| [^|]+ \| ([^|]+) \| ([^|]+) \| ([\d.]+) \| ([\d.]+) \|", card)
+    assert [name for _, name, *_ in rows] == AUX
+    for _, name, missing, transform, mean, std in rows:
+        assert (float(mean), float(std)) == AUX_NORM[name]
+        assert (missing.strip() == "NaN → mean") == (name in AUX_NAN_NODATA_CHANNELS), name
+        assert (missing.strip() == "≤ 0 → mean") == (name in AUX_YYDDD_DATE_CHANNELS), name
+        assert transform.strip().startswith("log1p") == (name in AUX_LOG_TRANSFORM), name
+        assert transform.strip().startswith("YYDDD") == (name in AUX_YYDDD_DATE_CHANNELS), name
 
 
-# ── export_guard ─────────────────────────────────────────────────────────────
+# ── export_guard and documents_at_head ──────────────────────────────────────
 
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
@@ -274,9 +365,9 @@ def repo(tmp_path):
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.org")
     _git(root, "config", "user.name", "t")
-    for rel in hf_release.CONTRACT_FILES:
+    for rel in [*hf_release.CONTRACT_FILES, "card/README.md", "card/NOTICE", "LICENSE"]:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
-        (root / rel).write_text("v1\n")
+        (root / rel).write_text(f"{rel} v1\n")
     (root / "other.py").write_text("x\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "train")
@@ -316,7 +407,34 @@ def test_guard_refuses_contract_drift_since_training(repo):
         hf_release.export_guard(root, trained)
 
 
-def test_guard_refuses_an_unknown_training_commit(repo):
+@pytest.mark.parametrize("sha, message", [("f" * 40, "not found"), ("HEAD", "full 40-hex"),
+                                          ("main", "full 40-hex")])
+def test_guard_refuses_an_unknown_or_symbolic_training_commit(repo, sha, message):
     root, _ = repo
-    with pytest.raises(SystemExit, match="not found"):
-        hf_release.export_guard(root, "f" * 40)
+    with pytest.raises(SystemExit, match=message):
+        hf_release.export_guard(root, sha)
+
+
+def test_guard_refuses_a_training_commit_head_does_not_descend_from(repo):
+    root, trained = repo
+    _git(root, "checkout", "-q", "-b", "side", trained)
+    (root / "side.py").write_text("s\n")
+    _git(root, "add", "side.py")
+    _git(root, "commit", "-q", "-m", "side")
+    side = _git(root, "rev-parse", "HEAD")
+    _git(root, "checkout", "-q", "-")
+    with pytest.raises(SystemExit, match="does not descend"):
+        hf_release.export_guard(root, side)
+
+
+def test_documents_come_from_head_not_the_working_copy(repo, tmp_path):
+    root, _ = repo
+    (root / "card/NOTICE").write_text("edited, not committed\n")
+    documents = hf_release.documents_at_head(root, root / "card")
+    assert documents == {"README.md": b"card/README.md v1\n", "NOTICE": b"card/NOTICE v1\n",
+                         "LICENSE": b"LICENSE v1\n"}
+    with pytest.raises(SystemExit, match="not inside"):
+        hf_release.documents_at_head(root, tmp_path / "elsewhere")
+    (root / "card2").mkdir()
+    with pytest.raises(SystemExit, match="not committed"):
+        hf_release.documents_at_head(root, root / "card2")
