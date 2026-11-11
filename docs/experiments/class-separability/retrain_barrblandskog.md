@@ -329,8 +329,9 @@ Körordning i klustret. Varje steg kräver Tobias godkännande och
 
 **Beslut (Tobias 2026-11-11):** Prithvi-600M tränas om med 29 klasser
 innan modellen delas. Upplägget är detsamma som för TESSERA, med en
-huvud- och en kontrollvariant. Tobias avgör senare vilka körningar som
-startas. Inget är kört i klustret.
+huvud- och en kontrollvariant. Båda varianterna har fraktionshuvud, båda
+körs, och körtaket är 16 h som för R4. Varje steg startas först på hans
+klartecken. Inget är kört i klustret.
 
 **R4 Prithvi-600M tränades utan fraktionshuvud.** Rättelsen av
 `FractionLoss` har därför aldrig berört den modellen. Belägg:
@@ -360,8 +361,11 @@ inga andra skillnader.
 | fraktionshuvud | `--enable-tradslag-head --lambda-frac 1.0` | samma |
 | `--checkpoint-dir` | `/cephfs/checkpoints/im023/prithvi600m_b28` | `/cephfs/checkpoints/im023/prithvi600m_control` |
 
-Huvud minus kontroll ger effekten av klass 28. Kontroll minus R4 ger
-effekten av att lägga till huvudet, inte av rättelsen som för TESSERA.
+Huvud minus kontroll ger effekten av klass 28: samma kod, samma huvud.
+Kontroll minus R4 blandar två saker: att huvudet läggs till, och alla
+ändringar i tränaren sedan R4, som klonade `main` utan pinnad commit
+(`ladder-r4-prithvi600m-job.yaml:44-49`). Den skillnaden är alltså inte
+effekten av rättelsen, som den var för TESSERA.
 `--lambda-frac 1.0` är tränarens standardvärde och skrivs bara ut.
 `--no-fraction-head` tar bort huvudet. Kontrollvarianten är då R4 flagga
 för flagga. Ingen aux-fusion `gated`; den gäller bara TESSERA.
@@ -387,7 +391,15 @@ densamma som för TESSERA:s huvudvariant.
 **Körning.** Ordningen är `relabel-b28-job.yaml`, `train-smoke-job.yaml` (en
 epok per variant) och sedan `train-b28-job.yaml` och
 `train-control-job.yaml` parallellt. Fullkörningarna startar inte innan
-båda rökmodellerna finns.
+båda rökkörningarna har gått igenom vid fullkörningarnas egen commit:
+rökjobbet skriver `_SMOKE_OK` med sin `SHA`, och fullkörningarna kräver
+samma `SHA` där.
+
+- En katalog som redan har `best_model.pt` eller `last_checkpoint.pt`
+  vägras, eftersom tränaren annars tyst skulle fortsätta därifrån.
+- En avbruten fullkörning fortsätter med `RESUME: "1"` i jobbets miljö.
+  Receptet kontrollerar då att träningsloggen hör till en oavslutad körning
+  med samma klassantal och huvud.
 
 - Resurser, monteringar, miljö och körtak (16 h) är R4:s. R4 tog 9 h 24 min
   för 30 epoker utan huvud.
