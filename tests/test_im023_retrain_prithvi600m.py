@@ -209,6 +209,8 @@ def test_cpu_smoke_trains_each_variant_with_the_head(prithvi, tmp_path, variant,
         assert (checkpoints / tessera.B28_STATS).is_file()
     assert recipe.main(argv) == 1
     assert "pass --resume" in capfd.readouterr().out
+    # The real trainer's log uses the keys resume_problems reads: a finished run is not resumable.
+    assert any("completed" in p for p in recipe.resume_problems(checkpoints, classes, True))
 
 
 def test_no_fraction_head_reaches_the_trainer(prithvi, tmp_path, capfd, monkeypatch):
@@ -228,8 +230,8 @@ def test_no_fraction_head_reaches_the_trainer(prithvi, tmp_path, capfd, monkeypa
 JOBS = ROOT / "k8s" / "im023" / "prithvi600m"
 TESSERA_JOBS = ROOT / "k8s" / "im023"
 RUNS = {
-    "train-smoke-job.yaml": [("main", "1", "prithvi600m_smoke_main"),
-                             ("control", "1", "prithvi600m_smoke_control")],
+    "train-smoke-job.yaml": [("main", "1", "prithvi600m_smoke_main_${SHA:0:12}"),
+                             ("control", "1", "prithvi600m_smoke_control_${SHA:0:12}")],
     "train-b28-job.yaml": [("main", "30", "prithvi600m_b28")],
     "train-control-job.yaml": [("control", "30", "prithvi600m_control")],
 }
@@ -308,7 +310,7 @@ def test_training_jobs_call_the_recipe_on_r4_hardware():
         assert calls == [["python3", "$RETRAIN", "--variant", v, "--epochs", e,
                           "--checkpoint-dir", f"/cephfs/checkpoints/im023/{d}",
                           *(["${RESUME_FLAG[@]}"] if full else [])] for v, e, d in expected]
-        assert ("prithvi600m_smoke_$v/_SMOKE_OK" in run) == full
+        assert ("prithvi600m_smoke_${v}_${SHA:0:12}/_SMOKE_OK" in run) == full
         spec, container = pod(doc), pod(doc)["containers"][0]
         for key in ("resources", "volumeMounts"):
             assert container[key] == r4["containers"][0][key], (name, key)
@@ -332,7 +334,7 @@ def test_full_runs_need_a_smoke_that_passed_at_their_commit(tmp_path):
     assert len(marks) == 2
     root = tmp_path / "im023"
     for v in ("main", "control"):
-        (root / f"prithvi600m_smoke_{v}").mkdir(parents=True)
+        (root / f"prithvi600m_smoke_{v}_{'a' * 12}").mkdir(parents=True)
 
     def bash(sha: str, script: str) -> int:
         script = script.replace("/cephfs/checkpoints/im023", str(root))
@@ -381,12 +383,24 @@ def test_resume_refusal_happens_before_any_work(tmp_path, capsys):
     assert "REFUSED --resume" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("extra", [["--checkpoint-dir", "/x"], ["--label-dir=/x"],
-                                   ["--num-classes", "23"], ["--warm-start-from", "/x/best_model.pt"]])
-def test_extras_may_not_redirect_the_run(tmp_path, capsys, extra):
+@pytest.mark.parametrize("extra", [
+    ["--checkpoint-dir", "/x"], ["--checkpoint-d", "/x"],    # argparse takes the abbreviation
+    ["--label-dir=/x"], ["--num-classes", "23"], ["--warm-start-from", "/x/best_model.pt"],
+    ["--resume-from", "/x/last_checkpoint.pt"], ["--data-dirs", "/x"], ["--frac-dir", "/x"],
+    ["--class-stats", "/x.json"], ["--device", "cpu", "--epochs", "99"],
+])
+def test_only_the_smoke_overrides_may_follow_the_separator(tmp_path, capsys, extra):
     assert recipe.main(["--variant", "control", "--epochs", "1", "--checkpoint-dir", str(tmp_path / "c"),
                         "--", *extra]) == 1
-    assert "would redirect the run" in capsys.readouterr().out
+    assert "only --backbone-name" in capsys.readouterr().out
+
+
+def test_preflight_refuses_b28_labels_from_another_distillation(prithvi):
+    manifest_path = Path(paths(prithvi)["b28_label_dir"]) / relabel.MANIFEST
+    manifest = json.loads(manifest_path.read_text())
+    manifest["inputs"]["distilled"] = "/cephfs/distill/tessera_r2"
+    manifest_path.write_text(json.dumps(manifest))
+    assert any("relabelled /cephfs/distill/tessera_r2" in p for p in recipe.preflight("main", paths(prithvi)))
 
 
 def test_relabel_job_runs_the_chain_that_made_the_r2_labels():

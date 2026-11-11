@@ -33,7 +33,7 @@ log of an unfinished run with this variant's class count and head.
 
 Arguments after ``--`` are appended to the train_unified.py command (last
 flag wins). They exist for the local CPU smoke; the H100 jobs pass none.
-The flags that pick the run's inputs and outputs may not be overridden there.
+Only the smoke's overrides (``SMOKE_EXTRAS``) are accepted there.
 """
 from __future__ import annotations
 
@@ -79,8 +79,11 @@ RECIPE = (
 )
 # Not in R4. --lambda-frac is the trainer's default, written out as the TESSERA recipe has it.
 FRACTION_HEAD = ("--enable-tradslag-head", "--lambda-frac", "1.0")
-# Extras may not redirect the run: another checkpoint dir would also bypass the refusal below.
-RESERVED_EXTRAS = ("--checkpoint-dir", "--label-dir", "--num-classes", "--warm-start-from")
+# The only flags allowed after --: the local CPU smoke's overrides, spelled out in
+# full. A denylist would not hold: train_unified's argparse accepts abbreviations,
+# so --checkpoint-d would redirect the run past the refusal below.
+SMOKE_EXTRAS = ("--backbone-name", "--patch-size", "--img-size", "--batch-size",
+                "--num-workers", "--device")
 CHECKPOINT_STATE = ("best_model.pt", "last_checkpoint.pt")
 
 
@@ -120,6 +123,10 @@ def preflight(variant: str, paths: dict[str, str]) -> list[str]:
             manifest = json.loads(manifest_path.read_text())
             if manifest["rule"] != RULE:
                 problems.append(f"labels made by rule {manifest['rule']}, expected {RULE}")
+            # Same tile names prove nothing if the labels came from another distillation.
+            made = (manifest["inputs"]["distilled"], manifest["outputs"]["distilled"])
+            if made != (str(r2), str(b28)):
+                problems.append(f"{manifest_path} relabelled {made[0]} into {made[1]}, not {r2} into {b28}")
             b28_names = npz_names(b28)
             missing = sorted(set(r2_names) - set(b28_names))
             unexpected = sorted(set(b28_names) - set(r2_names))
@@ -181,9 +188,9 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(own)
     paths = {key: getattr(args, key) for key in PATHS}
 
-    reserved = [a for a in extra if a.split("=", 1)[0] in RESERVED_EXTRAS]
-    if reserved:
-        print(f"REFUSED: {reserved} after -- would redirect the run; use this script's own options")
+    refused = [a for a in extra if a.startswith("-") and a.split("=", 1)[0] not in SMOKE_EXTRAS]
+    if refused:
+        print(f"REFUSED: {refused} after --; only {', '.join(SMOKE_EXTRAS)} may follow it")
         return 1
     checkpoint_dir = Path(args.checkpoint_dir)
     if args.resume:

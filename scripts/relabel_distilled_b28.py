@@ -69,9 +69,9 @@ def run(nmd_in: Path, nmd_b28: Path, distill_in: Path, distill_out: Path) -> dic
     if distill_out.resolve() in {p.resolve() for p in (nmd_in, nmd_b28, distill_in)}:
         raise ValueError("the output must be a new directory, never an input directory")
     reused = reused_manifest(nmd_in, nmd_b28)
-    # The reused manifest names the first model's relabelled cohort; writing there
-    # would replace those labels with this model's.
-    if distill_out.resolve() == Path(reused["outputs"]["distilled"]).resolve():
+    # The reused manifest names the first model's distillation and its relabelled
+    # copy; writing to either would replace that model's labels with this one's.
+    if distill_out.resolve() in {Path(reused[side]["distilled"]).resolve() for side in ("inputs", "outputs")}:
         raise ValueError(f"{distill_out} holds the cohort the reused manifest was written for")
     previous = distill_out / MANIFEST
     if previous.is_file() and json.loads(previous.read_text())["inputs"]["distilled"] != str(distill_in):

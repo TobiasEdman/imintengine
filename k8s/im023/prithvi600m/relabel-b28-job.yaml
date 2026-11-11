@@ -126,7 +126,8 @@ spec:
               n_r2=$(find "$R2" -maxdepth 1 -name '*.npz' | wc -l)
               n_b28=$(find "$B28" -maxdepth 1 -name '*.npz' | wc -l)
               echo "distilled sidecars: R4 $n_r2, b28 $n_b28"
-              test "$n_r2" -eq "$n_b28" || { echo "FATAL: cohort differs"; exit 1; }
+              # The manifest is the done signal: withdraw it if the cohort does not add up.
+              test "$n_r2" -eq "$n_b28" || { echo "FATAL: cohort differs"; rm -f "$B28/relabel_manifest.json"; exit 1; }
               echo "=== Done: $(date -u) ==="
           env:
             - name: PYTHONUNBUFFERED

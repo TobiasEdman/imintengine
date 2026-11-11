@@ -68,8 +68,9 @@ def test_inputs_are_only_read(root):
 
 
 def test_refuses_to_write_over_another_cohort(root):
-    with pytest.raises(ValueError, match="cohort the reused manifest was written for"):
-        reuse.run(root / "nmd_old", root / "nmd_b28", root / "second", root / "first_b28")
+    for theirs in ("first_b28", "stored"):                   # the reused manifest's output and input
+        with pytest.raises(ValueError, match="cohort the reused manifest was written for"):
+            reuse.run(root / "nmd_old", root / "nmd_b28", root / "second", root / theirs)
     assert reuse.main(reuse_args(root)) == 0
     with pytest.raises(ValueError, match="relabelled another distillation"):  # second_b28 is second's
         reuse.run(root / "nmd_old", root / "nmd_b28", root / "stored", root / "second_b28")

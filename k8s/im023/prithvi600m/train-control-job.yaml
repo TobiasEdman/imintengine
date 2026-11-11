@@ -62,7 +62,7 @@ spec:
               cd /cephfs
               # --- run ---
               for v in main control; do
-                grep -qx "$SHA" "/cephfs/checkpoints/im023/prithvi600m_smoke_$v/_SMOKE_OK" \
+                grep -qx "$SHA" "/cephfs/checkpoints/im023/prithvi600m_smoke_${v}_${SHA:0:12}/_SMOKE_OK" \
                   || { echo "REFUSED: smoke for $v has not passed at $SHA (k8s/im023/prithvi600m/train-smoke-job.yaml)"; exit 1; }
               done
               RESUME_FLAG=(); [ "$RESUME" = 1 ] && RESUME_FLAG=(--resume)
