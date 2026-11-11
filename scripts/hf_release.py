@@ -2,7 +2,7 @@
 """Export a training checkpoint as a Hugging Face model release, and load one.
 
 A release folder holds three generated files next to the hand-written model
-card, LICENSE and NOTICE (``release/hf/<model>/``):
+card and NOTICE (``release/hf/<model>/``) and the repository's LICENSE:
 
     model.safetensors  the checkpoint's state dict, keys and tensors verbatim
     config.json        the checkpoint config plus the input/output contract:
