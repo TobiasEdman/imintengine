@@ -138,26 +138,34 @@ No temporal or location coordinates are used.
 
 ## Usage
 
+Each published revision is listed in
+[`release/hf/imint-tessera-b28/RELEASES.md`](https://github.com/TobiasEdman/imintengine/blob/main/release/hf/imint-tessera-b28/RELEASES.md)
+on GitHub, with its Hugging Face revision, the exporter commit and the
+sha256 of its `MANIFEST.json`. GitHub is the anchor: it is a different
+channel from this repository, so a changed file here cannot also change the
+sha256 you check against.
+
 The repository is private: log in first (`hf auth login`, or set
-`HF_TOKEN`). Download a pinned revision, then check out the code at the
-commit named `exporter_git_sha` in `MANIFEST.json`:
+`HF_TOKEN`). Check out the exporter commit, install it, then download the
+pinned revision:
 
 ```bash
 git clone https://github.com/TobiasEdman/imintengine.git
 cd imintengine
+git checkout <exporter commit from RELEASES.md>
 pip install -e '.[inference]'
-python -c "from huggingface_hub import snapshot_download; snapshot_download('RISE-Sweden/imint-tessera-b28', revision='<commit>', local_dir='imint-tessera-b28')"
-git checkout <exporter_git_sha from imint-tessera-b28/MANIFEST.json>
+python -c "from huggingface_hub import snapshot_download; snapshot_download('RISE-Sweden/imint-tessera-b28', revision='<revision from RELEASES.md>', local_dir='imint-tessera-b28')"
 ```
 
 ```python
 import torch
 from scripts.hf_release import load_release
 
-# Checks every file against MANIFEST.json, and MANIFEST.json against the
-# sha256 the release was announced with, before any weight is read.
+# Checks MANIFEST.json against the published sha256, every file against
+# MANIFEST.json, and config.json against the model the weights build,
+# before the model is returned.
 model, config = load_release("imint-tessera-b28",
-                             expected_manifest_sha256="<announced sha256>")
+                             expected_manifest_sha256="<sha256 from RELEASES.md>")
 with torch.no_grad():
     logits, fractions = model(embedding, aux=aux, temporal_coords=None,
                               location_coords=None, return_fractions=True)
