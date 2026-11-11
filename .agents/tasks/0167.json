@@ -1,0 +1,10 @@
+{
+  "id": "0167",
+  "subject": "Set up the Prithvi-600M barrblandskog retrain",
+  "description": "Tobias decided on 2026-11-11: retrain Prithvi-600M with barrblandskog before it is shared, option 1 (IM-023 style), 600M only [user-stated 2026-11-11]. Mirror the TESSERA IM-023 setup for prithvi600m: relabel /cephfs/distill/prithvi600m_r2 to 29 classes the way k8s/im023/relabel-b28-job.yaml does for tessera_r2 (own relabel gate), and add a recipe with a main variant (29 classes, b28 labels) and a control variant (28 classes, R4's own distilled labels), both from the ladder R4 Prithvi-600M recipe (k8s/ladder/ladder-r4-prithvi600m-job.yaml) with a flag-parity test against that manifest, plus smoke and full-run job specs pinned to a commit and a server dry-run of each. Not in scope: starting the relabel, smoke or full runs (GPU and cluster runs need Tobias's go, and he decides whether the control runs), the 2026 plan arms A and B (docs/plans/lclu_2026_prithvi600.md), Prithvi-300M, and sharing the model (task 0166 covers TESSERA). Review: fresh Claude reviewer; integration is Tobias's decision.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/im023-prithvi600m-b28",
+  "created_at": "2026-11-11T17:41:38Z",
+  "updated_at": "2026-11-11T17:41:38Z"
+}
