@@ -354,6 +354,34 @@ def load_model(
     feeds (grid_size + expected token count match the encoder output). None →
     the historical behaviour (pos_embed / config / pool-count reconciliation).
     """
+    ck = _load_checkpoint_for_inference(
+        ckpt_path,
+        map_location="cpu",
+        expected_sha256=expected_checkpoint_sha256,
+        expected_size=expected_checkpoint_size,
+    )
+    return build_model_from_checkpoint(
+        ck, device, backbone_name, img_size,
+        return_checkpoint_config=return_checkpoint_config,
+    )
+
+
+def build_model_from_checkpoint(
+    ck: dict,
+    device,
+    backbone_name: str | None = None,
+    img_size: int | None = None,
+    *,
+    return_checkpoint_config: bool = False,
+):
+    """Build and load the model from an already-deserialized checkpoint.
+
+    ``ck`` is the payload ``load_model`` reads (``config``, ``state_dict``,
+    optional ``epoch``/``metrics``). Split out so a checkpoint that arrives
+    in another container — the safetensors release in ``scripts/hf_release.py``
+    — is rebuilt by exactly the same code as a ``best_model.pt``. Arguments
+    and return value are those of ``load_model``.
+    """
     from imint.fm.registry import (
         MODEL_CONFIGS, build_backbone, resolve_backbone_name,
     )
@@ -361,13 +389,6 @@ def load_model(
     from imint.training.config import TrainingConfig
 
     cfg = TrainingConfig()
-    ck = _load_checkpoint_for_inference(
-        ckpt_path,
-        map_location="cpu",
-        expected_sha256=expected_checkpoint_sha256,
-        expected_size=expected_checkpoint_size,
-    )
-
     ck_cfg = ck.get("config", {})
     num_frames = ck_cfg.get("num_temporal_frames", cfg.num_temporal_frames)
     # num_classes from the checkpoint (23 for v8b, 28 for the NMD2023 finetune),
