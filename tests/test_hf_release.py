@@ -30,6 +30,7 @@ DOCUMENTS = {"README.md": (CARD_DIR / "README.md").read_bytes(),
              "NOTICE": (CARD_DIR / "NOTICE").read_bytes(),
              "LICENSE": (REPO / "LICENSE").read_bytes()}
 SHA_A, SHA_B = "0" * 40, "1" * 40
+CARD = "release/hf/test-model"
 
 
 def _tessera_checkpoint(path: Path, num_classes: int, num_tradslag: int = 4) -> tuple[str, int]:
@@ -206,6 +207,7 @@ def test_28_class_checkpoint_gets_the_names_before_barrblandskog(tmp_path):
     (dict(embedding=None), "embedding source"),
     (dict(exporter_git_sha="HEAD"), "full 40-hex"),
     (dict(documents={"README.md": b"x"}), "documents must be exactly"),
+    (dict(documents={}), "documents must be exactly"),
 ])
 def test_a_refused_export_writes_nothing(tmp_path, kwargs, message):
     with pytest.raises(ValueError, match=message):
@@ -284,6 +286,7 @@ def test_unlisted_files_are_refused_but_hidden_ones_ignored(exported):
     lambda m: m.update(files=[]),
     lambda m: m["files"].update({hf_release.CONFIG: "not-an-entry"}),
     lambda m: m.update(documents="garbage"),
+    lambda m: m.update(documents={}),                       # a release without its licence
     lambda m: m.update(documents={"README.md": m["documents"]["README.md"]}),
     lambda m: m.update(exporter_git_sha=None),
     lambda m: m.update(training_git_sha="HEAD"),
@@ -318,6 +321,21 @@ def test_a_config_that_does_not_describe_the_model_is_refused(exported, edit):
     _, _, _, out, _ = exported
     config = json.loads((out / hf_release.CONFIG).read_text())
     edit(config)
+    _resign(out, hf_release.CONFIG, json.dumps(config).encode())
+    with pytest.raises(hf_release.ReleaseIdentityError):
+        hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
+
+
+@pytest.mark.parametrize("forged", [
+    [],                                                      # not a dict
+    {"num_classes": "x"},
+    {"backbone_name": "no_such_backbone"},
+])
+def test_a_forged_checkpoint_config_is_the_same_refusal(exported, forged):
+    """Callers catch one error type, even when the forgery breaks the build itself."""
+    _, _, _, out, _ = exported
+    config = json.loads((out / hf_release.CONFIG).read_text())
+    config["checkpoint_config"] = forged if isinstance(forged, list) else config["checkpoint_config"] | forged
     _resign(out, hf_release.CONFIG, json.dumps(config).encode())
     with pytest.raises(hf_release.ReleaseIdentityError):
         hf_release.load_release(out, expected_manifest_sha256=None, trust_unanchored=True)
@@ -365,7 +383,7 @@ def repo(tmp_path):
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.org")
     _git(root, "config", "user.name", "t")
-    for rel in [*hf_release.CONTRACT_FILES, "card/README.md", "card/NOTICE", "LICENSE"]:
+    for rel in [*hf_release.CONTRACT_FILES, f"{CARD}/README.md", f"{CARD}/NOTICE", "LICENSE"]:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(f"{rel} v1\n")
     (root / "other.py").write_text("x\n")
@@ -427,14 +445,14 @@ def test_guard_refuses_a_training_commit_head_does_not_descend_from(repo):
         hf_release.export_guard(root, side)
 
 
-def test_documents_come_from_head_not_the_working_copy(repo, tmp_path):
+def test_documents_are_this_models_card_at_head(repo):
     root, _ = repo
-    (root / "card/NOTICE").write_text("edited, not committed\n")
-    documents = hf_release.documents_at_head(root, root / "card")
-    assert documents == {"README.md": b"card/README.md v1\n", "NOTICE": b"card/NOTICE v1\n",
-                         "LICENSE": b"LICENSE v1\n"}
-    with pytest.raises(SystemExit, match="not inside"):
-        hf_release.documents_at_head(root, tmp_path / "elsewhere")
-    (root / "card2").mkdir()
+    (root / CARD / "NOTICE").write_text("edited, not committed\n")
+    documents = hf_release.documents_at_head(root, "test-model")
+    assert documents == {"README.md": f"{CARD}/README.md v1\n".encode(),
+                         "NOTICE": f"{CARD}/NOTICE v1\n".encode(), "LICENSE": b"LICENSE v1\n"}
     with pytest.raises(SystemExit, match="not committed"):
-        hf_release.documents_at_head(root, root / "card2")
+        hf_release.documents_at_head(root, "another-model")      # no card of its own
+    for bad in ("../test-model", "a/b", ""):
+        with pytest.raises(SystemExit, match="plain model id"):
+            hf_release.documents_at_head(root, bad)

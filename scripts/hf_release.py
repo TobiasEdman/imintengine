@@ -2,8 +2,9 @@
 """Export a training checkpoint as a Hugging Face model release, and load one.
 
 A release folder holds three generated files plus the model card, NOTICE and
-LICENSE, taken from the exporter commit (``release/hf/<model>/`` and the
-repository root):
+LICENSE, taken from the exporter commit (``release/hf/<model_id>/`` and the
+repository root). The documents are part of every release: the licence is
+among what the manifest vouches for.
 
     model.safetensors  the checkpoint's state dict, keys and tensors verbatim
     config.json        the checkpoint config plus the input/output contract:
@@ -27,8 +28,9 @@ The CLI exports only from a clean tree whose HEAD is on origin/main, so the
 card's ``git checkout <exporter_git_sha>`` works for anyone; only when the
 training commit is a full sha that HEAD descends from; and only when the files
 that define the input contract are unchanged since that commit. Untracked
-files are ignored (they cannot shadow the imported modules), and origin/main
-is the local ref: fetch first.
+files are the operator's responsibility (an untracked ``torch.py`` next to
+the scripts would shadow the real package), and origin/main is the local
+ref: fetch first.
 
 Usage:
     git fetch origin main
@@ -38,8 +40,9 @@ Usage:
         --model-id imint-tessera-b28 \\
         --training-git-sha <full sha the model was trained at> \\
         --embedding geotessera-0.10.2 \\
-        --card-dir release/hf/imint-tessera-b28 \\
         --out-dir /tmp/hf-stage/imint-tessera-b28
+
+The card and NOTICE come from ``release/hf/<model_id>/`` at HEAD.
 """
 from __future__ import annotations
 
@@ -190,8 +193,8 @@ def release_config(ck: dict, model, img_size: int, *, model_id: str,
 def export_release(checkpoint: str | Path, out_dir: str | Path, *,
                    expected_sha256: str, expected_size: int, model_id: str,
                    exporter_git_sha: str, training_git_sha: str,
-                   embedding: str | None = None,
-                   documents: dict[str, bytes] | None = None) -> dict:
+                   documents: dict[str, bytes],
+                   embedding: str | None = None) -> dict:
     """Write the release folder atomically; return the manifest.
 
     The checkpoint is authenticated against ``expected_sha256`` and
@@ -211,8 +214,7 @@ def export_release(checkpoint: str | Path, out_dir: str | Path, *,
     for label, sha in (("exporter", exporter_git_sha), ("training", training_git_sha)):
         if not FULL_SHA.fullmatch(sha):
             raise ValueError(f"the {label} commit must be a full 40-hex sha, not {sha!r}")
-    documents = documents or {}
-    if documents and set(documents) != set(DOCUMENTS):
+    if set(documents) != set(DOCUMENTS):
         raise ValueError(f"documents must be exactly {DOCUMENTS}")
 
     ck = _load_checkpoint_for_inference(
@@ -297,8 +299,8 @@ def _read_manifest(root: Path, expected_sha256: str | None, trust_unanchored: bo
     files, documents = manifest["files"], manifest["documents"]
     if not isinstance(files, dict) or set(files) != {WEIGHTS, CONFIG}:
         raise ReleaseIdentityError(f"MANIFEST.json must list exactly {WEIGHTS} and {CONFIG}")
-    if not isinstance(documents, dict) or set(documents) not in (set(), set(DOCUMENTS)):
-        raise ReleaseIdentityError(f"MANIFEST.json documents must be none or exactly {DOCUMENTS}")
+    if not isinstance(documents, dict) or set(documents) != set(DOCUMENTS):
+        raise ReleaseIdentityError(f"MANIFEST.json documents must be exactly {DOCUMENTS}")
     return manifest
 
 
@@ -338,14 +340,17 @@ def load_release(release_dir: str | Path, device="cpu", *,
         raise ReleaseIdentityError(f"{root / CONFIG} must have exactly the keys {sorted(CONFIG_KEYS)}")
     if config["format"] != FORMAT or config["model_id"] != manifest["model_id"]:
         raise ReleaseIdentityError(f"{root / CONFIG} names another format or model than the manifest")
+    if not isinstance(config["checkpoint_config"], dict) or not isinstance(config["input"], dict):
+        raise ReleaseIdentityError(f"{root / CONFIG} has a malformed checkpoint_config or input")
 
     ck = {"state_dict": load(weights), "config": config["checkpoint_config"],
           "epoch": config["epoch"]}
-    model, _, _, img_size = build_model_from_checkpoint(ck, device)
+    # A forged checkpoint_config can fail inside the build; every refusal is the same error.
     try:
+        model, _, _, img_size = build_model_from_checkpoint(ck, device)
         expected = release_config(ck, model, img_size, model_id=config["model_id"],
                                   embedding=config["input"].get("embedding"))
-    except (TypeError, ValueError, AttributeError) as exc:
+    except (TypeError, ValueError, AttributeError, KeyError, RuntimeError) as exc:
         raise ReleaseIdentityError(f"config.json does not describe the model: {exc}") from exc
     if _canonical(config) != _canonical(expected):
         raise ReleaseIdentityError("config.json does not describe the model this "
@@ -388,13 +393,15 @@ def export_guard(root: Path, training_git_sha: str) -> str:
     return _git(root, "rev-parse", "HEAD").stdout.strip()
 
 
-def documents_at_head(root: Path, card_dir: str | Path) -> dict[str, bytes]:
-    """README.md and NOTICE from ``card_dir`` and the root LICENSE, as committed at HEAD."""
-    try:
-        rel = Path(card_dir).resolve().relative_to(root.resolve())
-    except ValueError:
-        raise SystemExit(f"refusing to export: {card_dir} is not inside {root}") from None
-    paths = {name: (rel / name).as_posix() for name in DOCUMENTS if name != "LICENSE"}
+def documents_at_head(root: Path, model_id: str) -> dict[str, bytes]:
+    """README.md and NOTICE from ``release/hf/<model_id>/`` and the root LICENSE, as committed at HEAD.
+
+    The card folder follows from the model id, so one model's card cannot
+    ship under another model's manifest.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model_id):
+        raise SystemExit(f"refusing to export: {model_id!r} is not a plain model id")
+    paths = {name: f"release/hf/{model_id}/{name}" for name in DOCUMENTS if name != "LICENSE"}
     paths["LICENSE"] = "LICENSE"
     documents = {}
     for name, path in paths.items():
@@ -417,8 +424,6 @@ def main(argv: list[str] | None = None) -> int:
     exp.add_argument("--embedding", default=None,
                      help="embedding source the tiles record (TESSERA only), "
                           "e.g. geotessera-0.10.2")
-    exp.add_argument("--card-dir", required=True,
-                     help="committed folder with the model card (README.md) and NOTICE")
     exp.add_argument("--out-dir", required=True, help="a new folder; must not exist")
     args = parser.parse_args(argv)
 
@@ -428,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_sha256=args.expected_sha256, expected_size=args.expected_size,
         model_id=args.model_id, exporter_git_sha=exporter_git_sha,
         training_git_sha=args.training_git_sha, embedding=args.embedding,
-        documents=documents_at_head(ROOT, args.card_dir))
+        documents=documents_at_head(ROOT, args.model_id))
     print(json.dumps(manifest, indent=2))
     manifest_sha = hashlib.sha256((Path(args.out_dir) / MANIFEST).read_bytes()).hexdigest()
     print(f"MANIFEST.json sha256: {manifest_sha}")
