@@ -346,8 +346,10 @@ def load_release(release_dir: str | Path, device="cpu", *,
     ck = {"state_dict": load(weights), "config": config["checkpoint_config"],
           "epoch": config["epoch"]}
     # A forged checkpoint_config can fail inside the build; every refusal is the same error.
+    # The build runs on the CPU so a device failure (CUDA out of memory is a RuntimeError,
+    # like a strict-load shape mismatch) is not reported as an identity refusal.
     try:
-        model, _, _, img_size = build_model_from_checkpoint(ck, device)
+        model, _, _, img_size = build_model_from_checkpoint(ck, "cpu")
         expected = release_config(ck, model, img_size, model_id=config["model_id"],
                                   embedding=config["input"].get("embedding"))
     except (TypeError, ValueError, AttributeError, KeyError, RuntimeError) as exc:
@@ -355,7 +357,7 @@ def load_release(release_dir: str | Path, device="cpu", *,
     if _canonical(config) != _canonical(expected):
         raise ReleaseIdentityError("config.json does not describe the model this "
                                    "checkout builds from the weights")
-    return model, config
+    return model.to(device), config
 
 
 def _git(root: Path, *args: str, text: bool = True) -> subprocess.CompletedProcess:
