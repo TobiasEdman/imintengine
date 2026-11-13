@@ -302,6 +302,8 @@ Copyright 2026 RISE Research Institutes of Sweden AB
   the images, maps, text and captions are CC0 1.0, but the **narration voice**
   (a synthetic voice clone) is **not** covered by CC0. It may not be extracted,
   reused, or used to train or prompt voice models.
+- **Model weights** released through `release/hf/` are licensed under the
+  **Apache License 2.0**, with the credits in each release's `NOTICE`.
 - **Third-party components** (models, data, libraries, including the
   vendored scripts in `docs/js/vendor/`) keep their own licenses; see
   [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

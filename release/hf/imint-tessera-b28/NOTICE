@@ -1,0 +1,30 @@
+IMINT TESSERA b28
+Copyright 2026 RISE Research Institutes of Sweden AB
+
+The model weights are licensed under the Apache License, Version 2.0
+(see LICENSE). They were trained by RISE and contain no third-party
+model weights.
+
+The model takes the following data as input, or was trained on it:
+
+- TESSERA annual embeddings, University of Cambridge, fetched with
+  geotessera 0.10.2. CC0 1.0. The authors ask to be cited: Feng et al.,
+  "TESSERA: Temporal Embeddings of Surface Spectra for Earth
+  Representation and Analysis", arXiv:2506.20380.
+- Contains modified Copernicus Sentinel data, through the TESSERA
+  embeddings and HR-VPP.
+- HR-VPP vegetation phenology: European Union's Copernicus Land
+  Monitoring Service information.
+- Copernicus DEM GLO-30: (c) DLR e.V. 2010-2014 and (c) Airbus Defence
+  and Space GmbH 2014-2018, provided under COPERNICUS by the European
+  Union and ESA.
+- Nationella marktäckedata (NMD) 2023, base layer and Trädslag layer,
+  Naturvårdsverket. CC0.
+- Skogliga grunddata and Trädhöjd (from Lantmäteriet's Laserdata skog),
+  Skogsstyrelsen.
+- SLU Markfuktighetskarta, Swedish University of Agricultural Sciences,
+  distributed by Skogsstyrelsen.
+- Crop parcels (LPIS), Jordbruksverket.
+- Clear-cuts (utförda avverkningar), Skogsstyrelsen.
+- Riksskogstaxeringen (Swedish National Forest Inventory), SLU:
+  temporary sample plots, used to refine the forest-type labels.
