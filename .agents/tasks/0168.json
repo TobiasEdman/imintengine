@@ -2,9 +2,12 @@
   "id": "0168",
   "subject": "Record the TESSERA b28 release anchor",
   "description": "Tobias approved on 2026-11-13 the upload of im023/tessera_b28 to the private repo RISE-Sweden/imint-tessera-b28, followed by a docs PR with its RELEASES.md row [user-stated 2026-11-13]. The release was exported from main 09e135c (PR #158) and uploaded as HF revision a40411aed116faaaeea95b1ec271f7dfab63b858; a pinned download loads with the anchor and is bit-identical to the checkpoint. Add the row to release/hf/imint-tessera-b28/RELEASES.md: date, HF revision, exporter commit, MANIFEST.json sha256 89e4f6d3b558e1bc96da3a23950d003e08bcb24c174c196c6d9c09eb96686bf7, source checkpoint sha256. Not in scope: inviting Aleksis (Tobias), the Prithvi-600M b28 release. Review: fresh Claude reviewer; integration is Tobias's decision.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/release-b28-anchor",
   "created_at": "2026-11-14T18:52:00Z",
-  "updated_at": "2026-11-14T18:52:00Z"
+  "updated_at": "2026-11-14T18:52:22Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-14T18:52:22Z"
 }
