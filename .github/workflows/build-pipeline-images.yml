@@ -29,6 +29,10 @@ on:
       - 'docker/**'
       - '.github/workflows/build-pipeline-images.yml'
       - '.github/scripts/select_pipeline_images.py'
+      - 'scripts/r5_tessera_pilot.py'
+      - 'scripts/run_r5_tessera.py'
+      - 'config/r5_tessera_pilot.json'
+      - 'imint/training/unified_dataset.py'
   # Every PR runs so that "Build summary" always reports and can be a
   # required check. select_images builds only images whose paths changed;
   # a PR touching none of them skips pr_build and the summary passes.
@@ -77,10 +81,20 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref }}
           REQUESTED_IMAGE: ${{ inputs.image }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = pull_request ]; then
             git diff --no-renames --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed-files.txt"
+            set -- --changed-files "$RUNNER_TEMP/changed-files.txt"
+          elif [ "$EVENT_NAME" = push ]; then
+            if [ "$PUSH_BEFORE" = 0000000000000000000000000000000000000000 ]; then
+              git ls-tree -r --name-only "$PUSH_AFTER" > "$RUNNER_TEMP/changed-files.txt"
+            else
+              git fetch --no-tags --depth=1 origin "$PUSH_BEFORE" "$PUSH_AFTER"
+              git diff --no-renames --name-only "$PUSH_BEFORE" "$PUSH_AFTER" > "$RUNNER_TEMP/changed-files.txt"
+            fi
             set -- --changed-files "$RUNNER_TEMP/changed-files.txt"
           fi
           python3 .github/scripts/select_pipeline_images.py \

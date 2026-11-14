@@ -182,6 +182,8 @@ def smoke_model() -> None:
         "scripts/crop_distill_provenance.py",
         "scripts/extract_plot_features.py",
         "scripts/run_crop_distill_job.py",
+        "scripts/r5_tessera_pilot.py",
+        "scripts/run_r5_tessera.py",
     ):
         path = source_root / relative
         compile(path.read_text(encoding="utf-8"), relative, "exec")
@@ -193,6 +195,14 @@ def smoke_model() -> None:
         "scripts/validate_against_lucas.py",
     ):
         _load_script(source_root / relative)
+
+    # Import the actual R5 entrypoints in the pinned model environment.
+    # Their source and config travel in SOURCE_ARCHIVE_SELECTION and runtime.json.
+    from scripts import r5_tessera_pilot, run_r5_tessera
+    import json
+    declaration = json.loads((source_root / "config/r5_tessera_pilot.json").read_text())
+    assert declaration["embedding_source"] == r5_tessera_pilot.TESSERA_SOURCE
+    assert run_r5_tessera.STUDENT_REGIME["backbone_name"] == "tessera_v1"
 
     smoke_nmd_sampler()
     smoke_checkpoint_metadata()
