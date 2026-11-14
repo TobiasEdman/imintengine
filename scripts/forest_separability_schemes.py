@@ -22,7 +22,14 @@ CLASS_SCHEMES = {
                   ("barrblandskog på våtmark", (123,)),
                   ("lövblandad barrskog på våtmark", (124,)),
                   ("lövskog på våtmark (125–127)", (125, 126, 127))),
+    # Can bebyggelse (unified 9) be split into buildings and roads? (2026-11-14)
+    "exploaterad3": (("byggnad", (51,)), ("övrig exploaterad mark", (52,)),
+                     ("väg/järnväg", (53,))),
 }
+# Whether sampling keeps 3×3 interiors only. The forest schemes avoid class
+# edges; roads are one or two 10 m pixels wide and would vanish under
+# erosion, so exploaterad3 samples every coded pixel, mixed pixels included.
+INTERIOR_ONLY = {"binary": True, "forest5": True, "sumpskog5": True, "exploaterad3": False}
 FEATURE_YEARS = (2022, 2023)
 
 # The frozen model whose features are probed. R4 is the default, so a run

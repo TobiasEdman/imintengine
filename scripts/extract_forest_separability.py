@@ -24,7 +24,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probe_forest_separability import CLASS_SCHEMES, ROLE, digest, sample_pixels, write_json
+from probe_forest_separability import (CLASS_SCHEMES, ROLE, digest, sample_pixels,
+                                       sampling_description, write_json)
 from scripts.forest_separability_schemes import BUNDLE_KEYS, NUM_CLASSES_CHOICES, check_model
 
 
@@ -161,7 +162,7 @@ def extract(args) -> None:
                 "reference_year_gap": 2023 - args.feature_year, "per_class_cap": args.per_class,
                 "source_manifest_sha256": digest(ROOT / "SOURCE_MANIFEST.json")
                     if (ROOT / "SOURCE_MANIFEST.json").exists() else None,
-                "sampling": "100m lattice;3x3 interiors;seed42;one tile per50km block",
+                "sampling": sampling_description(args.scheme),
                 "runtime": {"torch": torch.__version__, "numpy": np.__version__, "threads": 2}}
     write_json(args.output / "selection.json", contract)
     model, epoch, _, native = load_model(
