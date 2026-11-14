@@ -2,9 +2,12 @@
   "id": "0169",
   "subject": "Probe splitting exploaterad mark into buildings and roads",
   "description": "Tobias asked on 2026-11-14 for a small study of whether bebyggelse (unified 9, NMD2023 51/52/53) can be split into buildings and roads. Decisions [user-stated 2026-11-14]: three classes, byggnad (51), ovrig exploaterad mark (52), vag/jarnvag (53); no 3x3 erosion (all coded pixels, mixed pixels included); representations raw TESSERA and the frozen b28 model (main, 29 classes); the whole study in one sweep after a server dry-run. Pre-register scheme exploaterad3 in scripts/forest_separability_schemes.py and the class-separability README before any result, make the interior-only sampling a per-scheme setting (forest schemes keep it), then run the bounded CPU probe (2 CPU, 4 GiB, no GPU, <= 30 min) for TESSERA 2022 against NMD2023 with scripts/run_forest_separability.sh and record location-free aggregates. Not in scope: changing the class schema, labels or any training; other feature years; Prithvi features. Review: fresh Claude reviewer; integration is Tobias's decision.",
-  "status": "pending",
+  "status": "claimed",
   "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
   "branch": "agent/te/claude/exploaterad-separability",
   "created_at": "2026-11-14T19:15:56Z",
-  "updated_at": "2026-11-14T19:15:56Z"
+  "updated_at": "2026-11-14T19:16:09Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-14T19:16:09Z"
 }
