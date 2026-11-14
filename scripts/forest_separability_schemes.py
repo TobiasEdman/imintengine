@@ -30,6 +30,10 @@ CLASS_SCHEMES = {
 # edges; roads are one or two 10 m pixels wide and would vanish under
 # erosion, so exploaterad3 samples every coded pixel, mixed pixels included.
 INTERIOR_ONLY = {"binary": True, "forest5": True, "sumpskog5": True, "exploaterad3": False}
+# Tile-name prefix a scheme draws from, or None for every tile. exploaterad3
+# uses the SCB tätort tiles (urban_*), where buildings and roads are common
+# (Tobias 2026-11-14); the hash-ordered cohort is mostly rural.
+TILE_PREFIX = {"binary": None, "forest5": None, "sumpskog5": None, "exploaterad3": "urban_"}
 FEATURE_YEARS = (2022, 2023)
 
 # The frozen model whose features are probed. R4 is the default, so a run

@@ -239,6 +239,26 @@ def test_candidate_year_and_geography_are_selected_before_scores(tmp_path):
         tile_candidates(data, labels, max_tiles=5, year=2023, scheme="forest5")
 
 
+def test_exploaterad3_draws_only_tatort_tiles(tmp_path):
+    from scripts.forest_separability_schemes import TILE_PREFIX
+
+    assert set(TILE_PREFIX) == set(CLASS_SCHEMES) and TILE_PREFIX["exploaterad3"] == "urban_"
+    data, labels = tmp_path / 'data', tmp_path / 'labels'
+    data.mkdir(); labels.mkdir()
+    raw = np.full((512, 512), 52, np.uint16)
+    raw[:, :200] = 51
+    raw[4::10, 300:] = 53                        # on the lattice of the 4 px-cropped tile
+    for i in range(16):                          # alternate tätort and rural tiles
+        name = f"{'urban' if i % 2 else 'tile'}_{i}.npz"
+        west = 400000 + i * 100000
+        np.savez(data / name, tessera=np.empty(0), tessera_year=2022,
+                 bbox_3006=np.array([west, 6500000, west + 5120, 6505120]))
+        np.savez(labels / name, nmd_label_raw=raw)
+    selection = tile_candidates(data, labels, max_tiles=24, year=2022, scheme="exploaterad3")
+    assert len(selection) == 8
+    assert all(Path(e['path']).name.startswith('urban_') for e in selection)
+
+
 def test_metrics_missing_predictions_have_defined_recall_and_iou():
     m = metrics(np.array([0, 0, 1, 1]), np.array([0, 0, 0, 0]), "binary")
     assert m['balanced_accuracy'] == .5

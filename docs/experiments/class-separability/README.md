@@ -295,11 +295,19 @@ torvtäkt (54, egen klass 23) och allt annat.
 **ingen 3×3-erosion** (`INTERIOR_ONLY["exploaterad3"] = False`). Vägar är en
 eller två pixlar breda vid 10 m och skulle försvinna under erosion; i stället
 tas varje kodad pixel med, blandpixlar vid klassgränser inräknade, så som
-modellen möter dem. Högst 24 historiska utvecklingstiles i `unified_v2_512`,
-en per 50 km-ruta och minst 15 km mellan tilecentrum, 100 m-rutnät, högst
-128 pixlar per klass och tile, seed 42. En tile kvalificeras bara om alla tre
-klasserna har minst åtta sådana pixlar. Det utesluter glesbygd där byggnader
-eller vägar är sällsynta och ska stå i tolkningen. Referens är rå NMD2023.
+modellen möter dem. Urvalet tas bara bland **tätortstilesen** (`urban_*`,
+SCB:s tätortsförtätning; `TILE_PREFIX["exploaterad3"]`): 419 tiles, varav
+300 med TESSERA 2022. Högst 24 av dem, en per 50 km-ruta och minst 15 km
+mellan tilecentrum, 100 m-rutnät, högst 128 pixlar per klass och tile,
+seed 42. En tile kvalificeras bara om alla tre klasserna har minst åtta
+sådana pixlar. Resultatet gäller alltså tätorter, inte glesbygd. Referens är
+rå NMD2023.
+
+*Ändring före resultat (2026-11-14).* Förregistreringen i `b340f54` drog
+tiles ur hela kohorten. En körning startades 20:18 och stoppades efter 10 s,
+innan någon tile valts eller något resultat fanns, när Tobias angav att
+tätortsklassen ska användas. Jobbet och dess ConfigMap togs bort; ingen
+evidens sparades.
 
 - Körning: TESSERA 2022 mot NMD2023, en körning.
 - Frusen modell: `main`, IM-023:s b28-modell (29 klasser,
