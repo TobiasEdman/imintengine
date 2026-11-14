@@ -344,3 +344,38 @@ omträning.
 bash scripts/run_forest_separability.sh --model-name main --num-classes 29 \
   --checkpoint /data/checkpoints/im023/tessera_b28/best_model.pt exploaterad3 2022
 ```
+
+## Resultat `exploaterad3`, TESSERA 2022 mot NMD2023, tätortstiles (2026-11-14)
+
+Protokollet ovan med tätortsurvalet (`3413afd`). 24 tätortstiles, 6 311
+pixlar: byggnad 1 709, övrig exploaterad mark 1 875, väg/järnväg 2 727.
+Endast platsfria aggregat återges här; `probe.json` ligger i den privata
+evidenskatalogen (`class-separability-0127/main-exploaterad3-2022/`).
+
+**Balanserad träffsäkerhet** (95 % blockbootstrap): `main` (b28) 0,798
+[0,781; 0,813], rå TESSERA 0,693 [0,672; 0,714], majoritetsbaslinje 0,333.
+
+| Klass | `main` precision / recall / IoU | TESSERA precision / recall / IoU |
+|---|---|---|
+| byggnad (51) | 0,82 / 0,86 / 0,73 | 0,62 / 0,71 / 0,50 |
+| övrig exploaterad mark (52) | 0,71 / 0,74 / 0,57 | 0,65 / 0,64 / 0,48 |
+| väg/järnväg (53) | 0,85 / 0,79 / 0,69 | 0,79 / 0,73 / 0,61 |
+
+**Förväxling (`main`, radvis):** byggnad → byggnad 86 %, övrig 8 %, väg 6 %;
+övrig → byggnad 11 %, övrig 74 %, väg 15 %; väg → byggnad 5 %, övrig 16 %,
+väg 79 %.
+
+**Vad b28 själv svarar** (`assigned_unified_class`): 83 % av byggnadspixlarna
+och 71 % av övrig exploaterad mark blir bebyggelse (9). Av väg/järnvägs-
+pixlarna blir bara 22 % bebyggelse; resten fördelas på gräsdominerad mark
+(31 %), risdominerad mark (20 %), lövskog (10 %), buskdominerad mark (4 %)
+och övrigt. Basetiketter och destillerade etiketter ger 9 för alla tre.
+
+**Läsning.** Bland pixlar som NMD kodar som exploaterade bär b28:s egenskaper
+skillnaden mellan byggnad, väg och övrigt väl över slumpnivån, och bättre än
+rå TESSERA. Men provet jämför bara de tre koderna med varandra. En egen
+vägklass måste också skiljas från omgivande mark, och där visar b28:s egna
+svar att fyra av fem vägpixlar vid 10 m domineras av marken runt vägen. En
+byggnadsklass ser mer genomförbar ut än en vägklass. Begränsningarna i
+förregistreringen gäller: historiska träningsplatser, överensstämmelse med
+NMD, bara tätorter. Inget schemabeslut följer automatiskt.
