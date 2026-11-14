@@ -1,0 +1,13 @@
+{
+  "id": "0165",
+  "subject": "Give the fraction head the checkpoint's own aux set by default",
+  "description": "Decision 7 of the IM-023 amendment (Tobias 2026-11-07: separate PR, root fix + test). scripts/inference_comparison.run_fraction_inference passes aux_channel_names=None straight to the input builder, which falls back to the canonical aux set, while run_inference and run_class_and_fraction_inference resolve the checkpoint's own set (markfukt in R4). validate_against_nfi.py --use-fraction-head without --enable-markfukt therefore fed the fraction head a different stack than the class head. Root fix: run_fraction_inference delegates to run_class_and_fraction_inference, one code path; test; sweep of callers. The frozen 2026-10-27 runs are unaffected (they used the class head from their own image). Review: Tobias (Codex is not back).",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/fraction-aux-default",
+  "created_at": "2026-11-09T22:03:11Z",
+  "updated_at": "2026-11-09T22:03:20Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-09T22:03:20Z"
+}

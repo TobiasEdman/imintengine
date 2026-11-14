@@ -937,27 +937,18 @@ def run_fraction_inference(model, tile_path: str, device, img_size: int = 224,
                            expected_tile_size=None):
     """Run the FRACTION head on a single tile → (4, cs, cs) sigmoid fractions.
 
-    Uses the same preprocessing/crop as ``run_inference`` and calls the model
-    with ``return_fractions=True``. Returns the per-species crown-cover in
-    [0, 1] (order tall/gran/trivial/adel). Raises if the model has no fraction
-    head (build it with ``enable_tradslag_head=True``).
+    The fraction half of ``run_class_and_fraction_inference``: the same inputs,
+    crop and forward, so ``aux_channel_names=None`` means the checkpoint's own
+    aux set here too. It used to fall through to the canonical set, so the
+    fraction head saw a different stack than the class head (markfukt missing
+    for R4). Returns the per-species crown-cover in [0, 1] (order
+    tall/gran/trivial/adel). Raises if the model has no fraction head (build it
+    with ``enable_tradslag_head=True``).
     """
-    import torch
-    if not model_has_frac_head(model):
-        raise ValueError("model has no fraction head (enable_tradslag_head=False)")
-    family = getattr(getattr(model, "fm_spec", None), "family", "prithvi")
-    inp = _build_inference_inputs(
-        tile_path, device, img_size, aux_channel_names, family=family,
-        num_frames=getattr(model, "num_frames", None),
-        expected_tile_sha256=expected_tile_sha256,
-        expected_tile_size=expected_tile_size)
-    try:
-        with torch.no_grad():
-            _logits, frac_logits = _forward_from_inputs(
-                model, inp, device, return_fractions=True)
-            return torch.sigmoid(frac_logits).squeeze(0).cpu().numpy()
-    finally:
-        _close_inference_inputs(inp)
+    _probs, fracs = run_class_and_fraction_inference(
+        model, tile_path, device, img_size=img_size, aux_channel_names=aux_channel_names,
+        expected_tile_sha256=expected_tile_sha256, expected_tile_size=expected_tile_size)
+    return fracs
 
 
 def run_class_and_fraction_inference(model, tile_path: str, device, img_size: int = 224,
