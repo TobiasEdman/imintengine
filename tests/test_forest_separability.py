@@ -36,6 +36,55 @@ def test_sumpskog5_splits_wetland_forest_by_type_only():
             class_labels(np.array([outside], np.uint16), "sumpskog5")
 
 
+def test_exploaterad3_splits_developed_land_into_buildings_other_and_roads():
+    raw = np.array([51, 52, 53], np.uint16)
+    assert class_labels(raw, "exploaterad3").tolist() == [0, 1, 2]
+    for outside in (54, 9, 111):  # torvtäkt is its own class; reduced codes are refused
+        with pytest.raises(ValueError, match="outside"):
+            class_labels(np.array([outside], np.uint16), "exploaterad3")
+
+
+def test_every_scheme_states_its_sampling():
+    from scripts.forest_separability_schemes import INTERIOR_ONLY
+    from scripts.probe_forest_separability import sampling_description
+
+    assert set(INTERIOR_ONLY) == set(CLASS_SCHEMES)
+    assert not INTERIOR_ONLY["exploaterad3"]
+    assert all(INTERIOR_ONLY[s] for s in ("binary", "forest5", "sumpskog5"))
+    # The forest receipts keep the string they were pre-registered with.
+    assert sampling_description("forest5") == "100m lattice;3x3 interiors;seed42;one tile per50km block"
+    assert "edges included" in sampling_description("exploaterad3")
+
+
+def _roads_and_buildings() -> np.ndarray:
+    """Buildings left, other developed land in the middle, one-pixel roads on the right."""
+    raw = np.full((200, 200), 52, dtype=np.uint16)
+    raw[:, :60] = 51
+    raw[::10, 100:] = 53         # one-pixel roads along lattice rows
+    return raw
+
+
+def test_exploaterad3_keeps_one_pixel_roads_that_erosion_would_remove():
+    raw, valid = _roads_and_buildings(), np.ones((200, 200), dtype=bool)
+    r, c = sample_pixels(raw, valid, per_class=8, seed=42, scheme="exploaterad3")
+    assert np.bincount(class_labels(raw[r, c], "exploaterad3")).tolist() == [8, 8, 8]
+    # The same scene under the forest rule: no road pixel survives erosion.
+    from scipy.ndimage import binary_erosion
+    assert not binary_erosion(raw == 53, structure=np.ones((3, 3))).any()
+
+
+def test_exploaterad3_probe_runs_end_to_end_on_disk(tmp_path):
+    report = run_probe(make_bundle(tmp_path, "exploaterad3", model="main", num_classes=29,
+                                   prediction=lambda y: np.full(len(y), 9)),
+                       scheme="exploaterad3", model_name="main", n_splits=4)
+    assert list(report['models']['main']['per_class']) == ['byggnad', 'övrig exploaterad mark',
+                                                             'väg/järnväg']
+    assert report['protocol']['sampling'].startswith("100m lattice;every coded pixel")
+    assert any("mixed edge pixels included" in line for line in report['limitations'])
+    assert report['assigned_unified_class']['main_prediction'] == {
+        name: {"9": 96} for name in ('byggnad', 'övrig exploaterad mark', 'väg/järnväg')}
+
+
 def test_sampling_uses_valid_interiors_and_caps_classes():
     raw = np.full((140, 140), 113, dtype=np.uint16)
     raw[:, 70:] = 115
@@ -188,6 +237,26 @@ def test_candidate_year_and_geography_are_selected_before_scores(tmp_path):
     assert selection == tile_candidates(data, labels, max_tiles=5, year=2023, scheme="binary")
     with pytest.raises(ValueError, match='only 0'):  # no 111/112/114 in these tiles
         tile_candidates(data, labels, max_tiles=5, year=2023, scheme="forest5")
+
+
+def test_exploaterad3_draws_only_tatort_tiles(tmp_path):
+    from scripts.forest_separability_schemes import TILE_PREFIX
+
+    assert set(TILE_PREFIX) == set(CLASS_SCHEMES) and TILE_PREFIX["exploaterad3"] == "urban_"
+    data, labels = tmp_path / 'data', tmp_path / 'labels'
+    data.mkdir(); labels.mkdir()
+    raw = np.full((512, 512), 52, np.uint16)
+    raw[:, :200] = 51
+    raw[4::10, 300:] = 53                        # on the lattice of the 4 px-cropped tile
+    for i in range(16):                          # alternate tätort and rural tiles
+        name = f"{'urban' if i % 2 else 'tile'}_{i}.npz"
+        west = 400000 + i * 100000
+        np.savez(data / name, tessera=np.empty(0), tessera_year=2022,
+                 bbox_3006=np.array([west, 6500000, west + 5120, 6505120]))
+        np.savez(labels / name, nmd_label_raw=raw)
+    selection = tile_candidates(data, labels, max_tiles=24, year=2022, scheme="exploaterad3")
+    assert len(selection) == 8
+    assert all(Path(e['path']).name.startswith('urban_') for e in selection)
 
 
 def test_metrics_missing_predictions_have_defined_recall_and_iou():
