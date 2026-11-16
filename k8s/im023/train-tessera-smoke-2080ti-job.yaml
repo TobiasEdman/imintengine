@@ -33,7 +33,7 @@ spec:
             - |
               set -euo pipefail
               export PYTHONUNBUFFERED=1
-              SHA=a6d36ff08acfee129f9c48457d8f75390aa6f2f9
+              SHA=d5ba63f07964210072d22677962633f07bc7d644
               echo "=== im023-tessera-smoke-2080ti — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
               pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \

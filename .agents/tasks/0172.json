@@ -1,0 +1,13 @@
+{
+  "id": "0172",
+  "subject": "Withdraw relabel_barrblandskog's manifest before any tile",
+  "description": "relabel_barrblandskog.run writes relabel_manifest.json into nmd_out and distill_out as the done signal that the IM-023 training preflight (scripts/im023_retrain.py, im023_retrain_prithvi600m.py) accepts. A rerun that fails partway leaves the previous manifest in place, the manifest is written with plain write_text, and a skipped is_current output is never checked against the rule. Apply the fix #159 made to relabel_distilled_b28.run (commit b2c308d): unlink both manifests after the input checks and before any tile, check skipped outputs against the rule, publish the manifests last via tmp + os.replace, with regression tests. The script is in the TESSERA and Prithvi-600M PINNED_SCRIPTS, so the Prithvi-600M job specs are re-pinned to the fix commit; re-pinning the TESSERA job specs (k8s/im023/*.yaml) is Tobias's decision. Not in scope: any cluster action, rerunning a relabel, /cephfs/nmd2023_labels_b28 and /cephfs/distill/tessera_r2_b28, the queued Prithvi smoke and its chain copies. Review: cross-runtime; integration is Tobias's decision.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/relabel-manifest-first",
+  "created_at": "2026-11-16T13:45:36Z",
+  "updated_at": "2026-11-16T13:53:57Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-16T13:53:57Z"
+}

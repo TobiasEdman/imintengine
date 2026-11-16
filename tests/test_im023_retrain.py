@@ -110,6 +110,19 @@ def paths(dirs) -> dict[str, str]:
             "r2_label_dir": str(dirs["r2"]), "b28_label_dir": str(dirs["b28"])}
 
 
+def test_a_failed_relabel_rerun_leaves_the_preflight_nothing_to_accept(cohort):
+    """The preflight checks the manifest, not label contents: a failed rerun must withdraw it."""
+    given = paths(cohort)
+    assert retrain.preflight("main", given) == []
+    out = sorted(cohort["b28"].glob("*.npz"))[0]
+    label = relabel.load(out)["label"].copy()
+    label[0, 0] = 9 if label[0, 0] != 9 else 8
+    np.savez_compressed(out, **(relabel.load(out) | {"label": label}))   # stamp kept, not the rule's
+    with pytest.raises(ValueError, match="stored output is not the rule applied"):
+        relabel.run(cohort["nmd"], cohort["r2"], cohort["nmd_b28"], cohort["b28"])
+    assert any(f"{cohort['b28'] / relabel.MANIFEST} missing" in p for p in retrain.preflight("main", given))
+
+
 CPU = ["--", "--patch-size", "64", "--img-size", "64", "--batch-size", "2",
        "--num-workers", "0", "--device", "cpu"]
 
