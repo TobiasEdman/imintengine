@@ -7,6 +7,8 @@ and ``apply_override`` on random inputs, and on disk through the real
 """
 from pathlib import Path
 import json
+import os
+import shutil
 import sys
 
 import geopandas as gpd
@@ -239,10 +241,17 @@ def test_verify_separates_head_reruns_from_the_shortcut(chain):
     assert report["head_rerun_differs_px"] > 0 and not report["stored_reproduced"]
 
 
+def run_args(root: Path) -> list[str]:
+    return ["run", *args(root), "--nmd-out", str(root / "b28_nmd"), "--distill-out", str(root / "b28_distill")]
+
+
+def manifests(root: Path) -> list[Path]:
+    return [root / directory / relabel.MANIFEST for directory in ("b28_nmd", "b28_distill")]
+
+
 def test_run_writes_canonical_labels_and_resumes(chain):
     root, _ = chain
-    out = ["--nmd-out", str(root / "b28_nmd"), "--distill-out", str(root / "b28_distill")]
-    assert relabel.main(["run", *args(root), *out]) == 0
+    assert relabel.main(run_args(root)) == 0
     for produced, canonical in (("b28_nmd", "canon_nmd"), ("b28_distill", "canon_new")):
         written, expected = relabel.load(root / produced / "T1.npz"), relabel.load(root / canonical / "T1.npz")
         assert str(written["relabel_rule"]) == relabel.RULE
@@ -255,13 +264,67 @@ def test_run_writes_canonical_labels_and_resumes(chain):
     assert first["class_28_pixels"] > 0 and first["nmd_changed"] == first["class_28_pixels"]
     assert first["distilled_changed"] == first["class_28_pixels"]
     stamp = (root / "b28_distill" / "T1.npz").stat().st_mtime_ns
-    assert relabel.main(["run", *args(root), *out]) == 0
+    assert relabel.main(run_args(root)) == 0
     second = json.loads((root / "b28_distill" / relabel.MANIFEST).read_text())
     assert (second["written"], second["skipped_current"]) == (0, 1)
     assert {k: second[k] for k in ("nmd_changed", "distilled_changed", "class_28_pixels")} == \
            {k: first[k] for k in ("nmd_changed", "distilled_changed", "class_28_pixels")}
     assert (root / "b28_distill" / "T1.npz").stat().st_mtime_ns == stamp
     assert not list(root.rglob("*.tmp.npz"))
+
+
+@pytest.mark.parametrize("output, key", [("b28_nmd", "label"), ("b28_distill", "label"),
+                                         ("b28_distill", "nmd_area_ha")])
+def test_a_skipped_output_must_still_be_the_rule(chain, output, key):
+    """A current stamp skips the write, not the check: any key that differs refuses the run."""
+    root, _ = chain
+    assert relabel.main(run_args(root)) == 0
+    path = root / output / "T1.npz"
+    payload = relabel.load(path)
+    payload[key] = payload[key].copy()
+    payload[key][0, 0] = 9 if payload[key][0, 0] != 9 else 8
+    np.savez_compressed(path, **payload)                     # stamp intact, content not the rule's
+    with pytest.raises(ValueError, match="stored output is not the rule applied"):
+        relabel.main(run_args(root))
+    assert not any(p.exists() for p in manifests(root))      # the failed rerun left no done signal
+
+
+def test_a_rerun_that_fails_partway_leaves_no_manifest(chain, monkeypatch):
+    root, _ = chain
+    assert relabel.main(run_args(root)) == 0
+    (root / "b28_distill" / "T1.npz").unlink()               # the rerun has a tile to write
+
+    def full_disk(path, payload):
+        raise OSError("no space left")
+    monkeypatch.setattr(relabel, "save_atomic", full_disk)
+    with pytest.raises(OSError, match="no space left"):
+        relabel.main(run_args(root))
+    assert not any(p.exists() for p in manifests(root))
+
+
+def test_the_manifest_appears_whole_or_not_at_all(chain, monkeypatch):
+    root, _ = chain
+    replace = os.replace
+
+    def interrupted(src, dst):
+        if Path(dst).name == relabel.MANIFEST:
+            raise OSError("interrupted")
+        replace(src, dst)
+    monkeypatch.setattr(relabel.os, "replace", interrupted)
+    with pytest.raises(OSError, match="interrupted"):
+        relabel.main(run_args(root))
+    assert (root / "b28_distill" / "T1.npz").is_file()       # the tiles were written
+    assert not any(p.exists() for p in manifests(root))
+
+
+def test_refuses_outputs_another_relabel_wrote(chain):
+    root, _ = chain
+    assert relabel.main(run_args(root)) == 0
+    before = [p.read_text() for p in manifests(root)]
+    shutil.copytree(root / "stored", root / "other")
+    with pytest.raises(ValueError, match="relabelled .* not "):
+        relabel.run(root / "nmd_old", root / "other", root / "b28_nmd", root / "b28_distill")
+    assert [p.read_text() for p in manifests(root)] == before   # not this run's to withdraw
 
 
 def test_run_refuses_input_directories_and_orphans(chain):

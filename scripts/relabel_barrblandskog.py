@@ -27,8 +27,13 @@ Subcommands:
             separately, with how many pixels a head rerun changed.
 ``run``     writes every NMD sidecar and every distilled sidecar to two new
             directories, atomically, stamped with rule and source digest;
-            tiles whose outputs are current are skipped. A manifest with the
-            totals of the output state is written last, as the done signal.
+            tiles whose outputs are current are skipped once their content
+            is checked to be exactly what the rule writes. A manifest with
+            the totals of the output state is the done signal: a run removes
+            the previous one from both outputs before it touches any tile
+            (refusing outputs another relabel's manifest names) and publishes
+            the new one last via tmp + os.replace, so only a run that
+            validated every tile leaves one.
 """
 from __future__ import annotations
 
@@ -51,6 +56,7 @@ TRAINER_KEYS = ("label", "parcel_area_ha", "nmd_area_ha")
 # tile's, else zeros, as float32 (unified_dataset._LabelOverlay, __getitem__).
 AREA_KEYS = ("parcel_area_ha", "nmd_area_ha")
 MANIFEST = "relabel_manifest.json"
+STAMP_KEYS = ("relabel_rule", "relabel_source_sha256")
 
 
 def relabel_nmd(label: np.ndarray, raw: np.ndarray) -> np.ndarray:
@@ -213,23 +219,29 @@ def verify(nmd_in: Path, distill_in: Path, canon_nmd: Path,
             "notes": notes}
 
 
-def relabel_tile(pairs: list[tuple[Path, Path]]) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Write the relabelled sidecars for one tile; (old, new) label per pair.
+def relabel_tile(pairs: list[tuple[Path, Path]]) -> list[tuple[np.ndarray, dict[str, np.ndarray]]]:
+    """(old label, relabelled sidecar without stamps) per pair of one tile; nothing is written.
 
     ``pairs`` is the NMD (source, output) pair, then optionally the distilled one.
     """
     nmd = load(pairs[0][0])
     new_nmd = relabel_nmd(nmd["label"], nmd["nmd_label_raw"])
-    outputs = [(pairs[0], nmd, new_nmd)]
+    relabelled = [(nmd["label"], nmd | {"label": new_nmd})]
     if len(pairs) == 2:
         distilled = load(pairs[1][0])
         if not np.array_equal(distilled["nmd_label_raw"], nmd["nmd_label_raw"]):
             raise ValueError(f"{pairs[1][0].name}: raw NMD differs between NMD and distilled sidecar")
-        outputs.append((pairs[1], distilled, relabel_distilled(distilled["label"], new_nmd)))
-    for (source, out), payload, label in outputs:
-        save_atomic(out, {**payload, "label": label, "relabel_rule": np.str_(RULE),
-                          "relabel_source_sha256": np.str_(digest(source))})
-    return [(payload["label"], label) for _, payload, label in outputs]
+        relabelled.append((distilled["label"],
+                           distilled | {"label": relabel_distilled(distilled["label"], new_nmd)}))
+    return relabelled
+
+
+def same_payload(stored: dict[str, np.ndarray], expected: dict[str, np.ndarray]) -> bool:
+    """Same keys, and per key the same dtype, shape and values (NaN equal to NaN)."""
+    return stored.keys() == expected.keys() and all(
+        stored[k].dtype == expected[k].dtype and stored[k].shape == expected[k].shape
+        and np.array_equal(stored[k], expected[k], equal_nan=stored[k].dtype.kind == "f")
+        for k in expected)
 
 
 def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
@@ -248,6 +260,19 @@ def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
         nmd_names = set(tile_ids)
     if not nmd_names:
         raise ValueError(f"no NMD sidecars in {nmd_in}")
+    dirs = {"inputs": {"nmd": str(nmd_in), "distilled": str(distill_in)},
+            "outputs": {"nmd": str(nmd_out), "distilled": str(distill_out)}}
+    previous = [directory / MANIFEST for directory in (nmd_out, distill_out)]
+    for path in previous:
+        if path.is_file():
+            named = json.loads(path.read_text())
+            if {key: named.get(key) for key in dirs} != dirs:
+                raise ValueError(f"{path} relabelled {named.get('inputs')} into {named.get('outputs')}, "
+                                 f"not {dirs['inputs']} into {dirs['outputs']}")
+    # The outputs are this run's. Withdraw the done signal before any tile is
+    # checked or written, so a run that fails leaves no stale completion behind.
+    for path in previous:
+        path.unlink(missing_ok=True)
     for directory in targets:
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -257,13 +282,20 @@ def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
         pairs = [(nmd_in / f"{name}.npz", nmd_out / f"{name}.npz")]
         if name in distill_names:
             pairs.append((distill_in / f"{name}.npz", distill_out / f"{name}.npz"))
+        relabelled = relabel_tile(pairs)
         if all(is_current(out, source) for source, out in pairs):
+            # The stamps match; the content must still be what the rule writes.
+            for (source, out), (_, payload) in zip(pairs, relabelled):
+                stored = {k: v for k, v in load(out).items() if k not in STAMP_KEYS}
+                if not same_payload(stored, payload):
+                    raise ValueError(f"{out}: stored output is not the rule applied to {source}")
             totals["skipped_current"] += 1
-            labels = [(load(source)["label"], load(out)["label"]) for source, out in pairs]
         else:
+            for (source, out), (_, payload) in zip(pairs, relabelled):
+                save_atomic(out, payload | {"relabel_rule": np.str_(RULE),
+                                            "relabel_source_sha256": np.str_(digest(source))})
             totals["written"] += 1
-            labels = relabel_tile(pairs)
-        (old_nmd, new_nmd), *distilled = labels
+        (old_nmd, new_nmd), *distilled = [(old, payload["label"]) for old, payload in relabelled]
         totals["nmd_tiles"] += 1
         totals["nmd_changed"] += int((old_nmd != new_nmd).sum())
         totals["class_28_pixels"] += int((new_nmd == NEW_CLASS).sum())
@@ -273,12 +305,13 @@ def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
 
     git_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
                              text=True).stdout.strip() or None
-    manifest = {"rule": RULE, "git_sha": git_sha,
-                "inputs": {"nmd": str(nmd_in), "distilled": str(distill_in)},
-                "outputs": {"nmd": str(nmd_out), "distilled": str(distill_out)}, **totals}
+    manifest = {"rule": RULE, "git_sha": git_sha, **dirs, **totals}
     text = json.dumps(manifest, indent=2) + "\n"
-    for directory in (nmd_out, distill_out):
-        (directory / MANIFEST).write_text(text)
+    # The manifest is the done signal: write it whole or not at all.
+    for path in previous:
+        tmp = path.with_name(f".{MANIFEST}.tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
     return manifest
 
 
