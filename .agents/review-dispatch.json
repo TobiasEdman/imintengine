@@ -1,0 +1,19 @@
+{
+  "schema_version": "1",
+  "_note": "Headless review declaration for ImintEngine (task 0117 dispatcher; decided by Tobias 2026-11-15). Both runtimes may review each other's pull requests headless, as in multi-agentic. Caps are per run; the dispatcher enforces the wall-clock cap itself and the turn cap through the runtime's flag. Read from the protected base only. Schema and prompts are copied unchanged from TobiasEdman/multi-agentic main 3523b2d.",
+  "runtimes": {
+    "claude": {
+      "model": "opus",
+      "lenses": ["quality"],
+      "max_minutes": 30,
+      "max_turns": 25,
+      "max_usd": 5,
+      "retries": 1
+    },
+    "codex": {
+      "lenses": ["quality"],
+      "max_minutes": 30,
+      "retries": 1
+    }
+  }
+}

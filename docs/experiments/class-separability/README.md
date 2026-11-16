@@ -274,3 +274,108 @@ barrblandskogen, inte i samma, så att effekterna går att skilja åt.
 ```sh
 bash scripts/run_forest_separability.sh sumpskog5 2022
 ```
+
+## Förregistrering: `exploaterad3`, byggnader och vägar (2026-11-14)
+
+Skriven innan någon körning gjorts. Ändras inte efter att resultat setts;
+avvikelser redovisas som avvikelser.
+
+**Fråga.** Går bebyggelse (unified 9) att dela upp i byggnader och vägar?
+I dag mappas NMD2023 51 (exploaterad mark, byggnad), 52 (exploaterad mark,
+ej byggnad eller väg/järnväg) och 53 (exploaterad mark, väg/järnväg) alla
+till klass 9 (`imint/schema/unified_schema.py`). Provet mäter om råa
+TESSERA-egenskaper och den delade b28-modellens frysta egenskaper skiljer de
+tre koderna åt, och vart 52 hamnar om de delas.
+
+**Klasser.** Schemat `exploaterad3` i `scripts/forest_separability_schemes.py`:
+byggnad (51), övrig exploaterad mark (52) och väg/järnväg (53). Utanför:
+torvtäkt (54, egen klass 23) och allt annat.
+
+**Data och urval.** Samma protokoll som skogsproven med ett undantag:
+**ingen 3×3-erosion** (`INTERIOR_ONLY["exploaterad3"] = False`). Vägar är en
+eller två pixlar breda vid 10 m och skulle försvinna under erosion; i stället
+tas varje kodad pixel med, blandpixlar vid klassgränser inräknade, så som
+modellen möter dem. Urvalet tas bara bland **tätortstilesen** (`urban_*`,
+SCB:s tätortsförtätning; `TILE_PREFIX["exploaterad3"]`): 419 tiles, varav
+300 med TESSERA 2022. Högst 24 av dem, en per 50 km-ruta och minst 15 km
+mellan tilecentrum, 100 m-rutnät, högst 128 pixlar per klass och tile,
+seed 42. En tile kvalificeras bara om alla tre klasserna har minst åtta
+sådana pixlar. Resultatet gäller alltså tätorter, inte glesbygd. Referens är
+rå NMD2023.
+
+*Ändring före resultat (2026-11-14).* Förregistreringen i `b340f54` drog
+tiles ur hela kohorten. En körning startades 20:18 och stoppades efter 10 s,
+innan någon tile valts eller något resultat fanns, när Tobias angav att
+tätortsklassen ska användas. Jobbet och dess ConfigMap togs bort; ingen
+evidens sparades.
+
+- Körning: TESSERA 2022 mot NMD2023, en körning.
+- Frusen modell: `main`, IM-023:s b28-modell (29 klasser,
+  `/data/checkpoints/im023/tessera_b28/best_model.pt`), jämförd med råa
+  TESSERA-egenskaper på exakt samma pixlar.
+
+**Huvud och validering.** Oförändrat: StandardScaler + LogisticRegression
+(C=1, balanserade vikter, max_iter 2000), ingen hyperparametersökning, fem
+geografiska foldar med 50 km-grupper och 5 km buffert, alla tre klasser i
+varje fold. Samma foldar för båda representationerna.
+
+**Det som rapporteras, i den här ordningen.**
+
+1. 3×3-förväxlingsmatrisen för `main` och TESSERA, särskilt byggnad mot
+   väg/järnväg och vart övrig exploaterad mark förväxlas.
+2. Recall, precision och IoU per klass; balanserad träffsäkerhet med 95 %
+   intervall från 500 omdragningar av hela 50 km-block; majoritetsbaslinje.
+3. `assigned_unified_class`: vilken unified-klass basetiketten, den
+   destillerade etiketten och `main` ger varje kod. Väntat är klass 9; en
+   stor andel annat (öppen mark, vatten) säger något om blandpixlarna.
+
+**Vad resultatet inte avgör.** Ingen tröskel avgör automatiskt en uppdelning.
+NMD:s byggnads- och vägkoder kommer från vektordata som rastrerats till
+10 m, så en smal väg är i praktiken en blandpixel; utfallet mäter
+överensstämmelse med NMD på historiska träningsplatser, inte fältprecision,
+och b28 kan ha sett platserna. Det är underlag för ett schemabeslut, som tas
+av Tobias. En uppdelning kräver i så fall nya etiketter och en egen
+omträning.
+
+**Körning.** Godkänd av Tobias 2026-11-14. 2 CPU, 4 GiB, ingen GPU, högst
+30 minuter; torrkörning på servern först.
+
+```sh
+bash scripts/run_forest_separability.sh --model-name main --num-classes 29 \
+  --checkpoint /data/checkpoints/im023/tessera_b28/best_model.pt exploaterad3 2022
+```
+
+## Resultat `exploaterad3`, TESSERA 2022 mot NMD2023, tätortstiles (2026-11-14)
+
+Protokollet ovan med tätortsurvalet (`3413afd`). 24 tätortstiles, 6 311
+pixlar: byggnad 1 709, övrig exploaterad mark 1 875, väg/järnväg 2 727.
+Endast platsfria aggregat återges här; `probe.json` ligger i den privata
+evidenskatalogen (`class-separability-0127/main-exploaterad3-2022/`).
+
+**Balanserad träffsäkerhet** (95 % blockbootstrap): `main` (b28) 0,798
+[0,781; 0,813], rå TESSERA 0,693 [0,672; 0,714], majoritetsbaslinje 0,333.
+
+| Klass | `main` precision / recall / IoU | TESSERA precision / recall / IoU |
+|---|---|---|
+| byggnad (51) | 0,82 / 0,86 / 0,73 | 0,62 / 0,71 / 0,50 |
+| övrig exploaterad mark (52) | 0,71 / 0,74 / 0,57 | 0,65 / 0,64 / 0,48 |
+| väg/järnväg (53) | 0,85 / 0,79 / 0,69 | 0,79 / 0,73 / 0,61 |
+
+**Förväxling (`main`, radvis):** byggnad → byggnad 86 %, övrig 8 %, väg 6 %;
+övrig → byggnad 11 %, övrig 74 %, väg 15 %; väg → byggnad 5 %, övrig 16 %,
+väg 79 %.
+
+**Vad b28 själv svarar** (`assigned_unified_class`): 83 % av byggnadspixlarna
+och 71 % av övrig exploaterad mark blir bebyggelse (9). Av väg/järnvägs-
+pixlarna blir bara 22 % bebyggelse; resten fördelas på gräsdominerad mark
+(31 %), risdominerad mark (20 %), lövskog (10 %), buskdominerad mark (4 %)
+och övrigt. Basetiketter och destillerade etiketter ger 9 för alla tre.
+
+**Läsning.** Bland pixlar som NMD kodar som exploaterade bär b28:s egenskaper
+skillnaden mellan byggnad, väg och övrigt väl över slumpnivån, och bättre än
+rå TESSERA. Men provet jämför bara de tre koderna med varandra. En egen
+vägklass måste också skiljas från omgivande mark, och där visar b28:s egna
+svar att fyra av fem vägpixlar vid 10 m domineras av marken runt vägen. En
+byggnadsklass ser mer genomförbar ut än en vägklass. Begränsningarna i
+förregistreringen gäller: historiska träningsplatser, överensstämmelse med
+NMD, bara tätorter. Inget schemabeslut följer automatiskt.

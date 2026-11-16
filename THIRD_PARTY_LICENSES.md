@@ -26,6 +26,7 @@ own licenses. This file documents those components and their licensing terms.
 | **Satlas marine infrastructure** (AI2 S1 vessel infrastructure filter) | ODC-BY | Allen Institute for AI | Attribution required. Downloaded on first use from `satlas-explorer-public` |
 | **Digital Earth Sweden** (openEO) | Apache 2.0 / CC0 | Rymdstyrelsen / RISE | Code: Apache 2.0, data: CC0 |
 | **NMD** (Nationellt Marktackedata) | CC0 | Naturvardsverket | Public domain, attribution recommended |
+| **TESSERA embeddings** (via geotessera, MIT) | CC0 1.0 | University of Cambridge | Annual 128-d embeddings at 10 m; the authors request citation of Feng et al., arXiv:2506.20380. [HuggingFace](https://huggingface.co/geotessera/TESSERA-V-1.1) |
 | **Sjokort S-57** (nautical charts) | Academic-restricted | Sjofartsverket | Available via [SLU GET](https://maps.slu.se/get/) for SLU staff/students. Publication in scientific works permitted with attribution. |
 
 ## JavaScript Libraries (embedded in HTML reports)

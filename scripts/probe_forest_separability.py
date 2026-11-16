@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Development-only frozen-feature diagnostic for NMD forest types.
+"""Development-only frozen-feature diagnostic for NMD class splits.
 
 Pre-registered class schemes (scripts/forest_separability_schemes.py):
 ``binary`` (NMD 113 versus 115–117, the first IM-023 question), ``forest5``
-(dryland 111, 112, 113, 114, 115–117) and ``sumpskog5`` (the same types on
-wetland, 121–127).
+(dryland 111, 112, 113, 114, 115–117), ``sumpskog5`` (the same types on
+wetland, 121–127) and ``exploaterad3`` (buildings 51, other developed 52,
+roads and railways 53, without erosion).
 
 ``--model-name`` must match the name the extraction keyed its frozen-model
 features with (``r4`` for R4). For a 29-class model the report also gives, per
@@ -28,7 +29,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.forest_separability_schemes import (  # noqa: E402
-    BARRBLANDSKOG_CLASS, CLASS_SCHEMES, check_model)
+    BARRBLANDSKOG_CLASS, CLASS_SCHEMES, INTERIOR_ONLY, check_model)
 
 ROLE = "historical_training_development_diagnostic"
 
@@ -66,12 +67,20 @@ def class_labels(raw: np.ndarray, scheme: str) -> np.ndarray:
     return labels
 
 
+def sampling_description(scheme: str) -> str:
+    """What sample_pixels keeps for ``scheme``; written into receipt and report."""
+    pixels = "3x3 interiors" if INTERIOR_ONLY[scheme] else "every coded pixel, edges included"
+    return f"100m lattice;{pixels};seed42;one tile per50km block"
+
+
 def sample_pixels(raw: np.ndarray, valid: np.ndarray, *, per_class: int,
                   seed: int, scheme: str, stride: int = 10) -> tuple[np.ndarray, np.ndarray]:
-    """Sample interiors on a fixed 100 m lattice, capped equally per class.
+    """Sample on a fixed 100 m lattice, capped equally per class.
 
-    Three-by-three binary erosion avoids immediate class boundaries. This
-    deliberately excludes difficult edge pixels; the report states that bias.
+    For the forest schemes, three-by-three binary erosion avoids immediate
+    class boundaries; this deliberately excludes difficult edge pixels and the
+    report states that bias. ``exploaterad3`` keeps every coded pixel, since
+    roads are one or two pixels wide (``INTERIOR_ONLY``).
     """
     from scipy.ndimage import binary_erosion
 
@@ -83,7 +92,9 @@ def sample_pixels(raw: np.ndarray, valid: np.ndarray, *, per_class: int,
     rng = np.random.default_rng(seed)
     selected = []
     for _, codes in scheme_classes(scheme):
-        eligible = binary_erosion(np.isin(raw, codes), structure=np.ones((3, 3)))
+        eligible = np.isin(raw, codes)
+        if INTERIOR_ONLY[scheme]:
+            eligible = binary_erosion(eligible, structure=np.ones((3, 3)))
         rc = np.argwhere(eligible & valid & lattice)
         if len(rc) < 8:
             raise ValueError("fewer than eight eligible pixels in a class")
@@ -208,11 +219,14 @@ def run_probe(bundle: Path, *, scheme: str, model_name: str, n_splits: int = 5,
               "limitations": ["Historical training locations; not an unseen-area model evaluation.",
                               "NMD agreement, not independent field accuracy.",
                               "Fixed NMD2023 reference may postdate features; not feature-year field status.",
-                              "Interior pixels on a 100 m lattice; edges excluded.",
-                              "Tiles qualify only where every class has eight interior lattice "
+                              ("Interior pixels on a 100 m lattice; edges excluded."
+                               if INTERIOR_ONLY[scheme] else
+                               "Every coded pixel on a 100 m lattice; mixed edge pixels included."),
+                              "Tiles qualify only where every class has eight eligible lattice "
                               "pixels, which excludes areas where a class is rare.",
                               "Small diagnostic cannot justify merging classes on its own."],
-              "protocol": {"scheme": scheme, "folds": n_splits, "block_m": block_m, "buffer_m": buffer_m,
+              "protocol": {"scheme": scheme, "sampling": sampling_description(scheme),
+                           "folds": n_splits, "block_m": block_m, "buffer_m": buffer_m,
                            "head": "StandardScaler + LogisticRegression(C=1, balanced, max_iter=2000)",
                            "tuning": "none", "bootstrap": "500 whole-block resamples, seed42"},
               "n_samples": len(y), "n_tiles": len(np.unique(data["tile"])),

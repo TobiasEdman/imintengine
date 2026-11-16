@@ -154,7 +154,10 @@ def test_normalization_near_key_spoofs_are_rejected(
 
 
 def test_load_model_uses_fail_closed_validation_without_warning_fallback() -> None:
-    source = inspect.getsource(inference.load_model)
+    # load_model authenticates and deserializes; the model is built and
+    # loaded in build_model_from_checkpoint, which every loader shares.
+    assert "build_model_from_checkpoint(" in inspect.getsource(inference.load_model)
+    source = inspect.getsource(inference.build_model_from_checkpoint)
     assert "_checkpoint_state_for_inference(" in source
     assert "_validate_checkpoint_state_keys(" in source
     assert "load_state_dict(inference_state, strict=True)" in source

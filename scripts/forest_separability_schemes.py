@@ -22,7 +22,18 @@ CLASS_SCHEMES = {
                   ("barrblandskog på våtmark", (123,)),
                   ("lövblandad barrskog på våtmark", (124,)),
                   ("lövskog på våtmark (125–127)", (125, 126, 127))),
+    # Can bebyggelse (unified 9) be split into buildings and roads? (2026-11-14)
+    "exploaterad3": (("byggnad", (51,)), ("övrig exploaterad mark", (52,)),
+                     ("väg/järnväg", (53,))),
 }
+# Whether sampling keeps 3×3 interiors only. The forest schemes avoid class
+# edges; roads are one or two 10 m pixels wide and would vanish under
+# erosion, so exploaterad3 samples every coded pixel, mixed pixels included.
+INTERIOR_ONLY = {"binary": True, "forest5": True, "sumpskog5": True, "exploaterad3": False}
+# Tile-name prefix a scheme draws from, or None for every tile. exploaterad3
+# uses the SCB tätort tiles (urban_*), where buildings and roads are common
+# (Tobias 2026-11-14); the hash-ordered cohort is mostly rural.
+TILE_PREFIX = {"binary": None, "forest5": None, "sumpskog5": None, "exploaterad3": "urban_"}
 FEATURE_YEARS = (2022, 2023)
 
 # The frozen model whose features are probed. R4 is the default, so a run

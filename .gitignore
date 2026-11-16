@@ -139,3 +139,8 @@ k8s/lpis-viz-server.yaml
 scripts/verify_fetch_refactor.py
 # Office lock files (created while a document is open; junk in git)
 ~$*
+# HF release payloads (scripts/hf_release.py): shared privately, never committed
+release/hf/*/model.safetensors
+release/hf/*/config.json
+release/hf/*/MANIFEST.json
+release/hf/*/LICENSE

@@ -24,8 +24,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probe_forest_separability import CLASS_SCHEMES, ROLE, digest, sample_pixels, write_json
-from scripts.forest_separability_schemes import BUNDLE_KEYS, NUM_CLASSES_CHOICES, check_model
+from probe_forest_separability import (CLASS_SCHEMES, ROLE, digest, sample_pixels,
+                                       sampling_description, write_json)
+from scripts.forest_separability_schemes import (BUNDLE_KEYS, NUM_CLASSES_CHOICES, TILE_PREFIX,
+                                                 check_model)
 
 
 def ensure_development_roots(data_dir: Path, label_dir: Path, distill_dir: Path) -> None:
@@ -43,7 +45,9 @@ def tile_candidates(data_dir: Path, label_dir: Path, *, max_tiles: int,
                     year: int, scheme: str, audit_path: Path | None = None) -> list[dict]:
     if not 5 <= max_tiles <= 24 or year not in (2022, 2023):
         raise ValueError("cap is 5–24 tiles; pre-specified feature year must be2022 or2023")
-    paths = sorted(data_dir.glob("*.npz"), key=lambda p: hashlib.sha256(p.name.encode()).digest())
+    prefix = TILE_PREFIX[scheme]
+    paths = sorted(data_dir.glob(f"{prefix or ''}*.npz"),
+                   key=lambda p: hashlib.sha256(p.name.encode()).digest())
     selected, centres = [], []
     blocks = set()
     years = Counter()
@@ -161,7 +165,8 @@ def extract(args) -> None:
                 "reference_year_gap": 2023 - args.feature_year, "per_class_cap": args.per_class,
                 "source_manifest_sha256": digest(ROOT / "SOURCE_MANIFEST.json")
                     if (ROOT / "SOURCE_MANIFEST.json").exists() else None,
-                "sampling": "100m lattice;3x3 interiors;seed42;one tile per50km block",
+                "sampling": sampling_description(args.scheme),
+                "tile_prefix": TILE_PREFIX[args.scheme],
                 "runtime": {"torch": torch.__version__, "numpy": np.__version__, "threads": 2}}
     write_json(args.output / "selection.json", contract)
     model, epoch, _, native = load_model(
