@@ -1,0 +1,10 @@
+{
+  "id": "0173",
+  "subject": "Close the four P3s in relabel_barrblandskog.run",
+  "description": "The single-model review of #165 (https://github.com/TobiasEdman/imintengine/pull/165#issuecomment-6919935844) found four P3s in scripts/relabel_barrblandskog.py run(). Fix them, each with a regression test that fails on the old code: (1) drop --tile-ids from run (Tobias's choice 2026-11-16), so no subset run can publish a manifest; (2) keep a permanent relabel_owner.json per output, written before the manifests are withdrawn and checked instead of the withdrawable manifest, so a failed rerun leaves the outputs to no other pairing; (3) compute digest(source) once per pair and read each output once on the skip path; (4) same_payload (and verify's compare, same guard) pass equal_nan for dtype kinds fcmM, so NaT equals NaT. The script is in the TESSERA and Prithvi-600M PINNED_SCRIPTS, so all nine k8s/im023/**.yaml SHA= lines are re-pinned to the fix commit in a separate ops commit (TESSERA re-pin: Tobias's decision 2026-11-16). Not in scope: any cluster action, rerunning a relabel, /cephfs/nmd2023_labels_b28, /cephfs/distill/tessera_r2_b28, /cephfs/distill/prithvi600m_r2_b28, relabel_distilled_b28.run. Review: fresh single-model Claude reviewer (Codex out until 2026-11-18); integration is Tobias's decision.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/relabel-run-p3",
+  "created_at": "2026-11-16T20:08:34Z",
+  "updated_at": "2026-11-16T20:08:34Z"
+}
