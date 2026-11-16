@@ -1,0 +1,13 @@
+{
+  "id": "0171",
+  "subject": "Queue the Prithvi-600M b28 full runs from an in-cluster CronJob",
+  "description": "Tobias decided on 2026-11-16 to replace the app-bound watcher for the Prithvi-600M b28 runs (task 0167; Claude scheduled task imint-prithvi-b28-chain, which only runs while the desktop app is open) with an in-cluster CronJob on ICE [user-stated 2026-11-16]. Every 15 min it checks im023-prithvi600m-smoke: once it has succeeded it server-dry-runs and creates im023-prithvi600m-b28 and im023-prithvi600m-control from the copies pinned at 21086305d34a (Tobias's go 2026-11-14 to queue both without asking again [user-stated 2026-11-14]); on a failed or missing smoke, existing full runs, or after 2026-11-28T20:00Z it creates nothing and suspends itself. Narrow SA/Role (jobs get/list/create, its own cronjob get/patch, no delete). Not in scope: the repo's k8s/im023/prithvi600m yamls (PR #159 may re-pin them), the smoke job itself. Review: Codex via headless dispatch.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/prithvi-smoke-cronjob",
+  "created_at": "2026-11-16T13:08:19Z",
+  "updated_at": "2026-11-16T13:08:34Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-16T13:08:34Z"
+}

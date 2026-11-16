@@ -1,0 +1,388 @@
+---
+# Queues the Prithvi-600M b28 full runs (task 0167) once their smoke passes.
+#
+# Why in-cluster: the watcher it replaces was a Claude scheduled task on the
+# workstation, which runs only while the desktop app is open. Tobias moved it
+# onto ICE on 2026-11-16 so the chain advances with the laptop off; his go of
+# 2026-11-14 stands: once im023-prithvi600m-smoke has succeeded, queue
+# im023-prithvi600m-b28 and im023-prithvi600m-control without asking again.
+#
+# What it creates: only the two job specs in the ConfigMap below, copied
+# byte for byte from the ones queued with the smoke and pinned to source
+# 21086305d34a (chain.sh re-checks their sha256 on every tick).
+# Never the yamls under k8s/im023/prithvi600m/, which may be re-pinned; this
+# file sits outside that directory for the same reason.
+#
+# Self-terminating: every terminal outcome (both runs created, a run already
+# exists, smoke failed or missing, a dry-run refused, past 2026-11-28T20:00Z)
+# is written to the annotation prithvi-b28-chain/outcome and suspends the
+# CronJob (CLAUDE.md §8 — no orphans). While that annotation is set, a tick
+# only suspends again, so re-applying this file cannot re-arm it. The Role has no delete verb, so it can
+# never remove the smoke or a training run.
+#
+#   kubectl -n prithvi-training-default apply --dry-run=server -f k8s/prithvi-b28-chain-cronjob.yaml
+#   kubectl -n prithvi-training-default apply -f k8s/prithvi-b28-chain-cronjob.yaml
+#   kubectl -n prithvi-training-default get cronjob prithvi-b28-chain \
+#     -o jsonpath='{.spec.suspend} {.metadata.annotations.prithvi-b28-chain/outcome}'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prithvi-b28-chain
+  namespace: prithvi-training-default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prithvi-b28-chain
+  namespace: prithvi-training-default
+rules:
+  # get/list: read the smoke and see whether a full run exists. create: the
+  # two full runs, after a server dry-run (which needs create as well).
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create"]
+  # patch: record the outcome and suspend itself — this CronJob only.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["prithvi-b28-chain"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prithvi-b28-chain
+  namespace: prithvi-training-default
+subjects:
+  - kind: ServiceAccount
+    name: prithvi-b28-chain
+    namespace: prithvi-training-default
+roleRef:
+  kind: Role
+  name: prithvi-b28-chain
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prithvi-b28-chain
+  namespace: prithvi-training-default
+  labels: {app: ops, purpose: prithvi-b28-chain}
+data:
+  chain.sh: |
+    #!/bin/sh
+    # One tick of the Prithvi-600M b28 chain (task 0167): once the smoke has
+    # passed, queue both full runs from the specs pinned next to this script.
+    # Every terminal outcome is written to the CronJob's annotation and
+    # suspends it; a non-terminal tick changes nothing.
+    set -u
+    NS=prithvi-training-default
+    SELF=prithvi-b28-chain
+    SMOKE=im023-prithvi600m-smoke
+    RUNS="im023-prithvi600m-b28 im023-prithvi600m-control"
+    SPECS="train-b28-job.yaml train-control-job.yaml"
+    # 2026-11-28T20:00:00Z, just before the im023-prithvi600m-train lock
+    # expires. Epoch seconds: busybox test may be 32-bit.
+    EXPIRES=1795896000
+    cd "$(dirname "$0")"
+    k() { kubectl -n "$NS" "$@"; }
+    log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
+    stop() {
+      log "$1; suspending $SELF"
+      k patch cronjob "$SELF" --type merge -p "{\"metadata\":{\"annotations\":{\"$SELF/outcome\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ) $1\"}},\"spec\":{\"suspend\":true}}" \
+        || { log "ERROR: could not suspend $SELF"; exit 1; }
+      exit 0
+    }
+    # Before any read, so a failing API cannot keep it firing past the date.
+    [ "$(date -u +%s)" -lt "$EXPIRES" ] || stop "expired at 2026-11-28T20:00Z; nothing created"
+    # One outcome per chain: a re-apply (suspend: false) never re-arms it.
+    # Re-arming means removing the annotation by hand.
+    prev=$(k get cronjob "$SELF" -o jsonpath="{.metadata.annotations.$SELF/outcome}") \
+      || { log "ERROR: cannot read cronjob $SELF"; exit 1; }
+    if [ -n "$prev" ]; then
+      log "chain already ended ($prev); suspending $SELF"
+      k patch cronjob "$SELF" --type merge -p '{"spec":{"suspend":true}}' || exit 1
+      exit 0
+    fi
+    # A read error is never mistaken for "not found": it fails this tick and the
+    # next one asks again.
+    for j in $RUNS; do
+      found=$(k get job "$j" --ignore-not-found -o name) || { log "ERROR: cannot read job $j"; exit 1; }
+      [ -z "$found" ] || stop "$j already exists; nothing created"
+    done
+    # Checked on every tick, so an edited ConfigMap stops the chain at once.
+    sha256sum -c - <<EOF || stop "job specs differ from the pinned copies; nothing created"
+    d1cd2b418a6f58585a6841a0d5caf1c1474a7fa03713878bfad2af0db201f91e  train-b28-job.yaml
+    20f4b1d6b7cad543fb8e71846bd3a2662f48167ae9abce201cf325cb2d2d9ec2  train-control-job.yaml
+    EOF
+    state=$(k get job "$SMOKE" --ignore-not-found -o jsonpath='{.metadata.name}:c={.status.conditions[?(@.type=="Complete")].status}:f={.status.conditions[?(@.type=="Failed")].status}') \
+      || { log "ERROR: cannot read job $SMOKE"; exit 1; }
+    case "$state" in
+      "") stop "$SMOKE not found; nothing created" ;;
+      *:c=True:*) ;;
+      *:f=True)
+        k get job "$SMOKE" -o jsonpath='{.status.conditions[?(@.type=="Failed")].reason}: {.status.conditions[?(@.type=="Failed")].message}{"\n"}'
+        stop "$SMOKE FAILED; nothing created" ;;
+      *) log "smoke not finished ($state)"; exit 0 ;;
+    esac
+    for f in $SPECS; do
+      k create --dry-run=server -f "$f" -o name || stop "server dry-run refused $f; nothing created"
+    done
+    for f in $SPECS; do
+      k create -f "$f" -o name || stop "creating $f failed after both dry-runs passed"
+    done
+    stop "$SMOKE succeeded; im023-prithvi600m-b28 and im023-prithvi600m-control created"
+  train-b28-job.yaml: |
+    # IM-023 Prithvi-600M step 2b: main run — 29 classes, NMD 113 as class 28.
+    # Recipe: scripts/im023_retrain_prithvi600m.py (R4's flags + variant switch + fraction head).
+    # Plan: docs/experiments/class-separability/retrain_barrblandskog.md (Prithvi-600M)
+    # Prereq: the smoke passed. Runs in parallel with train-control-job.yaml.
+    #
+    # SHA is filled in after the push; the job refuses to start until then.
+    #   kubectl create --dry-run=server -f k8s/im023/prithvi600m/train-b28-job.yaml
+    #   kubectl create -f k8s/im023/prithvi600m/train-b28-job.yaml
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: im023-prithvi600m-b28
+      namespace: prithvi-training-default
+      labels: { app: unified-training, purpose: im023-retrain, model: prithvi600m, variant: main }
+    spec:
+      backoffLimit: 0
+      # As R4: no Job-level deadline (it would count queue time); the run cap is
+      # on the pod below and starts when the pod starts.
+      ttlSecondsAfterFinished: 172800
+      template:
+        metadata:
+          labels: { app: unified-training, purpose: im023-retrain, model: prithvi600m, variant: main }
+        spec:
+          restartPolicy: Never
+          activeDeadlineSeconds: 57600   # 16 h run cap, as R4 Prithvi-600M (it took 9 h 24 min)
+          nodeSelector:
+            accelerator: nvidia-h100
+          # As the IM-023 TESSERA jobs: srv02's GPU admission was desynced (2026-08-09).
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values: [p02r08srv02]
+          containers:
+            - name: trainer
+              image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export PYTHONUNBUFFERED=1
+                  SHA=21086305d34a1f88cd737bc9c894b8b5db905860
+                  [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: source not pinned (SHA=$SHA)"; exit 1; }
+                  echo "=== im023-prithvi600m-b28 — $(date -u) ==="
+                  apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+                  pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+                    --index-url https://download.pytorch.org/whl/cu121
+                  pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub
+                  mkdir -p /workspace && cd /workspace
+                  git init -q imintengine && cd imintengine
+                  git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+                  git fetch -q --depth 1 origin "$SHA"
+                  git checkout -q "$SHA"
+                  test "$(git rev-parse HEAD)" = "$SHA"
+                  echo "PINNED SOURCE: $SHA"
+                  pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
+                  RETRAIN=/workspace/imintengine/scripts/im023_retrain_prithvi600m.py
+                  cd /cephfs
+                  # --- run ---
+                  for v in main control; do
+                    grep -qx "$SHA" "/cephfs/checkpoints/im023/prithvi600m_smoke_${v}_${SHA:0:12}/_SMOKE_OK" \
+                      || { echo "REFUSED: smoke for $v has not passed at $SHA (k8s/im023/prithvi600m/train-smoke-job.yaml)"; exit 1; }
+                  done
+                  RESUME_FLAG=(); [ "$RESUME" = 1 ] && RESUME_FLAG=(--resume)
+                  python3 "$RETRAIN" --variant main --epochs 30 --checkpoint-dir /cephfs/checkpoints/im023/prithvi600m_b28 "${RESUME_FLAG[@]}"
+                  echo "=== Done: $(date -u) ==="
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                # "1" resumes an interrupted run from its last_checkpoint.pt
+                # (im023_retrain_prithvi600m.py --resume checks it is this run's).
+                - name: RESUME
+                  value: "0"
+                - name: HUGGING_FACE_HUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-token
+                      key: token
+                      optional: true
+              resources:
+                requests:
+                  cpu: "16"
+                  memory: "80Gi"
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "16"
+                  memory: "80Gi"
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - name: cephfs
+                  mountPath: /cephfs
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: cephfs
+              persistentVolumeClaim:
+                claimName: training-data-cephfs
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 32Gi
+  train-control-job.yaml: |
+    # IM-023 Prithvi-600M step 2c: control run — R4's labels and 28 classes, plus the fraction head.
+    # Recipe: scripts/im023_retrain_prithvi600m.py (R4's flags + variant switch + fraction head).
+    # Plan: docs/experiments/class-separability/retrain_barrblandskog.md (Prithvi-600M)
+    # Prereq: the smoke passed. Runs in parallel with train-b28-job.yaml.
+    #
+    # SHA is filled in after the push; the job refuses to start until then.
+    #   kubectl create --dry-run=server -f k8s/im023/prithvi600m/train-control-job.yaml
+    #   kubectl create -f k8s/im023/prithvi600m/train-control-job.yaml
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: im023-prithvi600m-control
+      namespace: prithvi-training-default
+      labels: { app: unified-training, purpose: im023-retrain, model: prithvi600m, variant: control }
+    spec:
+      backoffLimit: 0
+      # As R4: no Job-level deadline (it would count queue time); the run cap is
+      # on the pod below and starts when the pod starts.
+      ttlSecondsAfterFinished: 172800
+      template:
+        metadata:
+          labels: { app: unified-training, purpose: im023-retrain, model: prithvi600m, variant: control }
+        spec:
+          restartPolicy: Never
+          activeDeadlineSeconds: 57600   # 16 h run cap, as R4 Prithvi-600M (it took 9 h 24 min)
+          nodeSelector:
+            accelerator: nvidia-h100
+          # As the IM-023 TESSERA jobs: srv02's GPU admission was desynced (2026-08-09).
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: NotIn
+                        values: [p02r08srv02]
+          containers:
+            - name: trainer
+              image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  export PYTHONUNBUFFERED=1
+                  SHA=21086305d34a1f88cd737bc9c894b8b5db905860
+                  [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: source not pinned (SHA=$SHA)"; exit 1; }
+                  echo "=== im023-prithvi600m-control — $(date -u) ==="
+                  apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+                  pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+                    --index-url https://download.pytorch.org/whl/cu121
+                  pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub
+                  mkdir -p /workspace && cd /workspace
+                  git init -q imintengine && cd imintengine
+                  git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+                  git fetch -q --depth 1 origin "$SHA"
+                  git checkout -q "$SHA"
+                  test "$(git rev-parse HEAD)" = "$SHA"
+                  echo "PINNED SOURCE: $SHA"
+                  pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
+                  RETRAIN=/workspace/imintengine/scripts/im023_retrain_prithvi600m.py
+                  cd /cephfs
+                  # --- run ---
+                  for v in main control; do
+                    grep -qx "$SHA" "/cephfs/checkpoints/im023/prithvi600m_smoke_${v}_${SHA:0:12}/_SMOKE_OK" \
+                      || { echo "REFUSED: smoke for $v has not passed at $SHA (k8s/im023/prithvi600m/train-smoke-job.yaml)"; exit 1; }
+                  done
+                  RESUME_FLAG=(); [ "$RESUME" = 1 ] && RESUME_FLAG=(--resume)
+                  python3 "$RETRAIN" --variant control --epochs 30 --checkpoint-dir /cephfs/checkpoints/im023/prithvi600m_control "${RESUME_FLAG[@]}"
+                  echo "=== Done: $(date -u) ==="
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                # "1" resumes an interrupted run from its last_checkpoint.pt
+                # (im023_retrain_prithvi600m.py --resume checks it is this run's).
+                - name: RESUME
+                  value: "0"
+                - name: HUGGING_FACE_HUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-token
+                      key: token
+                      optional: true
+              resources:
+                requests:
+                  cpu: "16"
+                  memory: "80Gi"
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "16"
+                  memory: "80Gi"
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - name: cephfs
+                  mountPath: /cephfs
+                - name: dshm
+                  mountPath: /dev/shm
+          volumes:
+            - name: cephfs
+              persistentVolumeClaim:
+                claimName: training-data-cephfs
+            - name: dshm
+              emptyDir:
+                medium: Memory
+                sizeLimit: 32Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: prithvi-b28-chain
+  namespace: prithvi-training-default
+  labels: {app: ops, purpose: prithvi-b28-chain}
+spec:
+  # Every 15 min at an off-minute. The smoke waits for an H100 for days, so a
+  # tick is a cheap no-op; a passed smoke idles at most 15 min.
+  schedule: "7,22,37,52 * * * *"
+  suspend: false
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # No TTL: the history limits keep the last ticks' pods, so the log of
+      # the terminal tick survives the suspend.
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels: {app: ops, purpose: prithvi-b28-chain}
+        spec:
+          restartPolicy: Never
+          serviceAccountName: prithvi-b28-chain
+          containers:
+            - name: chain
+              # alpine/k8s 1.30.14, the digest ICE nodes already pull for
+              # vllm-rise-pax-teardown.
+              image: alpine/k8s@sha256:3c6d1e613d94f03d63a6213b8687c7d4e5b9154903327aa8f0b5d628d7ab010b
+              imagePullPolicy: IfNotPresent
+              command: ["sh", "/chain/chain.sh"]
+              resources:
+                requests: {cpu: "100m", memory: "128Mi"}
+                limits:   {cpu: "100m", memory: "128Mi"}
+              volumeMounts:
+                - {name: chain, mountPath: /chain, readOnly: true}
+          volumes:
+            - name: chain
+              configMap: {name: prithvi-b28-chain}
