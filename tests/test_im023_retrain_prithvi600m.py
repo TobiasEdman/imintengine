@@ -403,6 +403,20 @@ def test_preflight_refuses_b28_labels_from_another_distillation(prithvi):
     assert any("relabelled /cephfs/distill/tessera_r2" in p for p in recipe.preflight("main", paths(prithvi)))
 
 
+def test_a_failed_relabel_rerun_leaves_the_preflight_nothing_to_accept(prithvi):
+    """The preflight checks the manifest, not label contents: a failed rerun must withdraw it."""
+    given = paths(prithvi)
+    b28 = Path(given["b28_label_dir"])
+    assert (b28 / relabel.MANIFEST).is_file() and recipe.preflight("main", given) == []
+    out = sorted(b28.glob("*.npz"))[0]
+    label = relabel.load(out)["label"].copy()
+    label[0, 0] = 9 if label[0, 0] != 9 else 8
+    np.savez_compressed(out, **(relabel.load(out) | {"label": label}))   # stamp kept, not the rule's
+    with pytest.raises(ValueError, match="not the rule applied to the current NMD label"):
+        reuse.run(prithvi["nmd"], prithvi["nmd_b28"], prithvi["p_r2"], b28)
+    assert any(f"{b28 / relabel.MANIFEST} missing" in p for p in recipe.preflight("main", given))
+
+
 def test_relabel_job_runs_the_chain_that_made_the_r2_labels():
     text = body(load(JOBS / "relabel-b28-job.yaml"))
     tessera_text = body(load(TESSERA_JOBS / "relabel-b28-job.yaml"))

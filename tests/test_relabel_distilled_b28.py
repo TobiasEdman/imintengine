@@ -74,6 +74,7 @@ def test_refuses_to_write_over_another_cohort(root):
     assert reuse.main(reuse_args(root)) == 0
     with pytest.raises(ValueError, match="relabelled another distillation"):  # second_b28 is second's
         reuse.run(root / "nmd_old", root / "nmd_b28", root / "stored", root / "second_b28")
+    assert (root / "second_b28" / relabel.MANIFEST).is_file()   # not this run's to withdraw
 
 
 def test_a_skipped_output_must_still_be_the_rule(root):
@@ -84,6 +85,7 @@ def test_a_skipped_output_must_still_be_the_rule(root):
     rewrite(out, label=label)                                # stamp intact, content not the rule's
     with pytest.raises(ValueError, match="not the rule applied to the current NMD label"):
         reuse.main(reuse_args(root))
+    assert not (root / "second_b28" / relabel.MANIFEST).exists()   # the failed rerun left no done signal
 
 
 def test_manifest_carries_the_reused_nmd_totals_and_resumes(root):

@@ -16,7 +16,9 @@ directory and never writes to it:
   label and written atomically, stamped as ``run`` stamps it; current outputs
   are skipped;
 * ``relabel_manifest.json`` is written into the distilled directory only, last,
-  with the NMD totals of the reused manifest. It is the done signal.
+  with the NMD totals of the reused manifest. It is the done signal: a run
+  removes the previous one before it touches any tile, so only a run that
+  validated every tile leaves one.
 
 The outputs are the files ``run`` would write for this cohort. The
 verification gate (``relabel_barrblandskog.py verify``) is unchanged and runs
@@ -76,6 +78,9 @@ def run(nmd_in: Path, nmd_b28: Path, distill_in: Path, distill_out: Path) -> dic
     previous = distill_out / MANIFEST
     if previous.is_file() and json.loads(previous.read_text())["inputs"]["distilled"] != str(distill_in):
         raise ValueError(f"{previous} relabelled another distillation than {distill_in}")
+    # distill_out is this run's. Withdraw the done signal before any tile is
+    # checked or written, so a rerun that fails leaves no stale completion behind.
+    previous.unlink(missing_ok=True)
     cohort = names(distill_in)
     if not cohort:
         raise ValueError(f"no distilled sidecars in {distill_in}")
