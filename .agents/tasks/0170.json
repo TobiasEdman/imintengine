@@ -1,0 +1,13 @@
+{
+  "id": "0170",
+  "subject": "Declare headless review dispatch for both runtimes",
+  "description": "Tobias decided on 2026-11-15 that ImintEngine should allow headless cross-runtime reviews for both runtimes, as multi-agentic does [user-stated 2026-11-15], after Codex reviews of #159-#161 could not be dispatched (TobiasEdman/multi-agentic#320). Add .agents/review-dispatch.json (claude: opus, quality lens, 30 min, 25 turns, 5 USD, 1 retry; codex: quality lens, 30 min, 1 retry) and the schema and prompts it needs, copied unchanged from TobiasEdman/multi-agentic main 3523b2d. Not in scope: running dispatch, the KeyError in dispatch's line output (multi-agentic#320), changing the coordination profile. Review: fresh Claude reviewer; integration is Tobias's decision.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/review-dispatch",
+  "created_at": "2026-11-16T08:35:55Z",
+  "updated_at": "2026-11-16T08:36:14Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-16T08:36:14Z"
+}

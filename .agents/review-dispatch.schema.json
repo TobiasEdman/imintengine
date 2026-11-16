@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TobiasEdman/multi-agentic/.agents/review-dispatch.schema.json",
+  "title": "Headless review declaration",
+  "description": "Which runtimes may review this repository headless, with which lenses and caps. Read by `agentic-task dispatch` from the protected base commit only; a copy on a pull-request branch has no effect. Absence of the file, or of a runtime in it, means no headless run for that runtime. This is the per-repository answer to plan decision 8 (cross-vendor review of private code) for the headless path.",
+  "type": "object",
+  "required": ["schema_version", "runtimes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1" },
+    "_note": { "type": "string" },
+    "runtimes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claude": { "$ref": "#/$defs/runtime" },
+        "codex": { "$ref": "#/$defs/runtime" }
+      }
+    }
+  },
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "required": ["lenses", "max_minutes"],
+      "additionalProperties": false,
+      "properties": {
+        "lenses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["quality", "security", "docs"] },
+          "description": "Every lens listed is required: each runs headless and posts its findings, then one aggregate verdict is posted for the tuple (any NEEDS_CHANGES blocks; a failed or verdict-less lens means no verdict). Lens prompts are read from .agents/prompts/ on the protected base."
+        },
+        "max_minutes": {
+          "type": "integer", "minimum": 1, "maximum": 180,
+          "description": "Wall-clock cap enforced by the dispatcher for every runtime."
+        },
+        "max_turns": {
+          "type": "integer", "minimum": 1, "maximum": 200,
+          "description": "Agent-turn cap. Enforced through the runtime's own flag; declaring it for a runtime whose binary cannot enforce it fails the precheck."
+        },
+        "max_usd": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 100,
+          "description": "Spend cap passed to the runtime where it has one (Claude's --max-budget-usd). The journal records the cost the runtime reports."
+        },
+        "model": {
+          "type": "string", "minLength": 1,
+          "description": "Optional model name or alias passed to the runtime."
+        },
+        "retries": {
+          "type": "integer", "minimum": 0, "maximum": 3, "default": 1,
+          "description": "How many further attempts a failed or uncertain-post run may get for the same tuple, each after a readback shows nothing was posted."
+        }
+      }
+    }
+  }
+}
