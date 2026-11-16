@@ -28,12 +28,14 @@ Subcommands:
 ``run``     writes every NMD sidecar and every distilled sidecar to two new
             directories, atomically, stamped with rule and source digest;
             tiles whose outputs are current are skipped once their content
-            is checked to be exactly what the rule writes. A manifest with
-            the totals of the output state is the done signal: a run removes
-            the previous one from both outputs before it touches any tile
-            (refusing outputs another relabel's manifest names) and publishes
-            the new one last via tmp + os.replace, so only a run that
-            validated every tile leaves one.
+            is checked to be exactly what the rule writes. Each output keeps
+            an owner record of the inputs and outputs it is relabelled for,
+            never withdrawn: a run refuses outputs another relabel owns, and
+            outputs holding sidecars without an owner record or a manifest.
+            A manifest with the totals of the output state is the done
+            signal: a run removes the previous one from both outputs before
+            it touches any tile and publishes the new one last via tmp +
+            os.replace, so only a run that validated every tile leaves one.
 """
 from __future__ import annotations
 
@@ -56,7 +58,11 @@ TRAINER_KEYS = ("label", "parcel_area_ha", "nmd_area_ha")
 # tile's, else zeros, as float32 (unified_dataset._LabelOverlay, __getitem__).
 AREA_KEYS = ("parcel_area_ha", "nmd_area_ha")
 MANIFEST = "relabel_manifest.json"
-STAMP_KEYS = ("relabel_rule", "relabel_source_sha256")
+# Which inputs and outputs a directory is relabelled for; unlike the manifest,
+# never withdrawn, so a failed run leaves its outputs to no other pairing.
+OWNER = "relabel_owner.json"
+# np.array_equal compares NaN and NaT as equal for these kinds and raises on str.
+NAN_KINDS = "fcmM"
 
 
 def relabel_nmd(label: np.ndarray, raw: np.ndarray) -> np.ndarray:
@@ -90,6 +96,13 @@ def save_atomic(path: Path, payload: dict[str, np.ndarray]) -> None:
     os.replace(tmp.with_suffix(".tmp.npz"), path)
 
 
+def write_json(path: Path, record: dict) -> None:
+    """Write ``record`` whole or not at all: tmp + os.replace."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(record, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
 def names(directory: Path) -> set[str]:
     return {p.stem for p in directory.glob("*.npz")}
 
@@ -103,6 +116,17 @@ def is_current(out: Path, source: Path) -> bool:
                     and str(z["relabel_source_sha256"]) == digest(source))
     except (KeyError, OSError, ValueError):
         return False
+
+
+def current_payload(out: Path, stamp: dict[str, np.str_]) -> dict[str, np.ndarray] | None:
+    """``out`` without its stamps if they are ``stamp``; None if missing, unreadable or stale."""
+    try:
+        with np.load(out, allow_pickle=False) as z:
+            if any(str(z[key]) != value for key, value in stamp.items()):
+                return None
+            return {key: z[key] for key in z.files if key not in stamp}
+    except (KeyError, OSError, ValueError):
+        return None
 
 
 def sample(nmd_dir: Path, distill_dir: Path, with_113: int, without_113: int) -> list[str]:
@@ -148,7 +172,7 @@ def compare(expected: dict, actual: dict, name: str, source: dict) -> tuple[list
             a, b = np.asarray(expected[key]), np.asarray(actual[key])
             if a.dtype != b.dtype or a.shape != b.shape:
                 problems.append(f"{name}: {key} is {b.dtype}{b.shape}, canonical {a.dtype}{a.shape}")
-            elif not np.array_equal(a, b, equal_nan=a.dtype.kind == "f"):
+            elif not np.array_equal(a, b, equal_nan=a.dtype.kind in NAN_KINDS):
                 problems.append(f"{name}: {key} differs in {int((a != b).sum())} cells")
             continue
         side = "canonical" if key in expected else "shortcut"
@@ -237,15 +261,38 @@ def relabel_tile(pairs: list[tuple[Path, Path]]) -> list[tuple[np.ndarray, dict[
 
 
 def same_payload(stored: dict[str, np.ndarray], expected: dict[str, np.ndarray]) -> bool:
-    """Same keys, and per key the same dtype, shape and values (NaN equal to NaN)."""
+    """Same keys, and per key the same dtype, shape and values (NaN equal to NaN, NaT to NaT)."""
     return stored.keys() == expected.keys() and all(
         stored[k].dtype == expected[k].dtype and stored[k].shape == expected[k].shape
-        and np.array_equal(stored[k], expected[k], equal_nan=stored[k].dtype.kind == "f")
+        and np.array_equal(stored[k], expected[k], equal_nan=stored[k].dtype.kind in NAN_KINDS)
         for k in expected)
 
 
-def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
-        tile_ids: list[str] | None = None) -> dict:
+def claim(outputs: tuple[Path, Path], dirs: dict) -> None:
+    """Refuse unless both outputs are ``dirs``' or new, then record them as ``dirs``'.
+
+    Every owner record and manifest present must name ``dirs``; an output with
+    sidecars but neither is refused, since nothing says whose they are. An
+    output without an owner record whose manifest names ``dirs`` predates the
+    record and is adopted.
+    """
+    for directory in outputs:
+        records = [directory / name for name in (OWNER, MANIFEST) if (directory / name).is_file()]
+        for path in records:
+            named = json.loads(path.read_text())
+            if {key: named.get(key) for key in dirs} != dirs:
+                raise ValueError(f"{path} relabelled {named.get('inputs')} into {named.get('outputs')}, "
+                                 f"not {dirs['inputs']} into {dirs['outputs']}")
+        if not records and names(directory):
+            raise ValueError(f"{directory} holds sidecars without {OWNER} or {MANIFEST}: "
+                             "not known which relabel wrote them")
+    for directory in outputs:
+        directory.mkdir(parents=True, exist_ok=True)
+        if not (directory / OWNER).is_file():
+            write_json(directory / OWNER, dirs)
+
+
+def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path) -> dict:
     sources, targets = {nmd_in.resolve(), distill_in.resolve()}, {nmd_out.resolve(), distill_out.resolve()}
     if len(targets) != 2 or targets & sources:
         raise ValueError("outputs must be two new directories, never an input directory")
@@ -253,28 +300,16 @@ def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
     orphans = sorted(distill_names - nmd_names)
     if orphans:
         raise ValueError(f"{len(orphans)} distilled sidecars without an NMD sidecar, e.g. {orphans[:5]}")
-    if tile_ids:
-        missing = sorted(set(tile_ids) - nmd_names)
-        if missing:
-            raise ValueError(f"requested tiles without an NMD sidecar: {missing}")
-        nmd_names = set(tile_ids)
     if not nmd_names:
         raise ValueError(f"no NMD sidecars in {nmd_in}")
     dirs = {"inputs": {"nmd": str(nmd_in), "distilled": str(distill_in)},
             "outputs": {"nmd": str(nmd_out), "distilled": str(distill_out)}}
-    previous = [directory / MANIFEST for directory in (nmd_out, distill_out)]
-    for path in previous:
-        if path.is_file():
-            named = json.loads(path.read_text())
-            if {key: named.get(key) for key in dirs} != dirs:
-                raise ValueError(f"{path} relabelled {named.get('inputs')} into {named.get('outputs')}, "
-                                 f"not {dirs['inputs']} into {dirs['outputs']}")
+    claim((nmd_out, distill_out), dirs)
     # The outputs are this run's. Withdraw the done signal before any tile is
     # checked or written, so a run that fails leaves no stale completion behind.
+    previous = [directory / MANIFEST for directory in (nmd_out, distill_out)]
     for path in previous:
         path.unlink(missing_ok=True)
-    for directory in targets:
-        directory.mkdir(parents=True, exist_ok=True)
 
     totals = dict.fromkeys(("written", "skipped_current", "nmd_tiles", "distilled_tiles",
                             "nmd_changed", "distilled_changed", "class_28_pixels"), 0)
@@ -283,17 +318,19 @@ def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
         if name in distill_names:
             pairs.append((distill_in / f"{name}.npz", distill_out / f"{name}.npz"))
         relabelled = relabel_tile(pairs)
-        if all(is_current(out, source) for source, out in pairs):
+        # One digest per source and one read per output serve both the check and the write.
+        stamps = [{"relabel_rule": np.str_(RULE), "relabel_source_sha256": np.str_(digest(source))}
+                  for source, _ in pairs]
+        stored = [current_payload(out, stamp) for (_, out), stamp in zip(pairs, stamps)]
+        if all(kept is not None for kept in stored):
             # The stamps match; the content must still be what the rule writes.
-            for (source, out), (_, payload) in zip(pairs, relabelled):
-                stored = {k: v for k, v in load(out).items() if k not in STAMP_KEYS}
-                if not same_payload(stored, payload):
+            for (source, out), kept, (_, payload) in zip(pairs, stored, relabelled):
+                if not same_payload(kept, payload):
                     raise ValueError(f"{out}: stored output is not the rule applied to {source}")
             totals["skipped_current"] += 1
         else:
-            for (source, out), (_, payload) in zip(pairs, relabelled):
-                save_atomic(out, payload | {"relabel_rule": np.str_(RULE),
-                                            "relabel_source_sha256": np.str_(digest(source))})
+            for (_, out), stamp, (_, payload) in zip(pairs, stamps, relabelled):
+                save_atomic(out, payload | stamp)
             totals["written"] += 1
         (old_nmd, new_nmd), *distilled = [(old, payload["label"]) for old, payload in relabelled]
         totals["nmd_tiles"] += 1
@@ -306,12 +343,9 @@ def run(nmd_in: Path, distill_in: Path, nmd_out: Path, distill_out: Path,
     git_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
                              text=True).stdout.strip() or None
     manifest = {"rule": RULE, "git_sha": git_sha, **dirs, **totals}
-    text = json.dumps(manifest, indent=2) + "\n"
     # The manifest is the done signal: write it whole or not at all.
     for path in previous:
-        tmp = path.with_name(f".{MANIFEST}.tmp")
-        tmp.write_text(text)
-        os.replace(tmp, path)
+        write_json(path, manifest)
     return manifest
 
 
@@ -342,7 +376,6 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--distill-in", type=Path, required=True)
     rp.add_argument("--nmd-out", type=Path, required=True)
     rp.add_argument("--distill-out", type=Path, required=True)
-    rp.add_argument("--tile-ids", nargs="+")
     args = ap.parse_args(argv)
 
     if args.command == "sample":
@@ -357,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary | {"problems": (report["nmd_problems"] + report["distill_problems"])[:20],
                                     "notes": report["notes"][:10]}))
         return 0 if report["identical"] else 1
-    manifest = run(args.nmd_in, args.distill_in, args.nmd_out, args.distill_out, args.tile_ids)
+    manifest = run(args.nmd_in, args.distill_in, args.nmd_out, args.distill_out)
     print(json.dumps(manifest))
     return 0
 

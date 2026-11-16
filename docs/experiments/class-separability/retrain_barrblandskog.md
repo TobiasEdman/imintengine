@@ -89,8 +89,15 @@ destillation), i fyra steg:
    - `relabel_manifest.json` är klarsignalen. Körningen tar bort det
      tidigare manifestet i båda katalogerna innan den rör någon tile och
      skriver det nya sist, via tmp + `os.replace`. Bara en körning som
-     gått igenom alla tiles lämnar ett manifest. En katalog vars manifest
-     namnger andra in- eller utkataloger vägras.
+     gått igenom alla tiles lämnar ett manifest, och `run` har därför
+     ingen delmängdsväg (`--tile-ids`).
+   - `relabel_owner.json` anger vilka in- och utkataloger en katalog
+     omvandlas för. Den skrivs första gången och tas aldrig bort, så en
+     misslyckad körning lämnar inte katalogen öppen för ett annat par.
+     En katalog vars ägarfil eller manifest namnger andra in- eller
+     utkataloger vägras. Det gör även en katalog med sidecars men varken
+     ägarfil eller manifest. En katalog med ett manifest från tiden före
+     ägarfilen tas över om manifestet namnger samma kataloger.
    - Jobbet stoppar om antalet destillerade filer skiljer sig från R4:s.
 
 Underlaget sparas i `/cephfs/im023/relabel_verify/<UTC-tid>/`.
@@ -382,9 +389,10 @@ Prithvi-600M:s R2-checkpoint, huvud och destillationsargument
 
 NMD-etiketterna med klass 28 beror inte på modellen och finns redan i
 `/cephfs/nmd2023_labels_b28`. `relabel_barrblandskog.py run` vägrar skriva
-dit, eftersom manifestet där namnger TESSERA-kohorten (utan den kontrollen
-hade det skrivit om dem och ersatt manifestet med Prithvi-kohortens summor),
-så steg 4 använder i stället `scripts/relabel_distilled_b28.py`. Skriptet läser
+dit, eftersom manifestet där namnger TESSERA-kohorten (från TESSERA:s nästa
+körning gör ägarfilen det också). Utan den kontrollen hade det skrivit om
+dem och ersatt manifestet med Prithvi-kohortens summor, så steg 4 använder
+i stället `scripts/relabel_distilled_b28.py`. Skriptet läser
 NMD-katalogen men skriver aldrig dit. Det kontrollerar regel och indata i
 manifestet, och att varje kohort-tiles lagrade etikett är regeln
 tillämpad på källan. Därefter skriver det samma filer som `run` hade

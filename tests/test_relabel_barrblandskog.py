@@ -5,6 +5,7 @@ and ``apply_override`` on random inputs, and on disk through the real
 ``build_labels.build_tile_label`` (raster + LPIS/SKS parquet) and the real
 ``distill_forest_labels.process_tile`` with a stub forward pass.
 """
+from collections import Counter
 from pathlib import Path
 import json
 import os
@@ -289,13 +290,14 @@ def test_a_skipped_output_must_still_be_the_rule(chain, output, key):
     assert not any(p.exists() for p in manifests(root))      # the failed rerun left no done signal
 
 
+def full_disk(path, payload):
+    raise OSError("no space left")
+
+
 def test_a_rerun_that_fails_partway_leaves_no_manifest(chain, monkeypatch):
     root, _ = chain
     assert relabel.main(run_args(root)) == 0
     (root / "b28_distill" / "T1.npz").unlink()               # the rerun has a tile to write
-
-    def full_disk(path, payload):
-        raise OSError("no space left")
     monkeypatch.setattr(relabel, "save_atomic", full_disk)
     with pytest.raises(OSError, match="no space left"):
         relabel.main(run_args(root))
@@ -325,6 +327,95 @@ def test_refuses_outputs_another_relabel_wrote(chain):
     with pytest.raises(ValueError, match="relabelled .* not "):
         relabel.run(root / "nmd_old", root / "other", root / "b28_nmd", root / "b28_distill")
     assert [p.read_text() for p in manifests(root)] == before   # not this run's to withdraw
+
+
+def test_a_failed_rerun_leaves_the_outputs_to_no_other_relabel(chain, monkeypatch):
+    """The owner record outlives the withdrawn manifest."""
+    root, _ = chain
+    assert relabel.main(run_args(root)) == 0
+    (root / "b28_distill" / "T1.npz").unlink()
+    with monkeypatch.context() as m:
+        m.setattr(relabel, "save_atomic", full_disk)
+        with pytest.raises(OSError, match="no space left"):
+            relabel.main(run_args(root))
+    assert not any(p.exists() for p in manifests(root))
+    shutil.copytree(root / "stored", root / "other")
+    with pytest.raises(ValueError, match="relabelled .* not "):
+        relabel.run(root / "nmd_old", root / "other", root / "b28_nmd", root / "b28_distill")
+    assert not any(p.exists() for p in manifests(root))
+    assert relabel.main(run_args(root)) == 0                   # the owner's rerun still goes through
+
+
+def test_refuses_outputs_with_sidecars_no_record_claims(chain):
+    root, _ = chain
+    (root / "b28_nmd").mkdir()
+    shutil.copy(root / "nmd_old" / "T1.npz", root / "b28_nmd" / "T1.npz")
+    with pytest.raises(ValueError, match="not known which relabel wrote them"):
+        relabel.main(run_args(root))
+    assert sorted(p.name for p in (root / "b28_nmd").iterdir()) == ["T1.npz"]
+    assert not (root / "b28_distill").exists()
+
+
+def test_adopts_outputs_whose_manifest_predates_the_owner_record(chain):
+    root, _ = chain
+    assert relabel.main(run_args(root)) == 0
+    for directory in ("b28_nmd", "b28_distill"):
+        (root / directory / relabel.OWNER).unlink()          # as the run before the record left them
+    assert relabel.main(run_args(root)) == 0
+    manifest = json.loads(manifests(root)[0].read_text())
+    for directory in ("b28_nmd", "b28_distill"):
+        assert json.loads((root / directory / relabel.OWNER).read_text()) == \
+               {key: manifest[key] for key in ("inputs", "outputs")}
+
+
+def test_run_has_no_subset_mode(chain):
+    """A subset run would publish its subset totals as the cohort's done signal."""
+    root, _ = chain
+    assert relabel.main(run_args(root)) == 0
+    before = [p.read_text() for p in manifests(root)]
+    with pytest.raises(SystemExit):
+        relabel.main([*run_args(root), "--tile-ids", "T1"])
+    assert [p.read_text() for p in manifests(root)] == before
+
+
+def test_run_hashes_each_source_and_reads_each_output_once(chain, monkeypatch):
+    root, _ = chain
+    assert relabel.main(run_args(root)) == 0
+    outputs = [root / directory / "T1.npz" for directory in ("b28_nmd", "b28_distill")]
+    stale = relabel.load(outputs[0]) | {"relabel_source_sha256": np.str_("stale")}
+    hashed, opened = Counter(), Counter()
+    digest, np_load = relabel.digest, np.load
+
+    def counted_digest(path):
+        hashed[path] += 1
+        return digest(path)
+
+    def counted_load(path, *args, **kwargs):
+        opened[Path(path)] += 1
+        return np_load(path, *args, **kwargs)
+    monkeypatch.setattr(relabel, "digest", counted_digest)
+    monkeypatch.setattr(np, "load", counted_load)
+
+    def rerun() -> dict:
+        return relabel.run(root / "nmd_old", root / "stored", root / "b28_nmd", root / "b28_distill")
+
+    assert rerun()["skipped_current"] == 1
+    assert sorted(hashed.values()) == [1, 1] and [opened[p] for p in outputs] == [1, 1]
+    np.savez_compressed(outputs[0], **stale)                 # the tile is rewritten
+    hashed.clear()
+    opened.clear()
+    assert rerun()["written"] == 1
+    assert sorted(hashed.values()) == [1, 1] and [opened[p] for p in outputs] == [1, 1]
+
+
+@pytest.mark.parametrize("values", [np.array([np.nan, 1], np.float32),
+                                    np.array([complex("nan"), 1j]),
+                                    np.array(["NaT", "2022-05-10"], "datetime64[D]"),
+                                    np.array(["NaT", 3], "timedelta64[s]")])
+def test_nan_and_nat_equal_themselves(values):
+    stored, expected = {"key": values}, {"key": values.copy()}
+    assert relabel.same_payload(stored, expected)
+    assert relabel.compare(expected, stored, "t", {}) == ([], [])
 
 
 def test_run_refuses_input_directories_and_orphans(chain):
