@@ -42,7 +42,9 @@ line = " ".join(argv)
 if any(s in line for s in state.get("fail", [])):
     sys.exit("Error from server: refused (fake)")
 verb = argv[2]
-if verb == "get":
+if verb == "get" and argv[3] == "cronjob":
+    print(state.get("outcome", ""), end="")
+elif verb == "get":
     jobs = state.get("jobs", {})
     name = argv[4]
     if name not in jobs:
@@ -122,7 +124,18 @@ def test_rbac_cannot_delete_or_touch_other_cronjobs():
                                     "namespace": "prithvi-training-default"}]
 
 
-def tick(tmp_path, *, jobs, now=BEFORE, fail=(), tamper=False):
+def test_status_templates_are_the_ones_checked_on_ice():
+    # The fake kubectl does not evaluate jsonpath, so the templates are pinned
+    # to the forms run against ICE on 2026-11-16: a pending job gave ":c=:f=",
+    # a completed one ":c=True:f=", a failed one ":c=:f=True", and the outcome
+    # key read back from an annotated object.
+    script = configmap()["chain.sh"]
+    assert ("-o jsonpath='{.metadata.name}:c={.status.conditions[?(@.type==\"Complete\")].status}"
+            ":f={.status.conditions[?(@.type==\"Failed\")].status}'") in script
+    assert '-o jsonpath="{.metadata.annotations.$SELF/outcome}"' in script
+
+
+def tick(tmp_path, *, jobs, now=BEFORE, fail=(), tamper=False, outcome=""):
     """Run chain.sh once from a copy of the ConfigMap; return (rc, stdout, calls, patches)."""
     chain = tmp_path / "chain"
     chain.mkdir()
@@ -135,7 +148,7 @@ def tick(tmp_path, *, jobs, now=BEFORE, fail=(), tamper=False):
     for name, body in (("kubectl", FAKE_KUBECTL), ("date", FAKE_DATE)):
         (fake / name).write_text(body.replace("#!/usr/bin/env python3", f"#!{sys.executable}"))
         (fake / name).chmod(0o755)
-    (tmp_path / "state.json").write_text(json.dumps({"jobs": jobs, "fail": list(fail)}))
+    (tmp_path / "state.json").write_text(json.dumps({"jobs": jobs, "fail": list(fail), "outcome": outcome}))
     calls = tmp_path / "calls.jsonl"
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "KUBECONFIG": os.devnull,
            "FAKE_K8S": str(tmp_path / "state.json"), "FAKE_CALLS": str(calls), "FAKE_NOW": now}
@@ -171,7 +184,23 @@ def test_a_passed_smoke_dry_runs_both_then_creates_both_then_suspends(tmp_path):
     assert rc == 0
     assert creates(calls) == [(True, "train-b28-job.yaml"), (True, "train-control-job.yaml"),
                               (False, "train-b28-job.yaml"), (False, "train-control-job.yaml")]
-    assert calls[-1][0] == "patch" and suspended_with(patches, "created")
+    assert calls[-1][0] == "patch" and suspended_with(patches, f"{SMOKE} succeeded")
+
+
+def test_a_recorded_outcome_is_never_re_armed(tmp_path):
+    rc, out, calls, patches = tick(tmp_path, jobs={SMOKE: {"Complete": "True"}},
+                                   outcome=f"2026-11-20T08:07:30Z {SMOKE} succeeded; ... created")
+    assert rc == 0 and "chain already ended" in out
+    assert creates(calls) == [] and not any(c[:2] == ["get", "job"] for c in calls)
+    assert patches == [{"spec": {"suspend": True}}]
+
+
+def test_a_failed_create_after_both_dry_runs_suspends_with_the_file(tmp_path):
+    rc, out, calls, patches = tick(tmp_path, jobs={SMOKE: {"Complete": "True"}},
+                                   fail=["create -f train-control-job.yaml"])
+    assert rc == 0 and creates(calls)[-2:] == [(False, "train-b28-job.yaml"),
+                                               (False, "train-control-job.yaml")]
+    assert suspended_with(patches, "creating train-control-job.yaml failed")
 
 
 def test_a_failed_smoke_creates_nothing_and_suspends(tmp_path):
@@ -193,9 +222,10 @@ def test_a_missing_smoke_creates_nothing_and_suspends(tmp_path):
     assert rc == 0 and creates(calls) == [] and suspended_with(patches, "not found")
 
 
-def test_the_hard_stop_holds_even_for_a_passed_smoke(tmp_path):
-    rc, out, calls, patches = tick(tmp_path, jobs={SMOKE: {"Complete": "True"}}, now=EXPIRY)
-    assert rc == 0 and creates(calls) == [] and suspended_with(patches, "expired")
+@pytest.mark.parametrize("fail", [(), ("get",)], ids=["reads-ok", "reads-failing"])
+def test_the_hard_stop_holds_even_for_a_passed_smoke(tmp_path, fail):
+    rc, out, calls, patches = tick(tmp_path, jobs={SMOKE: {"Complete": "True"}}, now=EXPIRY, fail=fail)
+    assert rc == 0 and [c[0] for c in calls] == ["patch"] and suspended_with(patches, "expired")
 
 
 def test_one_refused_dry_run_creates_neither(tmp_path):
@@ -212,7 +242,13 @@ def test_an_edited_spec_stops_the_chain_on_the_next_tick(tmp_path, conditions):
     assert suspended_with(patches, "differ from the pinned copies")
 
 
-def test_a_read_error_fails_the_tick_without_suspending(tmp_path):
-    rc, out, calls, patches = tick(tmp_path, jobs={SMOKE: {"Complete": "True"}},
-                                   fail=[f"get job {SMOKE}"])
+@pytest.mark.parametrize("read", [f"get cronjob {NAME}", "get job im023-prithvi600m-b28",
+                                  f"get job {SMOKE}"])
+def test_a_read_error_fails_the_tick_without_suspending(tmp_path, read):
+    rc, out, calls, patches = tick(tmp_path, jobs={SMOKE: {"Complete": "True"}}, fail=[read])
     assert rc == 1 and creates(calls) == [] and patches == []
+
+
+def test_a_failed_suspend_fails_the_tick(tmp_path):
+    rc, out, calls, patches = tick(tmp_path, jobs={SMOKE: {"Failed": "True"}}, fail=["patch"])
+    assert rc == 1 and creates(calls) == [] and "could not suspend" in out

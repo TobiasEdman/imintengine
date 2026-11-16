@@ -16,7 +16,8 @@
 # Self-terminating: every terminal outcome (both runs created, a run already
 # exists, smoke failed or missing, a dry-run refused, past 2026-11-28T20:00Z)
 # is written to the annotation prithvi-b28-chain/outcome and suspends the
-# CronJob (CLAUDE.md §8 — no orphans). The Role has no delete verb, so it can
+# CronJob (CLAUDE.md §8 — no orphans). While that annotation is set, a tick
+# only suspends again, so re-applying this file cannot re-arm it. The Role has no delete verb, so it can
 # never remove the smoke or a training run.
 #
 #   kubectl -n prithvi-training-default apply --dry-run=server -f k8s/prithvi-b28-chain-cronjob.yaml
@@ -91,13 +92,23 @@ data:
         || { log "ERROR: could not suspend $SELF"; exit 1; }
       exit 0
     }
+    # Before any read, so a failing API cannot keep it firing past the date.
+    [ "$(date -u +%s)" -lt "$EXPIRES" ] || stop "expired at 2026-11-28T20:00Z; nothing created"
+    # One outcome per chain: a re-apply (suspend: false) never re-arms it.
+    # Re-arming means removing the annotation by hand.
+    prev=$(k get cronjob "$SELF" -o jsonpath="{.metadata.annotations.$SELF/outcome}") \
+      || { log "ERROR: cannot read cronjob $SELF"; exit 1; }
+    if [ -n "$prev" ]; then
+      log "chain already ended ($prev); suspending $SELF"
+      k patch cronjob "$SELF" --type merge -p '{"spec":{"suspend":true}}' || exit 1
+      exit 0
+    fi
     # A read error is never mistaken for "not found": it fails this tick and the
     # next one asks again.
     for j in $RUNS; do
       found=$(k get job "$j" --ignore-not-found -o name) || { log "ERROR: cannot read job $j"; exit 1; }
       [ -z "$found" ] || stop "$j already exists; nothing created"
     done
-    [ "$(date -u +%s)" -lt "$EXPIRES" ] || stop "expired at 2026-11-28T20:00Z; nothing created"
     # Checked on every tick, so an edited ConfigMap stops the chain at once.
     sha256sum -c - <<EOF || stop "job specs differ from the pinned copies; nothing created"
     d1cd2b418a6f58585a6841a0d5caf1c1474a7fa03713878bfad2af0db201f91e  train-b28-job.yaml
