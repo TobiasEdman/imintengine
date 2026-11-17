@@ -1,0 +1,10 @@
+{
+  "id": "0176",
+  "subject": "Anchor the corrected TESSERA b28 card revision",
+  "description": "Tobias asked on 2026-11-17 to correct the model card now ('rätta modellkortet nu också'). The corrected card (PR #167, task 0174) was exported from main 7557298 and uploaded as HF revision 65a60e950c62760ed73782009a96999209a05a7f of the private RISE-Sweden/imint-tessera-b28; its tensors are identical to revision a40411a, and a pinned download loads with the anchor. Add its row to release/hf/imint-tessera-b28/RELEASES.md: date, HF revision, exporter commit, MANIFEST.json sha256 e047991ab417a7d373d75d25d040653b93a3760657ba38541b2306efac2eb7ec, source checkpoint sha256. The a40411a row stays. Not in scope: the five-forest-type distillation (task 0175), inviting Aleksis (Tobias). Review: fresh single-model Claude reviewer (Codex out until 2026-11-18); integration is Tobias's decision.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/release-b28-anchor-65a60e9",
+  "created_at": "2026-11-17T20:50:10Z",
+  "updated_at": "2026-11-17T20:50:10Z"
+}
