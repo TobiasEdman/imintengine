@@ -1,0 +1,10 @@
+{
+  "id": "0174",
+  "subject": "Correct the TESSERA b28 card on class 28",
+  "description": "Tobias asked on 2026-11-17 to correct the model card now. release/hf/imint-tessera-b28/README.md says class 28 follows NMD 2023's stand-level code 113 and so has stand boundaries; nothing in the repository supports the stand-level claim. What is true (scripts/relabel_barrblandskog.py): forest classes 1-4 in the training labels are the NFI-trained distillation head's per-pixel calls, while class 28 is NMD 2023 code 113's own extent laid over them. The card must say that, and say that a version with a five-forest-class distillation will replace this one. Then export a new release from main with scripts/hf_release.py (same checkpoint im023/tessera_b28/best_model.pt, weights unchanged), upload it to RISE-Sweden/imint-tessera-b28 as a new revision on Tobias's go (given 2026-11-17: 'rätta modellkortet nu också'), and add its RELEASES.md row in a follow-up PR. Not in scope: retraining, the five-class distillation itself, Prithvi, metrics (results private until the paper). Review: fresh single-model Claude reviewer (Codex out until 2026-11-18); integration is Tobias's decision.",
+  "status": "pending",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/tessera-card-class28",
+  "created_at": "2026-11-17T20:17:39Z",
+  "updated_at": "2026-11-17T20:17:39Z"
+}
