@@ -35,7 +35,7 @@ spec:
             - |
               set -euo pipefail
               export PYTHONUNBUFFERED=1
-              SHA=REPLACE_WITH_PUSHED_SHA
+              SHA=6e08fe5ed86a16b1e411555cbb74fa0154193dad
               [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: source not pinned (SHA=$SHA)"; exit 1; }
               echo "=== im023-tessera-f5 — $(date -u) ==="
               apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
