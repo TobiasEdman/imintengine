@@ -23,7 +23,7 @@ Made by RISE Research Institutes of Sweden in the IMINT Engine project
 ([github.com/TobiasEdman/imintengine](https://github.com/TobiasEdman/imintengine)).
 This is a pre-release shared for review; the evaluation is not yet
 published. In this version class 28 is not refined against field plots like
-the other forest types (see *Labels*). A version whose label distillation
+forest types 1–4 (see *Labels*). A version whose label distillation
 has five forest types, barrblandskog among them, will replace it.
 
 ## What is in this repository
@@ -59,10 +59,11 @@ convolutional head; the TESSERA embeddings are its input.
   training and 822 for validation. The split is random over tiles, not a
   spatial holdout, so neighbouring tiles can fall on both sides.
 - **Labels:** the NMD 2023 base layer with year-matched LPIS crop parcels and
-  Skogsstyrelsen clear-cuts laid over it. Forest types 1–4 (tallskog,
-  granskog, lövskog, blandskog) come from a small head trained on Swedish
-  NFI field plots (temporary plots) on top of an earlier TESSERA model's
-  features, and applied to every tile (`scripts/distill_forest_labels.py`).
+  Skogsstyrelsen clear-cuts laid over it. Within NMD's forest mask, a small
+  head trained on Swedish NFI field plots (temporary plots) on top of an
+  earlier TESSERA model's features reassigns forest types 1–4 (tallskog,
+  granskog, lövskog, blandskog) per pixel, where it also calls one of them
+  (`scripts/distill_forest_labels.py`).
   The head has no barrblandskog: pixels with NMD 2023 code 113 become class
   28 whatever type the head gave them, except clear-cuts, which stay class
   22 (`scripts/relabel_barrblandskog.py`).
@@ -199,7 +200,7 @@ embedding, aux = inputs["img5d"], inputs["aux"]   # (1, 128, 504, 504), (1, 11, 
   yet published.
 - The labels are map products, not field truth. The model learns NMD
   2023's map for class 28 but field-refined labels for classes 1–4, so
-  class 28 is not directly comparable with the other forest classes.
+  class 28 is not directly comparable with classes 1–4.
 - The evaluation against independent field data is not published yet.
 
 ## License
