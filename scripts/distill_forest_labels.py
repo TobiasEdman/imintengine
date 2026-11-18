@@ -57,11 +57,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from build_pinned_plot_set import npz_key_names, npz_version_ok
 from extract_plot_features import register_preclassifier_hook
+from imint.schema.unified_schema import UNIFIED_CLASS_NAMES
 
-# Forest types the field-trained head can refine. Barrblandskog (unified 28) is
-# deliberately absent: the head has no such output, so NMD 113 pixels keep their
-# NMD-defined class instead of being rewritten to pine or spruce (IM-023).
-FOREST_CLASSES = frozenset({1, 2, 3, 4})  # tall, gran, löv, bland
+# Forest types R4's field-trained head refines (tall, gran, löv, bland). A head
+# trained on the five-type truth (nfi_truth_f5.py) also outputs 28
+# barrblandskog and runs with --forest-classes 1,2,3,4,28 (IM-023 f5).
+R4_FOREST_CLASSES = frozenset({1, 2, 3, 4})
 # Sidecar keys the distilled npz must carry (superset of what any NMD2023
 # sidecar holds; we copy whatever is present + always the replaced label).
 _SIDECAR_KEYS = (
@@ -126,7 +127,7 @@ def head_predict_dense(feat_hwc: np.ndarray, head: dict) -> np.ndarray:
     Vectorised numpy port of MLPClassifier.predict: standardize → relu hidden →
     output logits → argmax → classes_ map. Identical math to
     ``train_distill_head.head_forward_npz`` (verified there to match sklearn
-    exactly); flattened over pixels here. Returns labels in {0,1,2,3,4}.
+    exactly); flattened over pixels here. Returns labels in ``head["classes_"]``.
     """
     h, w, c = feat_hwc.shape
     X = feat_hwc.reshape(-1, c)
@@ -156,8 +157,39 @@ def _upsample_feat_to(feat_map, crop_sz: int) -> np.ndarray:
     return np.transpose(fm, (1, 2, 0))               # (crop_sz, crop_sz, 256)
 
 
-def apply_override(orig_label: np.ndarray, head_pred: np.ndarray,
-                   off: int, crop_sz: int) -> tuple[np.ndarray, int, int]:
+def parse_classes(text: str) -> frozenset[int]:
+    return frozenset(int(c) for c in text.split(","))
+
+
+def check_forest_classes(head: dict, forest_classes: frozenset[int]) -> frozenset[int]:
+    """``forest_classes``, if it is exactly the head's forest output.
+
+    A forest type the head calls but the set lacks would never be written
+    (an f5 head run with R4's set leaves its 28 calls unused); one the set
+    has but the head never calls rewrites nothing and hides the mismatch.
+    """
+    head_forest = frozenset(int(c) for c in head["classes_"]) - {0}
+    if head_forest != forest_classes:
+        raise SystemExit(f"--forest-classes {sorted(forest_classes)} differ from the head's "
+                         f"forest classes {sorted(head_forest)}")
+    return forest_classes
+
+
+def check_cohort(tiles: list[str], expected_dir: str) -> None:
+    """Refuse a pass whose cohort is not ``expected_dir``'s before hours of forwarding.
+
+    The sidecar gate at the end counts only what this pass selected; a cohort
+    that drifted from the one the labels must match would pass it.
+    """
+    ours = {os.path.basename(t)[:-len(".npz")] for t in tiles}
+    theirs = {os.path.basename(p)[:-len(".npz")] for p in glob.glob(os.path.join(expected_dir, "*.npz"))}
+    if ours != theirs:
+        raise SystemExit(f"cohort differs from {expected_dir}: {len(ours)} tiles here, {len(theirs)} there, "
+                         f"missing {sorted(theirs - ours)[:5]}, unexpected {sorted(ours - theirs)[:5]}")
+
+
+def apply_override(orig_label: np.ndarray, head_pred: np.ndarray, off: int, crop_sz: int,
+                   forest_classes: frozenset[int]) -> tuple[np.ndarray, int, int]:
     """Build the distilled full-grid label from an original + a crop-window pred.
 
     ``orig_label`` is the full (H, W) NMD2023 raster; ``head_pred`` is the
@@ -169,8 +201,8 @@ def apply_override(orig_label: np.ndarray, head_pred: np.ndarray,
     win = new_label[off:off + crop_sz, off:off + crop_sz]
     orig_win = orig_label[off:off + crop_sz, off:off + crop_sz]
 
-    orig_forest = np.isin(orig_win, list(FOREST_CLASSES))
-    head_forest = np.isin(head_pred, list(FOREST_CLASSES))
+    orig_forest = np.isin(orig_win, list(forest_classes))
+    head_forest = np.isin(head_pred, list(forest_classes))
     mask = orig_forest & head_forest
 
     win[mask] = head_pred[mask]
@@ -187,7 +219,7 @@ def _atomic_savez(out_path: str, payload: dict) -> None:
 
 def process_tile(tile_path: str, model, head: dict, device, img_size: int,
                  label_dir: str, out_dir: str, infcmp, store,
-                 aux_channel_names=None) -> dict:
+                 forest_classes: frozenset[int], aux_channel_names=None) -> dict:
     """Distill one tile. Returns a status dict (skip reasons logged by caller)."""
     name = os.path.basename(tile_path).replace(".npz", "")
     out_path = os.path.join(out_dir, name + ".npz")
@@ -217,14 +249,15 @@ def process_tile(tile_path: str, model, head: dict, device, img_size: int,
     off = (tile_h - crop_sz) // 2
 
     feat_hwc = _upsample_feat_to(feat_map, crop_sz)          # (cs, cs, 256)
-    head_pred = head_predict_dense(feat_hwc, head)           # (cs, cs) in {0..4}
+    head_pred = head_predict_dense(feat_hwc, head)           # (cs, cs) in classes_
 
     sidecar = np.load(sidecar_path, allow_pickle=True)
     orig_label = np.asarray(sidecar["label"]).astype(np.uint8)
     if orig_label.shape[-1] != tile_h:
         return {"name": name, "status": "shape_mismatch"}
 
-    new_label, n_over, n_forest = apply_override(orig_label, head_pred, off, crop_sz)
+    new_label, n_over, n_forest = apply_override(orig_label, head_pred, off, crop_sz,
+                                                 forest_classes)
 
     # Copy every original sidecar key, replace only `label`; stamp which
     # head produced this file so a resume can tell current from stale.
@@ -238,7 +271,7 @@ def process_tile(tile_path: str, model, head: dict, device, img_size: int,
         "n_over": n_over, "n_forest": n_forest,
         "frac_over": (n_over / n_forest) if n_forest else 0.0,
         "pred_hist": {int(c): int((head_pred == c).sum())
-                      for c in (0, 1, 2, 3, 4)},
+                      for c in head["classes_"]},
     }
 
 
@@ -268,6 +301,14 @@ def main() -> None:
                          "SAR backbones (croma/terramind) pass s1_vv_vh so "
                          "the pass covers exactly their trainable cohort "
                          "instead of crashing on the first optical-only tile")
+    ap.add_argument("--expect-cohort", default=None,
+                    help="a distilled directory whose tiles this pass must cover "
+                         "exactly; checked before any tile is forwarded")
+    ap.add_argument("--forest-classes", type=parse_classes,
+                    default=",".join(map(str, sorted(R4_FOREST_CLASSES))),
+                    help="forest types the head refines: a pixel is rewritten "
+                         "where the label and the head both call one of them. "
+                         "Must equal the head's non-zero classes")
     args = ap.parse_args()
 
     import torch
@@ -276,6 +317,8 @@ def main() -> None:
     head = load_head(args.head)
     print(f"head: hidden {head['W1'].shape} → {head['W2'].shape}, "
           f"classes {head['classes_'].tolist()}")
+    forest_classes = check_forest_classes(head, args.forest_classes)
+    print(f"forest classes refined: {sorted(forest_classes)}")
 
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
@@ -345,12 +388,14 @@ def main() -> None:
               + (f" ({len(unreadable)} UNREADABLE)" if unreadable else ""))
     if args.limit:
         tiles = tiles[:args.limit]
+    if args.expect_cohort:
+        check_cohort(tiles, args.expect_cohort)
     print(f"tiles: {len(tiles)}  →  out {args.out_dir}\n")
 
     counts = {"ok": 0, "exists": 0, "no_sidecar": 0, "no_feature": 0,
               "shape_mismatch": 0, "error": 0}
     fracs: list[float] = []
-    total_hist = {c: 0 for c in (0, 1, 2, 3, 4)}
+    total_hist = {int(c): 0 for c in head["classes_"]}
 
     for i, tp in enumerate(tiles):
         # One corrupt tile must not kill an hours-long pass: completed
@@ -359,7 +404,7 @@ def main() -> None:
         try:
             res = process_tile(tp, model, head, device, args.img_size,
                                args.label_dir, args.out_dir, infcmp, store,
-                               aux_channel_names=aux_names)
+                               forest_classes, aux_channel_names=aux_names)
         except Exception as exc:  # noqa: BLE001 — summarized + fatal below
             res = {"status": "error", "name": os.path.basename(tp)}
             print(f"  [{i+1}/{len(tiles)}] ERROR {res['name']}: "
@@ -389,10 +434,9 @@ def main() -> None:
               f"(median {100*np.median(fracs):.1f}%)")
     tot = sum(total_hist.values()) or 1
     print(f"  head-pred distribution over all crop windows:")
-    names = {0: "non-forest", 1: "tall", 2: "gran", 3: "löv", 4: "bland"}
-    for c in (0, 1, 2, 3, 4):
-        print(f"    {c} {names[c]:<11}: {total_hist[c]:>12,} "
-              f"({100*total_hist[c]/tot:.1f}%)")
+    for c, n in total_hist.items():
+        name = "non-forest" if c == 0 else UNIFIED_CLASS_NAMES[c]
+        print(f"    {c:>2} {name:<13}: {n:>12,} ({100*n/tot:.1f}%)")
 
     # The ladder gate (label_source_ladder.md, execution order step 2):
     # a column may proceed to rungs 3/4 only when its sidecar count matches

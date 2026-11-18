@@ -1,0 +1,13 @@
+{
+  "id": "0175",
+  "subject": "Distil five forest types and retrain TESSERA",
+  "description": "Tobias decided on 2026-11-17: redo the forest-label distillation with five forest types and retrain TESSERA on it instead of Prithvi ('pausa prithvi-kedjan och g\u00f6r om destillationen med fem skogsklasser', 'k\u00f6a Tessera ist\u00e4llet'). Barrblandskog (NMD 113, class 28) becomes a head class refined against NFI plots like tallskog, granskog, l\u00f6vskog and blandskog; l\u00f6vblandad barrskog (NMD 114) stays blandskog (class 4), the two mixed types handled alike. NFI truth for the head = the pre-registered evaluation rule (imint/eval/nfi_amendment.derive_barrblandskog): v1 conifer dominance, then pine (incl. contorta) >= 0.7 of conifer -> tallskog, spruce >= 0.7 -> granskog, else barrblandskog. Contorta sensitivity is deferred. Build: the five-class truth from the existing plot index, a TESSERA r2 head trained on it, a dense distillation over the R4 cohort with forest set {1,2,3,4,28} on /cephfs/nmd2023_labels_b28, and a TESSERA retrain variant f5 (29 classes, main's class weights) on a 2080 Ti (FP32, batch 2: no H100 in ICE, Tobias's choice). New paths only; the R4 head, /cephfs/distill/tessera_r2 and the b28 outputs are never written. Jobs pinned to a pushed commit, server dry-run first, run on Tobias's go (given 2026-11-17). Not in scope: a new control (reuse im023_control and b28), Prithvi, NFI holdout scoring (needs a new amendment and Tobias's go), contorta sensitivity. Review: fresh single-model Claude reviewer (Codex out until 2026-11-18); integration is Tobias's decision.",
+  "status": "claimed",
+  "coordination_authority": "sha256:d61716da3b867625cc52a5d79c0162098ed1d9b871876ec93017624e773502f1",
+  "branch": "agent/te/claude/im023-five-forest",
+  "created_at": "2026-11-17T20:34:03Z",
+  "updated_at": "2026-11-17T20:35:00Z",
+  "claimed_by": "te-claude",
+  "runtime": "claude",
+  "claimed_at": "2026-11-17T20:35:00Z"
+}

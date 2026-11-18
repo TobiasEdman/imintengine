@@ -1,0 +1,164 @@
+# IM-023 f5 step 1: forest labels distilled with five forest types.
+# Tobias 2026-11-17: barrblandskog (28) is refined against the NFI plots like
+# tallskog, granskog, lövskog and blandskog. The chain is R4's TESSERA
+# distillation (k8s/ladder/distill-tessera-job.yaml): same rung-2 checkpoint,
+# plot index, pinned plots and cohort. What differs:
+#   0. the previous done signal (_GATE_OK) is withdrawn before anything runs;
+#   1. the truth gains 28 (scripts/nfi_truth_f5.py derive: the NFI
+#      evaluation's barrblandskog rule), in a copy of the plot index;
+#   2. the features are extracted with that truth and must cover exactly the
+#      plots of R4's features parquet, which the frozen NFI holdout excludes;
+#      the index and that parquet must still be the bytes the freeze recorded;
+#   3-4. the head CV and the head are trained on it (classes 0-4 and 28);
+#   5. the dense pass refines {1,2,3,4,28} on the relabelled NMD labels
+#      (/cephfs/nmd2023_labels_b28, where NMD 113 is 28), over exactly R4's
+#      cohort (checked before the first tile);
+#   6. the head is published next to R4's and _GATE_OK is written last.
+# New paths only: R4's head and plot files, /cephfs/distill/tessera_r2 and
+# the b28 outputs are read, never written. Intermediates of each run stay in
+# /cephfs/im023/f5_distill/<UTC>/. A rerun rewrites only sidecars a different
+# head stamped. torch 2.10.0+cu126 as the relabel job (the checkpoint
+# loader's allowlist needs torch >= 2.6).
+#
+#   kubectl create --dry-run=server -f k8s/im023/f5/distill-f5-job.yaml
+#   kubectl create -f k8s/im023/f5/distill-f5-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-f5-distill
+  namespace: prithvi-training-default
+  labels: { app: unified-training, purpose: im023-f5, step: distill }
+spec:
+  backoffLimit: 0
+  # As R4's distillation: a 7882-tile dense pass at 1-5 s/tile on a 2080 Ti
+  # plus extraction and CPU steps; the cap only stops a runaway.
+  activeDeadlineSeconds: 86400
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: im023-f5, step: distill }
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: distill
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              SHA=845542c15e42503109d4e2df92a2a484d3355b75
+              [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: source not pinned (SHA=$SHA)"; exit 1; }
+              echo "=== im023-f5-distill — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch==2.10.0+cu126 torchvision==0.25.0+cu126 \
+                --index-url https://download.pytorch.org/whl/cu126
+              pip install --quiet --no-cache-dir \
+                timm einops numpy Pillow scipy scikit-learn huggingface_hub \
+                pandas pyarrow rasterio pyproj
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+              pip install --no-cache-dir -e . --no-deps
+
+              CKPT=/cephfs/checkpoints/ladder/tessera_r2/best_model.pt
+              PIN=/cephfs/distill/pinned_plots.json
+              INDEX=/cephfs/nfi/nfi_index_unified_v2_512.parquet
+              R4_FEATURES=/cephfs/distill/heads/tessera_r2_plot_features.parquet
+              FREEZE=/cephfs/nfi/nfi_holdout_freeze_2026-10-27/manifest.json
+              LABELS=/cephfs/nmd2023_labels_b28
+              OUT=/cephfs/distill/tessera_r2_f5
+              HEAD=/cephfs/distill/heads/tessera_r2_f5_head.npz
+              for f in "$CKPT" "$PIN" "$INDEX" "$R4_FEATURES" "$FREEZE" "$LABELS/relabel_manifest.json" \
+                       /cephfs/distill/tessera_r2/_GATE_OK; do
+                test -f "$f" || { echo "FATAL: missing $f"; exit 1; }
+              done
+              W=/cephfs/im023/f5_distill/$(date -u +%Y%m%dT%H%M%SZ)
+              mkdir -p "$W" "$OUT"
+              echo "intermediates: $W"
+              # --- run ---
+              echo "=== 0/6 withdraw the done signal ==="
+              rm -f "$OUT/_GATE_OK"
+
+              echo "=== 1/6 five-type truth ==="
+              python3 scripts/nfi_truth_f5.py derive --plot-index "$INDEX" --freeze-manifest "$FREEZE" \
+                --out "$W/plot_index_f5.parquet" --report "$W/truth_f5.json"
+
+              echo "=== 2/6 plot features (rung-2 checkpoint, 11 aux) ==="
+              python3 scripts/extract_plot_features.py \
+                --checkpoint "$CKPT" \
+                --plot-index "$W/plot_index_f5.parquet" \
+                --truth-col nfi_forest_f5 \
+                --img-size 504 \
+                --backbone-name tessera_v1 \
+                --enable-markfukt \
+                --require-npz-key tessera \
+                --out "$W/plot_features_f5.parquet" \
+                --device cuda
+              python3 scripts/nfi_truth_f5.py same-plots --freeze-manifest "$FREEZE" \
+                --features "$W/plot_features_f5.parquet" --reference "$R4_FEATURES"
+
+              echo "=== 3/6 distillability (pinned-protocol OOF) ==="
+              python3 scripts/nfi_head_cv.py \
+                --features "$W/plot_features_f5.parquet" \
+                --truth-col nfi_forest_f5 \
+                --folds 5 \
+                --heads mlp \
+                --pinned-plots "$PIN" \
+                --out "$W/distillability_f5.json"
+
+              echo "=== 4/6 head (grouped-by-tile split, full plot set) ==="
+              python3 scripts/train_distill_head.py \
+                --features "$W/plot_features_f5.parquet" \
+                --truth-col nfi_forest_f5 \
+                --test-frac 0.2 --seed 42 \
+                --out-head "$W/head_f5.npz" \
+                --out-split "$W/split_f5.json"
+
+              echo "=== 5/6 dense sidecars + cohort gate ==="
+              python3 scripts/distill_forest_labels.py \
+                --checkpoint "$CKPT" \
+                --head "$W/head_f5.npz" \
+                --data-dir /cephfs/unified_v2_512 \
+                --label-dir "$LABELS" \
+                --out-dir "$OUT" \
+                --forest-classes 1,2,3,4,28 \
+                --expect-cohort /cephfs/distill/tessera_r2 \
+                --img-size 504 \
+                --backbone-name tessera_v1 \
+                --enable-markfukt \
+                --require-npz-key tessera \
+                --device cuda
+
+              echo "=== 6/6 publish the head, then the done signal ==="
+              cp "$W/head_f5.npz" "$HEAD.tmp"
+              mv "$HEAD.tmp" "$HEAD"
+              touch "$OUT/_GATE_OK"
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "24Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - { name: cephfs, mountPath: /cephfs }
+            # Same PVC again: the NFI plot index stores absolute tile paths
+            # under /data/ (see k8s/ladder/distill-tessera-job.yaml).
+            - { name: cephfs, mountPath: /data }
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim: { claimName: training-data-cephfs }

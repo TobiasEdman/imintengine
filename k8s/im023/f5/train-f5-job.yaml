@@ -1,0 +1,87 @@
+# IM-023 f5 step 2: TESSERA trained on the five-forest-type labels.
+# Recipe: scripts/im023_retrain_f5.py (R4's flags, main's class weights,
+# labels from k8s/im023/f5/distill-f5-job.yaml); it refuses to start before
+# that job's _GATE_OK and with labels another head wrote.
+# On a 2080 Ti (no H100 in ICE, Tobias 2026-11-17), profile 2080ti: FP32,
+# batch 2, 6 workers, as the 2026-11-03 chain check, whose epochs took
+# ~15 min; 30 epochs are ~8 h. That is a recipe difference from main
+# (BF16, batch 8) and is part of what f5 minus main measures.
+#
+#   kubectl create --dry-run=server -f k8s/im023/f5/train-f5-job.yaml
+#   kubectl create -f k8s/im023/f5/train-f5-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: im023-tessera-f5
+  namespace: prithvi-training-default
+  labels: { app: unified-training, purpose: im023-f5, step: train }
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 172800
+  template:
+    metadata:
+      labels: { app: unified-training, purpose: im023-f5, step: train }
+    spec:
+      restartPolicy: Never
+      activeDeadlineSeconds: 57600   # 16 h cap, twice the expected run
+      nodeSelector:
+        accelerator: nvidia-gtx-2080ti
+      containers:
+        - name: trainer
+          image: python:3.11-slim@sha256:d1e9ca7c4e78d1e8ecadb5d44bfc8e956e7a65b659a9950f569f243d72b326d0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              export PYTHONUNBUFFERED=1
+              SHA=845542c15e42503109d4e2df92a2a484d3355b75
+              [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: source not pinned (SHA=$SHA)"; exit 1; }
+              echo "=== im023-tessera-f5 — $(date -u) ==="
+              apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+              pip install --quiet --no-cache-dir torch==2.5.1 torchvision==0.20.1 \
+                --index-url https://download.pytorch.org/whl/cu121
+              pip install --quiet --no-cache-dir timm numpy scipy scikit-learn huggingface_hub
+              mkdir -p /workspace && cd /workspace
+              git init -q imintengine && cd imintengine
+              git remote add origin https://github.com/TobiasEdman/ImintEngine.git
+              git fetch -q --depth 1 origin "$SHA"
+              git checkout -q "$SHA"
+              test "$(git rev-parse HEAD)" = "$SHA"
+              echo "PINNED SOURCE: $SHA"
+              pip install --no-cache-dir -e '.[training]' || pip install --quiet --no-cache-dir -r requirements.txt
+              RETRAIN=/workspace/imintengine/scripts/im023_retrain_f5.py
+              cd /cephfs
+              # --- run ---
+              RESUME_FLAG=(); [ "$RESUME" = 1 ] && RESUME_FLAG=(--resume)
+              python3 "$RETRAIN" --profile 2080ti --epochs 30 --checkpoint-dir /cephfs/checkpoints/im023/tessera_f5 "${RESUME_FLAG[@]}"
+              echo "=== Done: $(date -u) ==="
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # "1" resumes an interrupted run from its last_checkpoint.pt
+            # (im023_retrain_f5.py --resume checks it is this run's).
+            - name: RESUME
+              value: "0"
+          resources:
+            requests:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "48Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: cephfs
+              mountPath: /cephfs
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: cephfs
+          persistentVolumeClaim:
+            claimName: training-data-cephfs
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi

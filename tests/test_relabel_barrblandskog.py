@@ -59,8 +59,8 @@ def test_distilled_rule_equals_override():
     new_nmd = schema.nmd2023_to_unified(raw)
     old_nmd = np.where(new_nmd == 28, 3, new_nmd).astype(np.uint8)
     head = rng.integers(0, 5, (32, 32))
-    old_distilled, _, _ = distill.apply_override(old_nmd, head, 4, 32)
-    new_distilled, _, _ = distill.apply_override(new_nmd, head, 4, 32)
+    old_distilled, _, _ = distill.apply_override(old_nmd, head, 4, 32, distill.R4_FOREST_CLASSES)
+    new_distilled, _, _ = distill.apply_override(new_nmd, head, 4, 32, distill.R4_FOREST_CLASSES)
     assert (old_distilled != old_nmd).any()
     np.testing.assert_array_equal(relabel.relabel_distilled(old_distilled, new_nmd), new_distilled)
 
@@ -124,8 +124,9 @@ def chain(tmp_path, monkeypatch):
         monkeypatch.setattr(distill, "head_predict_dense", lambda feat, head: np.random.default_rng(
             seed).integers(0, 5, feat.shape[:2]))
         out.mkdir()
-        status = distill.process_tile(str(tile), None, {"head_sha": "h1"}, None, SIZE - 4,
-                                      str(label_dir), str(out), Forward, store)
+        status = distill.process_tile(str(tile), None, {"head_sha": "h1", "classes_": np.arange(5)}, None,
+                                      SIZE - 4, str(label_dir), str(out), Forward, store,
+                                      distill.R4_FOREST_CLASSES)
         assert status["status"] == "ok", status
 
     with monkeypatch.context() as m:

@@ -19,6 +19,8 @@ pseudo-labelling them densely is leakage-free).
 
 Truth space is the 5-class suite {0 non-forest, 1 tall, 2 gran, 3 löv, 4 bland};
 ``nfi_forest == -1`` (treeless) collapses to 0 — identical to ``nfi_head_cv.py``.
+``--truth-col nfi_forest_f5`` (``nfi_truth_f5.py``) adds 28 barrblandskog; its
+preview is scored in its own label space, without the 5-class baselines.
 
     python scripts/train_distill_head.py \
         --features data/nfi/nfi_plot_features_nmd2023.parquet \
@@ -38,6 +40,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from nfi_head_cv import generic_accuracy_suite
 from validate_against_nfi import accuracy_suite
 
 SEED = 42
@@ -53,6 +56,9 @@ def feature_cols(df) -> list[str]:
 
 # Fixed reference baselines (seg-model overall_accuracy_5class at these plots).
 BASELINES = {"NMD2023": 0.493, "v8b": 0.465}
+# NFI truths with -1 for treeless plots: v1 (the 5-class suite the baselines
+# score) and f5, which adds 28 barrblandskog (nfi_truth_f5.py).
+TRUTH_COLS = ("nfi_forest", "nfi_forest_f5")
 
 
 def grouped_split(tiles: np.ndarray, y: np.ndarray, test_frac: float, seed: int):
@@ -60,7 +66,7 @@ def grouped_split(tiles: np.ndarray, y: np.ndarray, test_frac: float, seed: int)
 
     GroupShuffleSplit keeps every tile wholly on one side, so no tile's context
     straddles the split. We retry a few seeds and keep the split whose test side
-    best covers all 5 classes (GroupShuffleSplit is not class-aware; with 261
+    best covers every truth class (GroupShuffleSplit is not class-aware; with 261
     tiles a single draw can drop a rare class from the test side, which would
     make the preview accuracy uninformative). This is a *preview* accuracy only
     — the real eval is the distilled dense model — so we optimise coverage, not
@@ -74,7 +80,7 @@ def grouped_split(tiles: np.ndarray, y: np.ndarray, test_frac: float, seed: int)
         gss = GroupShuffleSplit(n_splits=1, test_size=test_frac,
                                 random_state=seed + trial)
         tr, te = next(gss.split(np.zeros(len(y)), y, groups=tiles))
-        # Coverage score: how many of the 5 classes appear on the test side.
+        # Coverage score: how many of the truth classes appear on the test side.
         cover = len(np.unique(y[te]))
         if best is None or cover > best[0]:
             best = (cover, tr, te, trial)
@@ -115,7 +121,10 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=SEED)
     ap.add_argument("--out-head", required=True, help="head export npz path")
     ap.add_argument("--out-split", required=True, help="split JSON path")
+    ap.add_argument("--truth-col", choices=TRUTH_COLS, default="nfi_forest",
+                    help="truth column of the features parquet")
     args = ap.parse_args()
+    suite_space = args.truth_col == "nfi_forest"
 
     from sklearn.neural_network import MLPClassifier
     from sklearn.preprocessing import StandardScaler
@@ -124,7 +133,7 @@ def main() -> None:
     FEATURE_COLS = feature_cols(df)
 
     X = df[FEATURE_COLS].to_numpy(dtype=np.float32)
-    y = df["nfi_forest"].to_numpy(dtype=np.int64)
+    y = df[args.truth_col].to_numpy(dtype=np.int64)
     y = np.where(y == -1, 0, y)                 # treeless → non-forest
     tiles = df["tile_name"].to_numpy()
 
@@ -156,17 +165,22 @@ def main() -> None:
 
     # ── Preview accuracy on held-out test plots (NOT the final eval) ───────
     pred_te = clf.predict(scaler.transform(X[te]))
-    suite = accuracy_suite(y[te], pred_te)
-    overall = suite["overall_accuracy_5class"]
+    if suite_space:
+        suite = accuracy_suite(y[te], pred_te)
+        overall = suite["overall_accuracy_5class"]
+    else:
+        suite = generic_accuracy_suite(y[te], pred_te)
+        overall = suite["overall_accuracy"]
     print(f"\n  TEST-SPLIT PREVIEW (head only, not the distilled dense model):")
-    print(f"    overall 5-class accuracy = {overall:.4f}  "
+    print(f"    overall accuracy over {sorted(np.unique(y))} = {overall:.4f}  "
           f"(kappa {suite['cohen_kappa']:.4f})")
-    print(f"    baselines: NMD2023={BASELINES['NMD2023']}  "
-          f"v8b={BASELINES['v8b']}  → ΔNMD2023 {overall - BASELINES['NMD2023']:+.3f}")
+    if suite_space:
+        print(f"    baselines: NMD2023={BASELINES['NMD2023']}  "
+              f"v8b={BASELINES['v8b']}  → ΔNMD2023 {overall - BASELINES['NMD2023']:+.3f}")
 
     # ── Export dependency-light head ───────────────────────────────────────
-    # MLPClassifier((128,)) → coefs_ = [W1 (256,128), W2 (128,5)],
-    #                         intercepts_ = [b1 (128,), b2 (5,)].
+    # MLPClassifier((128,)) → coefs_ = [W1 (n_features,128), W2 (128,n_classes)],
+    #                         intercepts_ = [b1 (128,), b2 (n_classes,)].
     W1, W2 = clf.coefs_
     b1, b2 = clf.intercepts_
     classes_ = clf.classes_.astype(np.int64)
@@ -198,6 +212,7 @@ def main() -> None:
         # provenance
         seed=np.int64(args.seed), n_train_plots=np.int64(len(tr)),
         hidden=np.int64(128), n_features=np.int64(len(FEATURE_COLS)),
+        truth_col=np.str_(args.truth_col),
     )
     print(f"  wrote head → {out_head} "
           f"({out_head.stat().st_size / 1024:.1f} KB)")
@@ -214,8 +229,10 @@ def main() -> None:
         "n_test_plots": int(len(te)),
         "train_support": _support(tr),
         "test_support": _support(te),
-        "test_preview_accuracy_5class": overall,
-        "baselines": BASELINES,
+        "truth_col": args.truth_col,
+        # The 5-class key only for the suite the baselines score.
+        ("test_preview_accuracy_5class" if suite_space else "test_preview_accuracy"): overall,
+        "baselines": BASELINES if suite_space else None,
     }, indent=2, ensure_ascii=False))
     print(f"  wrote split → {out_split}")
 
