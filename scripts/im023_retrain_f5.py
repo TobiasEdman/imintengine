@@ -118,11 +118,13 @@ def preflight(paths: dict[str, str]) -> list[str]:
         stamp, classes = loaded["head_sha"], sorted(int(c) for c in loaded["classes_"])
         if classes != [0, *F5_FOREST_CLASSES]:
             problems.append(f"{head} has classes {classes}, expected {[0, *F5_FOREST_CLASSES]}")
-        for name in f5_names[:LABEL_SAMPLE]:
+        foreign = []
+        for name in f5_names:                    # a scalar per sidecar: every one is checked
             with np.load(f5 / name, allow_pickle=False) as z:
                 if "head_sha" not in z.files or str(z["head_sha"]) != stamp:
-                    problems.append(f"{f5 / name} was not written by {head}")
-                    break
+                    foreign.append(name)
+        if foreign:
+            problems.append(f"{len(foreign)} sidecars in {f5} were not written by {head}, e.g. {foreign[:3]}")
     for name in f5_names[:LABEL_SAMPLE]:
         top = label_max(f5 / name)
         if top >= CLASSES:

@@ -9,7 +9,9 @@ free. The question: can a head trained DIRECTLY on field-truth beat the NMD
 label ceiling for forest-type classification?
 
 Truth space is the 5-class accuracy-suite space {1 tall, 2 gran, 3 löv, 4 bland,
-0 non-forest} — ``nfi_forest == -1`` (treeless) collapses to 0. We standardize
+0 non-forest} — ``nfi_forest == -1`` (treeless) collapses to 0. Any other
+``--truth-col`` (the five-type NFI truth of ``nfi_truth_f5.py``, LUCAS crops) is
+scored in its own label space by ``generic_accuracy_suite``. We standardize
 the 256 features (fit on train folds only, applied to the held-out fold), train
 each head on the train folds, and predict the held-out fold. ``accuracy_suite``
 (reused from ``validate_against_nfi``) scores the pooled OOF predictions the same

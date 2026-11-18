@@ -175,6 +175,19 @@ def check_forest_classes(head: dict, forest_classes: frozenset[int]) -> frozense
     return forest_classes
 
 
+def check_cohort(tiles: list[str], expected_dir: str) -> None:
+    """Refuse a pass whose cohort is not ``expected_dir``'s before hours of forwarding.
+
+    The sidecar gate at the end counts only what this pass selected; a cohort
+    that drifted from the one the labels must match would pass it.
+    """
+    ours = {os.path.basename(t)[:-len(".npz")] for t in tiles}
+    theirs = {os.path.basename(p)[:-len(".npz")] for p in glob.glob(os.path.join(expected_dir, "*.npz"))}
+    if ours != theirs:
+        raise SystemExit(f"cohort differs from {expected_dir}: {len(ours)} tiles here, {len(theirs)} there, "
+                         f"missing {sorted(theirs - ours)[:5]}, unexpected {sorted(ours - theirs)[:5]}")
+
+
 def apply_override(orig_label: np.ndarray, head_pred: np.ndarray, off: int, crop_sz: int,
                    forest_classes: frozenset[int]) -> tuple[np.ndarray, int, int]:
     """Build the distilled full-grid label from an original + a crop-window pred.
@@ -288,6 +301,9 @@ def main() -> None:
                          "SAR backbones (croma/terramind) pass s1_vv_vh so "
                          "the pass covers exactly their trainable cohort "
                          "instead of crashing on the first optical-only tile")
+    ap.add_argument("--expect-cohort", default=None,
+                    help="a distilled directory whose tiles this pass must cover "
+                         "exactly; checked before any tile is forwarded")
     ap.add_argument("--forest-classes", type=parse_classes,
                     default=",".join(map(str, sorted(R4_FOREST_CLASSES))),
                     help="forest types the head refines: a pixel is rewritten "
@@ -372,6 +388,8 @@ def main() -> None:
               + (f" ({len(unreadable)} UNREADABLE)" if unreadable else ""))
     if args.limit:
         tiles = tiles[:args.limit]
+    if args.expect_cohort:
+        check_cohort(tiles, args.expect_cohort)
     print(f"tiles: {len(tiles)}  →  out {args.out_dir}\n")
 
     counts = {"ok": 0, "exists": 0, "no_sidecar": 0, "no_feature": 0,

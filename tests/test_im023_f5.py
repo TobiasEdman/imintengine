@@ -28,6 +28,7 @@ import distill_forest_labels as distill
 import im023_retrain as retrain
 import im023_retrain_f5 as recipe
 import nfi_truth_f5 as truth
+from imint.eval.fieldtruth import sha256_file
 from imint.eval.nfi_amendment import AMENDMENT_PROTOCOL, derive_barrblandskog
 from tests.test_im023_retrain import body, cohort, flags, invocations, load  # noqa: F401  (cohort is a fixture)
 
@@ -69,30 +70,77 @@ def test_truth_is_v1_with_its_mixed_conifer_plots_as_28():
     np.testing.assert_array_equal(f5[~mixed], v1[~mixed])
 
 
-def test_derive_writes_a_new_index_and_reports_the_moves(tmp_path):
+def freeze(tmp_path, monkeypatch, *frozen: Path) -> Path:
+    """A freeze manifest recording ``frozen``, accepted as the frozen one."""
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"inputs": [
+        {"path": str(p.resolve()), "bytes": p.stat().st_size, "sha256": sha256_file(p)} for p in frozen]}))
+    monkeypatch.setattr(truth, "BASE_MANIFEST_SHA256", sha256_file(manifest))
+    return manifest
+
+
+def test_derive_writes_a_new_index_and_reports_the_moves(tmp_path, monkeypatch):
     src, out, report = tmp_path / "index.parquet", tmp_path / "f5.parquet", tmp_path / "f5.json"
     index_of(CASES).to_parquet(src)
-    summary = truth.derive(src, out, report)
+    manifest = freeze(tmp_path, monkeypatch, src)
+    summary = truth.derive(src, out, report, manifest)
     written = pd.read_parquet(out)
     assert written[truth.TRUTH_COL].tolist() == [c[1][1] for c in CASES]
     assert written.drop(columns=truth.TRUTH_COL).equals(pd.read_parquet(src))
     assert summary["moves_v1_to_f5"] == {"1->28": 2, "2->28": 1}
     assert json.loads(report.read_text()) == summary
     with pytest.raises(SystemExit, match="exists"):
-        truth.derive(src, out, report)
-    with pytest.raises(SystemExit, match="already has"):
-        truth.derive(out, tmp_path / "again.parquet", report)
+        truth.derive(src, out, report, manifest)
+    with pytest.raises(SystemExit, match="not an input of the freeze"):
+        truth.derive(out, tmp_path / "again.parquet", report, manifest)
+    index_of(CASES[:-1]).to_parquet(src)                          # the index changed after the freeze
+    with pytest.raises(SystemExit, match="frozen input content changed"):
+        truth.derive(src, tmp_path / "again.parquet", report, manifest)
 
 
-def test_same_plots_refuses_another_plot_set(tmp_path):
-    reference, ours = tmp_path / "r4.parquet", tmp_path / "f5.parquet"
-    frame = index_of(CASES)[list(truth.PLOT_KEYS)]
+def test_derive_refuses_a_manifest_that_is_not_the_freeze(tmp_path, monkeypatch):
+    src = tmp_path / "index.parquet"
+    index_of(CASES).to_parquet(src)
+    manifest = freeze(tmp_path, monkeypatch, src)
+    monkeypatch.setattr(truth, "BASE_MANIFEST_SHA256", "0" * 64)
+    with pytest.raises(SystemExit, match="is not the frozen manifest"):
+        truth.derive(src, tmp_path / "f5.parquet", tmp_path / "f5.json", manifest)
+
+
+@pytest.fixture
+def plots(tmp_path, monkeypatch):
+    """R4's parquet as written before point_id existed, frozen; and a frame of ours."""
+    reference = tmp_path / "r4.parquet"
+    frame = index_of(CASES)[["TractID", "PlotID", "tile_name"]]
     frame.to_parquet(reference)
-    frame.sample(frac=1, random_state=0).to_parquet(ours)          # order does not matter
-    truth.same_plots(ours, reference)
-    pd.concat([frame, frame.iloc[:1].assign(TractID=99)]).to_parquet(ours)
-    with pytest.raises(SystemExit, match="1 plot rows not in the reference"):
-        truth.same_plots(ours, reference)
+    ours = frame.assign(TractID=frame["TractID"].astype(float), point_id=None)   # another writer's dtypes
+    return reference, ours, freeze(tmp_path, monkeypatch, reference)
+
+
+def test_same_plots_accepts_the_same_rows_in_any_order_and_dtype(plots, tmp_path):
+    reference, ours, manifest = plots
+    ours.sample(frac=1, random_state=0).to_parquet(tmp_path / "f5.parquet")
+    truth.same_plots(tmp_path / "f5.parquet", reference, manifest)
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda f: pd.concat([f, f.iloc[:1].assign(TractID=99.0)]), "1 plot rows not in the reference"),
+    (lambda f: f.iloc[1:], "1 missing"),
+    (lambda f: pd.concat([f, f.iloc[:1]]), "1 plot rows not in the reference"),   # a second plot-year
+])
+def test_same_plots_refuses_another_plot_set(plots, tmp_path, change, message):
+    reference, ours, manifest = plots
+    change(ours).to_parquet(tmp_path / "f5.parquet")
+    with pytest.raises(SystemExit, match=message):
+        truth.same_plots(tmp_path / "f5.parquet", reference, manifest)
+
+
+def test_same_plots_refuses_a_reference_changed_after_the_freeze(plots, tmp_path):
+    reference, ours, manifest = plots
+    ours.to_parquet(tmp_path / "f5.parquet")
+    ours.to_parquet(reference)                                     # same rows, other bytes
+    with pytest.raises(SystemExit, match="frozen input content changed"):
+        truth.same_plots(tmp_path / "f5.parquet", reference, manifest)
 
 
 # ── head, CV and distiller ───────────────────────────────────────────────────
@@ -144,6 +192,15 @@ def test_forest_classes_must_be_the_heads():
     for head, classes in ((f5_head, distill.R4_FOREST_CLASSES), (r4_head, frozenset(recipe.F5_FOREST_CLASSES))):
         with pytest.raises(SystemExit, match="differ from the head's"):
             distill.check_forest_classes(head, classes)
+
+
+def test_cohort_must_be_the_expected_directorys(tmp_path):
+    for name in ("a", "b"):
+        (tmp_path / f"{name}.npz").touch()
+    (tmp_path / "_GATE_OK").touch()
+    distill.check_cohort(["/tiles/a.npz", "/tiles/b.npz"], str(tmp_path))
+    with pytest.raises(SystemExit, match="missing \\['b'\\], unexpected \\['c'\\]"):
+        distill.check_cohort(["/tiles/a.npz", "/tiles/c.npz"], str(tmp_path))
 
 
 def test_override_treats_28_like_the_other_forest_types():
@@ -243,7 +300,7 @@ def _class_29(d):
 
 @pytest.mark.parametrize("damage, message", [
     (_no_gate, "has no _GATE_OK"),
-    (_other_head, "was not written by"),
+    (_other_head, "were not written by"),
     (_r4_head, "expected [0, 1, 2, 3, 4, 28]"),
     (_missing_tile, "cohort differs"),
     (_class_29, "label 29 with 29 classes"),
@@ -286,8 +343,11 @@ SOURCE_SHA = re.compile(r"REPLACE_WITH_PUSHED_SHA|[0-9a-f]{40}")
 PINNED_SCRIPTS = ("scripts/nfi_truth_f5.py", "scripts/extract_plot_features.py", "scripts/nfi_head_cv.py",
                   "scripts/train_distill_head.py", "scripts/distill_forest_labels.py",
                   "scripts/validate_against_nfi.py", "imint/eval/nfi_amendment.py",
+                  "imint/eval/fieldtruth.py", "imint/crop_distill_runtime.py",
+                  "scripts/inference_comparison.py", "scripts/build_pinned_plot_set.py",
                   "scripts/im023_retrain_f5.py", "scripts/im023_retrain.py",
-                  "scripts/im023_retrain_prithvi600m.py", "scripts/relabel_barrblandskog.py")
+                  "scripts/im023_retrain_prithvi600m.py", "scripts/relabel_barrblandskog.py",
+                  "scripts/train_unified.py")
 
 
 def pod(doc: dict) -> dict:
@@ -338,7 +398,8 @@ CHAIN = {
     "scripts/extract_plot_features.py": ({"--plot-index", "--out"}, {"--truth-col"}),
     "scripts/nfi_head_cv.py": ({"--features", "--out"}, {"--truth-col"}),
     "scripts/train_distill_head.py": ({"--features", "--out-head", "--out-split"}, {"--truth-col"}),
-    "scripts/distill_forest_labels.py": ({"--head", "--label-dir", "--out-dir"}, {"--forest-classes"}),
+    "scripts/distill_forest_labels.py": ({"--head", "--label-dir", "--out-dir"},
+                                         {"--forest-classes", "--expect-cohort"}),
 }
 
 
@@ -358,11 +419,16 @@ def test_distill_job_writes_new_paths_and_signals_last():
     assert dense["--label-dir"] == "/cephfs/nmd2023_labels_b28"
     assert dense["--out-dir"] == recipe.PATHS["f5_label_dir"]
     assert dense["--forest-classes"] == ",".join(map(str, recipe.F5_FOREST_CLASSES))
+    assert dense["--expect-cohort"] == recipe.PATHS["r2_label_dir"]
+    freeze_manifest = "/cephfs/nfi/nfi_holdout_freeze_2026-10-27/manifest.json"
+    for call in invocations(text, "scripts/nfi_truth_f5.py"):
+        assert call["--freeze-manifest"] == freeze_manifest
     assert f"HEAD={recipe.PATHS['f5_head']}" in text
     run = text.split("# --- run ---")[1]
     assert run.index('rm -f "$OUT/_GATE_OK"') < run.index("scripts/nfi_truth_f5.py derive")
     assert run.rstrip().splitlines()[-2].strip() == 'touch "$OUT/_GATE_OK"'
     assert run.index("same-plots") < run.index("scripts/train_distill_head.py")
+    assert "&&" not in run                     # set -e does not stop on a failed non-final && member
     # R4's distillation outputs are only read.
     for r4_output in ("/cephfs/distill/tessera_r2\n", "heads/tessera_r2_head.npz", "heads/tessera_r2_split.json"):
         assert r4_output not in run

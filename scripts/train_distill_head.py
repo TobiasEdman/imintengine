@@ -66,7 +66,7 @@ def grouped_split(tiles: np.ndarray, y: np.ndarray, test_frac: float, seed: int)
 
     GroupShuffleSplit keeps every tile wholly on one side, so no tile's context
     straddles the split. We retry a few seeds and keep the split whose test side
-    best covers all 5 classes (GroupShuffleSplit is not class-aware; with 261
+    best covers every truth class (GroupShuffleSplit is not class-aware; with 261
     tiles a single draw can drop a rare class from the test side, which would
     make the preview accuracy uninformative). This is a *preview* accuracy only
     — the real eval is the distilled dense model — so we optimise coverage, not
@@ -80,7 +80,7 @@ def grouped_split(tiles: np.ndarray, y: np.ndarray, test_frac: float, seed: int)
         gss = GroupShuffleSplit(n_splits=1, test_size=test_frac,
                                 random_state=seed + trial)
         tr, te = next(gss.split(np.zeros(len(y)), y, groups=tiles))
-        # Coverage score: how many of the 5 classes appear on the test side.
+        # Coverage score: how many of the truth classes appear on the test side.
         cover = len(np.unique(y[te]))
         if best is None or cover > best[0]:
             best = (cover, tr, te, trial)
@@ -179,8 +179,8 @@ def main() -> None:
               f"v8b={BASELINES['v8b']}  → ΔNMD2023 {overall - BASELINES['NMD2023']:+.3f}")
 
     # ── Export dependency-light head ───────────────────────────────────────
-    # MLPClassifier((128,)) → coefs_ = [W1 (256,128), W2 (128,5)],
-    #                         intercepts_ = [b1 (128,), b2 (5,)].
+    # MLPClassifier((128,)) → coefs_ = [W1 (n_features,128), W2 (128,n_classes)],
+    #                         intercepts_ = [b1 (128,), b2 (n_classes,)].
     W1, W2 = clf.coefs_
     b1, b2 = clf.intercepts_
     classes_ = clf.classes_.astype(np.int64)

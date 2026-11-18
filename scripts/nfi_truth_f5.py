@@ -26,6 +26,12 @@ Subcommands:
                 reference one. The frozen NFI holdout excludes every plot-year
                 of the R4 head's features parquet; a head trained on the same
                 plots stays disjoint from it, one trained on others need not.
+
+Both take the freeze's manifest and refuse unless it is the frozen one
+(``nfi_amendment.BASE_MANIFEST_SHA256``) and the plot index (``derive``) or
+the reference (``same-plots``) still has the size and sha256 the freeze
+recorded: the holdout excludes the plots of those bytes, not of whatever
+the path holds today.
 """
 from __future__ import annotations
 
@@ -40,13 +46,30 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(Path(__file__).resolve().parent)]
-from imint.eval.nfi_amendment import AMENDMENT_PROTOCOL, BARRBLANDSKOG, derive_barrblandskog  # noqa: E402
+from imint.eval.fieldtruth import sha256_file, verify_file_identity  # noqa: E402
+from imint.eval.nfi_amendment import (AMENDMENT_PROTOCOL, BARRBLANDSKOG, BASE_MANIFEST_SHA256,  # noqa: E402
+                                      derive_barrblandskog)
 from validate_against_nfi import derive_nfi_forest_class  # noqa: E402
 
 TRUTH_COL = "nfi_forest_f5"
 TREELESS = -1
-#: The identity of a plot row in a features parquet (extract_plot_features.py).
-PLOT_KEYS = ("TractID", "PlotID", "point_id", "tile_name")
+#: The identity of a plot row in a features parquet: the pinned plot set's
+#: key (nfi_head_cv.py). R4's parquet predates the point_id column.
+PLOT_KEYS = ("tile_name", "TractID", "PlotID")
+
+
+def verify_frozen(freeze_manifest: Path, path: Path) -> None:
+    """Refuse unless ``path`` holds the bytes the 2026-10-27 freeze recorded for it."""
+    if sha256_file(freeze_manifest) != BASE_MANIFEST_SHA256:
+        raise SystemExit(f"{freeze_manifest} is not the frozen manifest {BASE_MANIFEST_SHA256}")
+    inputs = {r["path"]: r for r in json.loads(freeze_manifest.read_text())["inputs"]}
+    record = inputs.get(str(path.resolve()))
+    if record is None:
+        raise SystemExit(f"{path} is not an input of the freeze")
+    try:
+        verify_file_identity(record)
+    except ValueError as exc:
+        raise SystemExit(f"{exc}: the holdout excludes the plots of the frozen bytes") from exc
 
 
 def truths(index: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
@@ -59,9 +82,10 @@ def truths(index: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return v1, np.where(mixed, BARRBLANDSKOG, v1)
 
 
-def derive(plot_index: Path, out: Path, report: Path) -> dict:
+def derive(plot_index: Path, out: Path, report: Path, freeze_manifest: Path) -> dict:
     if out.exists():
         raise SystemExit(f"{out} exists: write the truth to a new file")
+    verify_frozen(freeze_manifest, plot_index)
     index = pd.read_parquet(plot_index)
     if TRUTH_COL in index.columns:
         raise SystemExit(f"{plot_index} already has a {TRUTH_COL} column")
@@ -85,11 +109,14 @@ def derive(plot_index: Path, out: Path, report: Path) -> dict:
 
 
 def plot_keys(path: Path) -> Counter:
+    """The plot rows of a features parquet, typed so that two writers' dtypes compare equal."""
     frame = pd.read_parquet(path, columns=list(PLOT_KEYS))
-    return Counter(map(tuple, frame.astype(str).itertuples(index=False, name=None)))
+    return Counter(zip(frame["tile_name"].astype(str),
+                       frame["TractID"].astype("int64"), frame["PlotID"].astype("int64")))
 
 
-def same_plots(features: Path, reference: Path) -> None:
+def same_plots(features: Path, reference: Path, freeze_manifest: Path) -> None:
+    verify_frozen(freeze_manifest, reference)
     ours, theirs = plot_keys(features), plot_keys(reference)
     if ours != theirs:
         extra, missing = sorted((ours - theirs).elements()), sorted((theirs - ours).elements())
@@ -107,11 +134,14 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("same-plots", help="refuse a features parquet with other plots than the reference")
     s.add_argument("--features", type=Path, required=True)
     s.add_argument("--reference", type=Path, required=True)
+    for parser in (d, s):
+        parser.add_argument("--freeze-manifest", type=Path, required=True,
+                            help="manifest.json of the 2026-10-27 NFI holdout freeze")
     args = ap.parse_args(argv)
     if args.command == "derive":
-        print(json.dumps(derive(args.plot_index, args.out, args.report), indent=2))
+        print(json.dumps(derive(args.plot_index, args.out, args.report, args.freeze_manifest), indent=2))
     else:
-        same_plots(args.features, args.reference)
+        same_plots(args.features, args.reference, args.freeze_manifest)
         print(f"same plots as {args.reference}")
     return 0
 

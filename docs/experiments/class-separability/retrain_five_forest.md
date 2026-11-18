@@ -44,16 +44,21 @@ test håller varje steg mot R4:s, med bara de planerade avvikelserna.
 0. Klarsignalen `_GATE_OK` tas bort innan något körs.
 1. Sanningen härleds i en kopia av indexet.
 2. Egenskaperna extraheras med `--truth-col nfi_forest_f5`. `same-plots`
-   vägrar fortsätta om de inte täcker exakt R4-huvudets provytor. Den frysta
-   NFI-holdouten utesluter varje plot-år i R4:s egenskapsfil, så huvudet
-   förblir disjunkt från den.
+   vägrar fortsätta om de inte täcker exakt R4-huvudets provytor. Nyckeln
+   är `(tile_name, TractID, PlotID)`, samma som de pinnade provytornas. Den
+   frysta NFI-holdouten utesluter varje plot-år i R4:s egenskapsfil, så
+   huvudet förblir disjunkt från den. Båda stegen vägrar också om
+   provyteindexet eller R4:s egenskapsfil inte längre har den storlek och
+   sha256 som frysningens manifest registrerade, eftersom det är de
+   bytesen holdouten utesluter.
 3. Destillerbarheten beräknas (OOF på de pinnade provytorna), med
    poängsättning i sanningens eget klassrum.
 4. Huvudet tränas med klasserna 0–4 och 28.
 5. Den täta passagen körs med `--forest-classes 1,2,3,4,28` på
    `/cephfs/nmd2023_labels_b28`, där NMD 113 är 28. En pixel skrivs om där
    både etiketten och huvudet säger en skogstyp. Destilleraren vägrar köra
-   om mängden inte är exakt huvudets skogsklasser.
+   om mängden inte är exakt huvudets skogsklasser, eller om kohorten inte är
+   exakt `tessera_r2`:s. Det kontrolleras innan första tilen.
 6. Huvudet publiceras som `heads/tessera_r2_f5_head.npz`, och `_GATE_OK`
    skrivs sist.
 
@@ -78,7 +83,10 @@ Preflighten vägrar starta i fem fall:
 - någon etikett är skriven av ett annat huvud än det publicerade;
 - huvudet har andra klasser än 0–4 och 28;
 - kohorten skiljer sig från R4:s;
-- någon etikett är 29 eller högre.
+- en etikett i ett urval av de första 20 filerna är 29 eller högre.
+
+Stämpeln kontrolleras på varje fil. Att varje fil i kohorten finns säkrar
+destillerarens grind och kohortjämförelsen.
 
 ## Utvärdering
 
